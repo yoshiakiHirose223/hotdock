@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section-heading">
+  <p class="eyebrow">Tool</p>
+  <h1>CSV Column Swap</h1>
+  <p>指定した 2 カラムの表示順を入れ替えます。カラム名はヘッダーと一致させてください。</p>
+</section>
+
+<section class="tool-layout">
+  <form class="tool-form" method="post" enctype="multipart/form-data">
+    <label for="csv_text">CSV テキスト</label>
+    <textarea id="csv_text" name="csv_text" placeholder="name,score,team&#10;Alice,90,A&#10;Bob,82,B">{{ csv_text }}</textarea>
+
+    <label for="upload_file">または CSV ファイル</label>
+    <input id="upload_file" type="file" name="upload_file" accept=".csv,text/csv">
+
+    <div class="inline-fields">
+      <div>
+        <label for="first_column">1つ目のカラム名</label>
+        <input id="first_column" name="first_column" value="{{ first_column }}">
+      </div>
+      <div>
+        <label for="second_column">2つ目のカラム名</label>
+        <input id="second_column" name="second_column" value="{{ second_column }}">
+      </div>
+    </div>
+
+    {% if error %}
+      <p class="notice error">{{ error }}</p>
+    {% endif %}
+
+    <div class="action-row">
+      <button type="submit" name="action" value="preview">入れ替える</button>
+      <button type="submit" name="action" value="download" class="secondary">ダウンロード</button>
+    </div>
+  </form>
+
+  <section class="result-panel">
+    <h2>Result</h2>
+    {% if result %}
+      <pre>{{ result }}</pre>
+    {% else %}
+      <p>処理結果がここに表示されます。</p>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

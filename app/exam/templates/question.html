@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+<article class="exam-layout">
+  <div class="section-heading">
+    <p class="eyebrow">Question</p>
+    <h1>{{ question.title }}</h1>
+    <p>{{ question.prompt_preview }}</p>
+  </div>
+
+  <form method="post" class="tool-form">
+    {% for choice in question.choices %}
+      <label class="choice-row">
+        <input type="radio" name="selected_label" value="{{ choice.label }}" {% if result and result.selected_label == choice.label %}checked{% endif %}>
+        <span><strong>{{ choice.label }}.</strong> {{ choice.text }}</span>
+      </label>
+    {% endfor %}
+    <div class="action-row">
+      <button type="submit">回答する</button>
+    </div>
+  </form>
+
+  {% if result %}
+    <section class="result-panel">
+      <h2>{% if result.is_correct %}正解{% else %}不正解{% endif %}</h2>
+      <p>{{ result.explanation }}</p>
+    </section>
+  {% endif %}
+</article>
+{% endblock %}

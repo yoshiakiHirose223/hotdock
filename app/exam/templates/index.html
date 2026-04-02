@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section-heading">
+  <p class="eyebrow">Exam</p>
+  <h1>WEB テスト対策の基盤</h1>
+</section>
+
+<section class="stack-list">
+  {% for question in questions %}
+    <article class="stack-card">
+      <h2><a href="/exam/questions/{{ question.id }}">{{ question.title }}</a></h2>
+      <p>{{ question.prompt_preview }}</p>
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

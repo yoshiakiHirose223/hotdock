@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card-grid">
+  {% for section in hero_sections %}
+    <article class="feature-card">
+      <p class="feature-index">0{{ loop.index }}</p>
+      <h2>{{ section.name }}</h2>
+      <p>{{ section.description }}</p>
+      <a class="text-link" href="{{ section.path }}">Open {{ section.name }}</a>
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

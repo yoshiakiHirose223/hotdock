@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section-heading">
+  <p class="eyebrow">Tool</p>
+  <h1>CSV to JSON</h1>
+  <p>CSV 行データを JSON 配列へ変換します。テキスト貼り付けと CSV ファイル入力の両方を扱えます。</p>
+</section>
+
+<section class="tool-layout">
+  <form class="tool-form" method="post" enctype="multipart/form-data">
+    <label for="csv_text">CSV テキスト</label>
+    <textarea id="csv_text" name="csv_text" placeholder="name,score&#10;Alice,90&#10;Bob,82">{{ csv_text }}</textarea>
+
+    <label for="upload_file">または CSV ファイル</label>
+    <input id="upload_file" type="file" name="upload_file" accept=".csv,text/csv">
+
+    {% if error %}
+      <p class="notice error">{{ error }}</p>
+    {% endif %}
+
+    <div class="action-row">
+      <button type="submit" name="action" value="preview">変換する</button>
+      <button type="submit" name="action" value="download" class="secondary">ダウンロード</button>
+    </div>
+  </form>
+
+  <section class="result-panel">
+    <h2>Result</h2>
+    {% if result %}
+      <pre>{{ result }}</pre>
+    {% else %}
+      <p>変換結果がここに表示されます。</p>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}
