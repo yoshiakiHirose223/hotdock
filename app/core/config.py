@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     app_name: str = "HotDock"
     app_env: str = "development"
     debug: bool = True
+    init_db_on_startup: bool = True
     secret_key: str = Field(
         default="replace-this-secret-key",
         description="Secret key used by future authentication features.",

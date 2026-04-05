@@ -14,14 +14,14 @@ python run.py
 
 ## Docker 起動
 
-`docker/docker-compose.yml` は `web` と `db` の 2 サービス構成です。`web` は `.env` を読み込み、`app/` と `storage/` を bind mount します。
+`docker-compose.yml` は `nginx` / `web` / `db` の 3 サービス構成です。`nginx` が 80 番で受け、`web` の Gunicorn + UvicornWorker にプロキシします。`/static/` は Nginx が直接配信します。
 
 ```bash
 cp .env.example .env
-docker compose -f docker/docker-compose.yml up --build
+docker compose up --build
 ```
 
-アプリ側は `DATABASE_URL` が未設定でも `POSTGRES_*` から接続先を組み立てます。compose では `db` サービス名をそのままホスト名として使います。
+アプリ側は `DATABASE_URL` が未設定でも `POSTGRES_*` から接続先を組み立てます。compose では `db` サービス名をそのままホスト名として使います。`web` の 8000 番は外部公開せず、Nginx 経由でのみアクセスします。
 
 ## ディレクトリ方針
 
@@ -31,7 +31,7 @@ docker compose -f docker/docker-compose.yml up --build
 - `app/tools`: CSV 変換ツール
 - `app/exam`: 問題表示と解答処理の土台
 - `storage`: 記事やアップロードなどの永続データ置き場
-- `docker`: Docker 実行用ファイル
+- `nginx/conf`: Nginx 設定
 
 ## 主な URL
 
