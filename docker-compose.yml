@@ -2,13 +2,21 @@ services:
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
+    env_file:
+      - ./.env
     depends_on:
       - web
     ports:
       - "80:80"
+      - "443:443"
     volumes:
-      - ./nginx/conf/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/conf/http-only.conf.template:/etc/nginx/conf-templates/http-only.conf.template:ro
+      - ./nginx/conf/https-ready.conf.template:/etc/nginx/conf-templates/https-ready.conf.template:ro
+      - ./nginx/entrypoint/40-configure-https.sh:/docker-entrypoint.d/40-configure-https.sh:ro
+      - ./nginx/entrypoint/50-watch-certificates.sh:/docker-entrypoint.d/50-watch-certificates.sh:ro
       - ./app/static:/app/static:ro
+      - certbot_www:/var/www/certbot:ro
+      - letsencrypt:/etc/letsencrypt:ro
 
   web:
     build:
@@ -36,5 +44,18 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    entrypoint: /usr/local/bin/renew-loop.sh
+    volumes:
+      - certbot_www:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+      - ./certbot/renew-loop.sh:/usr/local/bin/renew-loop.sh:ro
+
 volumes:
   postgres_data:
+  certbot_www:
+  letsencrypt:
