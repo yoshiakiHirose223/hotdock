@@ -69,5 +69,5 @@
 {% endblock %}
 
 {% block scripts %}
-  <script src="/static/js/blog-public-list.js"></script>
+  <script src="{{ url_for('static', path='/js/blog-public-list.js') }}"></script>
 {% endblock %}

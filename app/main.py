@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.blog.admin_public_router import router as blog_admin_public_router
 from app.blog.admin_router import router as blog_admin_router
@@ -32,6 +33,7 @@ app.add_middleware(
     same_site="lax",
     https_only=settings.app_env == "production",
 )
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=settings.proxy_trusted_hosts)
 app.mount("/static", StaticFiles(directory=str(settings.static_dir)), name="static")
 app.state.templates = templates
 

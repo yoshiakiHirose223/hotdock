@@ -15,6 +15,7 @@ class Settings(BaseSettings):
         default="replace-this-secret-key",
         description="Secret key used by future authentication features.",
     )
+    proxy_trusted_hosts: str = "*"
     blog_admin_username: str = "yoshiaki0223"
     blog_admin_password_hash: str = (
         "9047061c525874f0e3158f1648cba7ed:"
