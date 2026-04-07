@@ -18,9 +18,9 @@ set +a
 : "${DOMAIN:?DOMAIN を .env に設定してください。}"
 : "${CERTBOT_EMAIL:?CERTBOT_EMAIL を .env に設定してください。}"
 
-docker compose up -d web db nginx certbot
+docker-compose up -d web db nginx certbot
 
-docker compose run --rm --entrypoint certbot certbot certonly \
+docker-compose run --rm --entrypoint certbot certbot certonly \
     --webroot \
     -w /var/www/certbot \
     -d "${DOMAIN}" \
@@ -28,4 +28,4 @@ docker compose run --rm --entrypoint certbot certbot certonly \
     --agree-tos \
     --no-eff-email
 
-docker compose exec nginx sh -lc '/docker-entrypoint.d/40-configure-https.sh && nginx -t && nginx -s reload'
+docker-compose exec nginx sh -lc '/docker-entrypoint.d/40-configure-https.sh && nginx -t && nginx -s reload'
