@@ -1,5 +1,4 @@
 from app.tools.csv_column_swap import swap_csv_columns
-from app.tools.csv_to_json import convert_csv_text_to_json
 from app.tools.models import ToolDefinition
 from app.tools.schemas import ToolDescriptor
 
@@ -26,9 +25,6 @@ class ToolsService:
             )
             for tool in tools
         ]
-
-    def convert_csv_to_json(self, csv_text: str) -> str:
-        return convert_csv_text_to_json(csv_text)
 
     def swap_columns(self, csv_text: str, first_column: str, second_column: str) -> str:
         return swap_csv_columns(csv_text, first_column, second_column)

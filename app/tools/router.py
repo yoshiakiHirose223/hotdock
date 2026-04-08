@@ -1,7 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import Response
+from fastapi import APIRouter, File, Form, Request, Response, UploadFile
 
 from app.core.dependencies import build_template_context
 from app.tools.service import ToolsService
@@ -49,42 +48,7 @@ async def csv_to_json_form(request: Request):
         request,
         "tools/csv_to_json.html",
         "CSV to JSON",
-        csv_text="",
-        result=None,
-        error=None,
     )
-
-
-@router.post("/csv-to-json")
-async def csv_to_json_execute(
-    request: Request,
-    csv_text: str = Form(default=""),
-    action: str = Form(default="preview"),
-    upload_file: UploadFile | None = File(default=None),
-):
-    try:
-        input_text = await read_tool_input(csv_text, upload_file)
-        result = service.convert_csv_to_json(input_text)
-        if action == "download":
-            headers = {"Content-Disposition": 'attachment; filename="converted.json"'}
-            return Response(content=result, media_type="application/json", headers=headers)
-        return build_tool_response(
-            request,
-            "tools/csv_to_json.html",
-            "CSV to JSON",
-            csv_text=input_text,
-            result=result,
-            error=None,
-        )
-    except ValueError as exc:
-        return build_tool_response(
-            request,
-            "tools/csv_to_json.html",
-            "CSV to JSON",
-            csv_text=csv_text,
-            result=None,
-            error=str(exc),
-        )
 
 
 @router.get("/csv-column-swap")
