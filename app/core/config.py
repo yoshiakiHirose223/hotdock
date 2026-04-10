@@ -54,6 +54,14 @@ class Settings(BaseSettings):
         return self.storage_dir / "blog" / "images"
 
     @property
+    def conflict_watch_dir(self) -> Path:
+        return self.storage_dir / "conflict_watch"
+
+    @property
+    def conflict_watch_payloads_dir(self) -> Path:
+        return self.conflict_watch_dir / "payloads"
+
+    @property
     def shared_templates_dir(self) -> Path:
         return self.base_dir / "app" / "templates"
 

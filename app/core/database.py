@@ -46,6 +46,7 @@ def wait_for_database() -> None:
 def init_db() -> None:
     from app.blog import models as blog_models  # noqa: F401
     from app.exam import models as exam_models  # noqa: F401
+    from app.tools import conflict_watch_models as conflict_watch_models  # noqa: F401
 
     if not settings.resolved_database_url.startswith("sqlite"):
         wait_for_database()
@@ -56,11 +57,17 @@ def init_db() -> None:
 def ensure_legacy_blog_schema() -> None:
     inspector = inspect(engine)
     if "blog_posts" not in inspector.get_table_names():
-        return
+        pass
+    else:
+        columns = {column["name"]: column for column in inspector.get_columns("blog_posts")}
+        with engine.begin() as connection:
+            if "summary" not in columns:
+                connection.execute(text("ALTER TABLE blog_posts ADD COLUMN summary VARCHAR(50) NOT NULL DEFAULT ''"))
+            else:
+                connection.execute(text("UPDATE blog_posts SET summary = '' WHERE summary IS NULL"))
 
-    columns = {column["name"]: column for column in inspector.get_columns("blog_posts")}
-    with engine.begin() as connection:
-        if "summary" not in columns:
-            connection.execute(text("ALTER TABLE blog_posts ADD COLUMN summary VARCHAR(50) NOT NULL DEFAULT ''"))
-        else:
-            connection.execute(text("UPDATE blog_posts SET summary = '' WHERE summary IS NULL"))
+    if "cw_settings" in inspector.get_table_names():
+        cw_columns = {column["name"]: column for column in inspector.get_columns("cw_settings")}
+        with engine.begin() as connection:
+            if "slack_webhook_url" not in cw_columns:
+                connection.execute(text("ALTER TABLE cw_settings ADD COLUMN slack_webhook_url VARCHAR(500)"))

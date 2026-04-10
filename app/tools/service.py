@@ -7,6 +7,11 @@ class ToolsService:
     def list_tools(self) -> list[ToolDescriptor]:
         tools = [
             ToolDefinition(
+                slug="conflict-watch",
+                name="Conflict Watch",
+                description="Webhook-only の競合予兆監視を branch / conflict / notification 単位で可視化します。",
+            ),
+            ToolDefinition(
                 slug="csv-to-json",
                 name="CSV to JSON",
                 description="CSV の行データを JSON 配列へ変換します。",

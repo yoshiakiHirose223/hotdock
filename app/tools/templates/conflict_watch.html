@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section-heading">
+  <p class="eyebrow">Tool</p>
+  <h1>Conflict Watch</h1>
+  <p>Webhook-only で branch ごとの変更ファイルを累積し、同一 file_path を並走している branch 群を早めに見つけるモック管理画面です。</p>
+</section>
+
+<section
+  class="conflict-watch-shell"
+  data-conflict-watch-app
+  data-page-mode="{{ page_mode|default('repositories') }}"
+  data-selected-repository-id="{{ selected_repository_id|default('') }}"
+>
+  <noscript>
+    <p class="notice error">このツールは JavaScript で branch / conflict 状態をシミュレートします。JavaScript を有効にしてください。</p>
+  </noscript>
+</section>
+{% endblock %}
+
+{% block scripts %}
+  <script type="module" src="{{ url_for('static', path='/js/tools/conflict-watch/app.js') }}"></script>
+{% endblock %}
