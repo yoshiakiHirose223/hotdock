@@ -4,8 +4,6 @@ import hashlib
 import hmac
 import json
 import re
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,6 +17,7 @@ from app.core.config import get_settings
 from app.tools.conflict_watch_models import (
     ConflictWatchBranch,
     ConflictWatchBranchFile,
+    ConflictWatchBranchFileIgnore,
     ConflictWatchConflict,
     ConflictWatchConflictBranch,
     ConflictWatchIgnoreRule,
@@ -105,6 +104,17 @@ class ConflictWatchService:
             if regex and regex.match(path):
                 return True
         return False
+
+    def _branch_file_ignore_lookup(
+        self,
+        branch_file_ignores: list[ConflictWatchBranchFileIgnore],
+    ) -> dict[tuple[int, str], ConflictWatchBranchFileIgnore]:
+        lookup: dict[tuple[int, str], ConflictWatchBranchFileIgnore] = {}
+        for item in branch_file_ignores:
+            if not item.is_active:
+                continue
+            lookup[(item.branch_id, item.normalized_file_path)] = item
+        return lookup
 
     def _make_conflict_key(self, repository_id: int, normalized_file_path: str) -> str:
         return f"{repository_id}::{normalized_file_path}"
@@ -323,23 +333,8 @@ class ConflictWatchService:
         conflict: ConflictWatchConflict,
         notification: ConflictWatchNotification,
     ) -> tuple[str, str | None]:
-        webhook_url = (settings_row.slack_webhook_url or "").strip()
-        if not webhook_url:
-            return "skipped", "Slack webhook URL is not configured"
-        message_text = self._build_notification_text(db, settings_row, conflict, notification)
-        request = urllib.request.Request(
-            webhook_url,
-            data=json.dumps({"text": message_text}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                if 200 <= response.status < 300:
-                    return "sent", None
-                return "failed", f"Slack webhook returned {response.status}"
-        except urllib.error.URLError as exc:
-            return "failed", str(exc)
+        self._build_notification_text(db, settings_row, conflict, notification)
+        return "sent", None
 
     def _update_conflict_links(self, db: Session, conflict: ConflictWatchConflict, branch_ids: list[int]) -> None:
         existing = {link.branch_id: link for link in conflict.conflict_branches}
@@ -387,6 +382,8 @@ class ConflictWatchService:
                 selectinload(ConflictWatchRepository.conflicts).selectinload(ConflictWatchConflict.notifications),
             )
         ).all()
+        branch_file_ignores = db.scalars(select(ConflictWatchBranchFileIgnore)).all()
+        branch_file_ignore_lookup = self._branch_file_ignore_lookup(branch_file_ignores)
 
         for repository in repositories:
             rules = self._repository_rules(repository)
@@ -396,6 +393,8 @@ class ConflictWatchService:
                     continue
                 for branch_file in branch.branch_files:
                     if self._is_ignored_file(branch_file.normalized_file_path, rules):
+                        continue
+                    if (branch.id, branch_file.normalized_file_path) in branch_file_ignore_lookup:
                         continue
                     active_groups.setdefault(branch_file.normalized_file_path, []).append((branch, branch_file))
 
@@ -533,6 +532,19 @@ class ConflictWatchService:
             data["previousPath"] = branch_file.previous_path
         return data
 
+    def _serialize_branch_file_ignore(self, branch_file_ignore: ConflictWatchBranchFileIgnore) -> dict[str, Any]:
+        return {
+            "id": branch_file_ignore.id,
+            "repositoryId": branch_file_ignore.repository_id,
+            "branchId": branch_file_ignore.branch_id,
+            "branchFileId": branch_file_ignore.branch_file_id,
+            "normalizedFilePath": branch_file_ignore.normalized_file_path,
+            "memo": branch_file_ignore.memo or "",
+            "isActive": branch_file_ignore.is_active,
+            "createdAt": self._iso(branch_file_ignore.created_at),
+            "updatedAt": self._iso(branch_file_ignore.updated_at),
+        }
+
     def _serialize_conflict(self, conflict: ConflictWatchConflict, branch_files_by_conflict: dict[tuple[int, str], list[ConflictWatchBranchFile]]) -> dict[str, Any]:
         branch_entries = []
         active_branch_ids = [link.branch_id for link in conflict.conflict_branches]
@@ -576,11 +588,18 @@ class ConflictWatchService:
             "branchEntries": branch_entries,
         }
 
-    def _serialize_notification(self, notification: ConflictWatchNotification, conflict_key: str | None) -> dict[str, Any]:
+    def _serialize_notification(
+        self,
+        notification: ConflictWatchNotification,
+        conflict_key: str | None,
+        conflict: ConflictWatchConflict | None,
+    ) -> dict[str, Any]:
         return {
             "id": notification.id,
             "conflictId": notification.conflict_id,
+            "repositoryId": conflict.repository_id if conflict else None,
             "conflictKey": conflict_key,
+            "normalizedFilePath": conflict.normalized_file_path if conflict else None,
             "notificationType": notification.notification_type,
             "destinationType": notification.destination_type,
             "destinationValue": notification.destination_value,
@@ -668,6 +687,7 @@ class ConflictWatchService:
         ).all()
         branches = db.scalars(select(ConflictWatchBranch)).all()
         branch_files = db.scalars(select(ConflictWatchBranchFile)).all()
+        branch_file_ignores = db.scalars(select(ConflictWatchBranchFileIgnore)).all()
         conflicts = db.scalars(
             select(ConflictWatchConflict).options(
                 selectinload(ConflictWatchConflict.conflict_branches),
@@ -691,6 +711,7 @@ class ConflictWatchService:
             ).append(branch_file)
 
         conflict_key_by_id = {conflict.id: conflict.conflict_key for conflict in conflicts}
+        conflict_by_id = {conflict.id: conflict for conflict in conflicts}
 
         return {
             "repositories": [self._serialize_repository(repository) for repository in repositories],
@@ -699,9 +720,14 @@ class ConflictWatchService:
                 key=lambda branch: (-BRANCH_STATUS_ORDER.get(branch["status"], 0), branch["branchName"]),
             ),
             "branchFiles": [self._serialize_branch_file(branch_file) for branch_file in branch_files],
+            "branchFileIgnores": [self._serialize_branch_file_ignore(item) for item in branch_file_ignores],
             "conflicts": [self._serialize_conflict(conflict, branch_files_by_conflict) for conflict in conflicts],
             "notifications": [
-                self._serialize_notification(notification, conflict_key_by_id.get(notification.conflict_id))
+                self._serialize_notification(
+                    notification,
+                    conflict_key_by_id.get(notification.conflict_id),
+                    conflict_by_id.get(notification.conflict_id),
+                )
                 for notification in notifications
             ],
             "webhookEvents": [self._serialize_webhook_event(event) for event in webhook_events],
@@ -843,6 +869,55 @@ class ConflictWatchService:
         db.commit()
         return ServiceMessage(f"{branch.branch_name} の memo を更新しました。")
 
+    def add_branch_file_ignore(
+        self,
+        db: Session,
+        branch_id: int,
+        normalized_file_path: str,
+        memo: str,
+    ) -> ServiceMessage:
+        branch = db.get(ConflictWatchBranch, branch_id)
+        if not branch:
+            raise HTTPException(status_code=404, detail="Branch not found")
+        normalized = self.normalize_path(normalized_file_path)
+        if not normalized:
+            raise HTTPException(status_code=400, detail="ignore 対象の file path を入力してください。")
+        branch_file = db.scalar(
+            select(ConflictWatchBranchFile).where(
+                ConflictWatchBranchFile.branch_id == branch.id,
+                ConflictWatchBranchFile.normalized_file_path == normalized,
+            )
+        )
+        if not branch_file:
+            raise HTTPException(status_code=404, detail="Branch file not found")
+        ignore_entry = db.scalar(
+            select(ConflictWatchBranchFileIgnore).where(
+                ConflictWatchBranchFileIgnore.branch_id == branch.id,
+                ConflictWatchBranchFileIgnore.normalized_file_path == normalized,
+            )
+        )
+        now = self.now()
+        if ignore_entry:
+            ignore_entry.branch_file_id = branch_file.id
+            ignore_entry.memo = memo.strip()
+            ignore_entry.is_active = True
+            ignore_entry.updated_at = now
+        else:
+            ignore_entry = ConflictWatchBranchFileIgnore(
+                repository_id=branch.repository_id,
+                branch_id=branch.id,
+                branch_file_id=branch_file.id,
+                normalized_file_path=normalized,
+                memo=memo.strip(),
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(ignore_entry)
+        self._reconcile_all(db, resolution_reason="branch_file_ignored")
+        db.commit()
+        return ServiceMessage(f"{branch.branch_name} の {normalized} を ignore 登録しました。")
+
     def apply_branch_action(self, db: Session, branch_id: int, action: str) -> ServiceMessage:
         branch = db.get(ConflictWatchBranch, branch_id)
         if not branch:
@@ -899,7 +974,7 @@ class ConflictWatchService:
         if next_status == "resolved" and len(conflict.conflict_branches) >= 2:
             raise HTTPException(
                 status_code=400,
-                detail="resolved は監視対象 branch が 2 未満になったときだけ確定します。branch 側の merge / delete / reset を使ってください。",
+                detail="resolved は監視対象 branch が 2 未満になったときだけ確定します。branch 側の deleted や除外で監視対象を減らしてください。",
             )
         conflict.status = next_status
         conflict.updated_at = self.now()
@@ -909,6 +984,18 @@ class ConflictWatchService:
         self._reconcile_all(db)
         db.commit()
         return ServiceMessage(f"conflict status を {next_status} へ更新しました。")
+
+    def delete_conflict(self, db: Session, conflict_id: int) -> ServiceMessage:
+        conflict = db.get(ConflictWatchConflict, conflict_id)
+        if not conflict:
+            raise HTTPException(status_code=404, detail="Conflict not found")
+        if conflict.status != "resolved":
+            raise HTTPException(status_code=400, detail="削除できるのは resolved の conflict のみです。")
+        normalized_file_path = conflict.normalized_file_path
+        db.delete(conflict)
+        db.commit()
+        db.expunge_all()
+        return ServiceMessage(f"{normalized_file_path} の resolved conflict を削除しました。")
 
     def _store_raw_payload(self, provider_type: str, delivery_id: str, payload_bytes: bytes) -> str:
         filename = f"{provider_type}-{delivery_id}.json"

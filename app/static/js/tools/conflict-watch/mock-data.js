@@ -1,4 +1,4 @@
-import { DEFAULT_IGNORE_PATTERNS, DEFAULT_SETTINGS, WEBHOOK_FORM_DEFAULTS } from "./constants.js";
+import { DEFAULT_IGNORE_PATTERNS, DEFAULT_SETTINGS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20250410-09";
 
 function shiftIso(baseDate, days = 0, hours = 0) {
   const next = new Date(baseDate.getTime());
@@ -339,7 +339,9 @@ export function createMockState() {
   const notifications = [
     {
       id: "notification-1",
+      repositoryId,
       conflictKey: `${repositoryId}::app/conflicts/service.py`,
+      normalizedFilePath: "app/conflicts/service.py",
       notificationType: "conflict_created",
       destinationType: "slack",
       destinationValue: DEFAULT_SETTINGS.notificationDestination,
@@ -349,7 +351,9 @@ export function createMockState() {
     },
     {
       id: "notification-2",
+      repositoryId,
       conflictKey: `${repositoryId}::app/export/csv.py`,
+      normalizedFilePath: "app/export/csv.py",
       notificationType: "conflict_status_changed",
       destinationType: "slack",
       destinationValue: DEFAULT_SETTINGS.notificationDestination,
@@ -359,7 +363,9 @@ export function createMockState() {
     },
     {
       id: "notification-3",
+      repositoryId,
       conflictKey: `${repositoryId}::app/export/csv.py`,
+      normalizedFilePath: "app/export/csv.py",
       notificationType: "long_unresolved",
       destinationType: "slack",
       destinationValue: DEFAULT_SETTINGS.notificationDestination,
@@ -447,6 +453,7 @@ export function createMockState() {
     repositories,
     branches,
     branchFiles,
+    branchFileIgnores: [],
     conflicts,
     notifications,
     webhookEvents,
@@ -463,6 +470,18 @@ export function createMockState() {
       newRepositoryName: "",
       newRepositoryExternalId: "",
       newRepositoryProvider: "github",
+      expandedBranchIds: [],
+      expandedConflictIds: [],
+      pendingConflictScrollKey: "",
+      pendingBranchScrollId: null,
+      highlightedConflictKey: "",
+      branchFileIgnoreDialog: {
+        isOpen: false,
+        branchId: null,
+        branchName: "",
+        normalizedFilePath: "",
+        memo: "",
+      },
       feedbackMessage: "",
       feedbackTone: "info",
     },

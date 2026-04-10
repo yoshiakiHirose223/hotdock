@@ -52,6 +52,12 @@ class ConflictStatusUpdateRequest(BaseModel):
     status: str
 
 
+class BranchFileIgnoreCreateRequest(BaseModel):
+    branchId: int
+    normalizedFilePath: str
+    memo: str = ""
+
+
 class SimulatedWebhookRequest(BaseModel):
     repositoryId: int
     provider: str

@@ -94,6 +94,39 @@ class ConflictWatchBranchFile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     branch: Mapped["ConflictWatchBranch"] = relationship(back_populates="branch_files")
+    branch_file_ignores: Mapped[list["ConflictWatchBranchFileIgnore"]] = relationship(
+        back_populates="branch_file",
+        cascade="all, delete-orphan",
+    )
+
+
+class ConflictWatchBranchFileIgnore(Base):
+    __tablename__ = "cw_branch_file_ignores"
+    __table_args__ = (
+        UniqueConstraint(
+            "repository_id",
+            "branch_id",
+            "normalized_file_path",
+            name="uq_cw_branch_file_ignores_repo_branch_path",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    repository_id: Mapped[int] = mapped_column(ForeignKey("cw_repositories.id", ondelete="CASCADE"), index=True)
+    branch_id: Mapped[int] = mapped_column(ForeignKey("cw_branches.id", ondelete="CASCADE"), index=True)
+    branch_file_id: Mapped[int] = mapped_column(ForeignKey("cw_branch_files.id", ondelete="CASCADE"), index=True)
+    normalized_file_path: Mapped[str] = mapped_column(String(500), index=True)
+    memo: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    branch: Mapped["ConflictWatchBranch"] = relationship()
+    branch_file: Mapped["ConflictWatchBranchFile"] = relationship(back_populates="branch_file_ignores")
 
 
 class ConflictWatchConflict(Base):

@@ -1,4 +1,4 @@
-import { CONFLICT_ACTIONS, PROVIDERS, QUICK_WEBHOOK_PRESETS } from "./constants.js";
+import { CONFLICT_ACTIONS, PROVIDERS, QUICK_WEBHOOK_PRESETS } from "./constants.js?v=conflict-watch-20250410-09";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -21,6 +21,14 @@ function formatDateTime(value) {
   }).format(new Date(value));
 }
 
+function formatMonthDay(value) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  return `${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
 function formatRelativeDays(value, now) {
   if (!value) {
     return "-";
@@ -34,6 +42,17 @@ function formatRelativeDays(value, now) {
 
 function renderStatusPill(value, tone = value) {
   return `<span class="cw-pill cw-pill-${escapeHtml(tone)}">${escapeHtml(value)}</span>`;
+}
+
+function renderBranchFileStatus(changeType) {
+  const labels = {
+    modified: "変更",
+    removed: "削除",
+    added: "追加",
+    renamed: "リネーム",
+    copied: "コピー",
+  };
+  return labels[changeType] ?? changeType ?? "-";
 }
 
 function renderDashboard(viewModel) {
@@ -279,7 +298,7 @@ function renderBranchTable(viewModel) {
     <section class="cw-card">
       <div class="cw-card-header">
         <div>
-          <p class="eyebrow">Branches</p>
+          <p class="eyebrow">ブランチ</p>
           <h2>branch 一覧</h2>
         </div>
       </div>
@@ -287,48 +306,132 @@ function renderBranchTable(viewModel) {
         <table class="cw-table">
           <thead>
             <tr>
-              <th>repository / branch</th>
-              <th>status</th>
-              <th>last_push_at</th>
-              <th>観測 file 数</th>
-              <th>confidence</th>
+              <th>ブランチ名</th>
+              <th>状態</th>
+              <th>更新日</th>
+              <th>ファイル数</th>
+              <th>確度</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
-            ${viewModel.branches.map((branch) => `
-              <tr class="${branch.id === viewModel.ui.selectedBranchId ? "is-selected" : ""}">
+            ${viewModel.branches.map((branch) => {
+              const rowClass = branch.id === viewModel.ui.highlightedBranchId
+                ? "is-focused"
+                : branch.id === viewModel.ui.selectedBranchId
+                  ? "is-selected"
+                  : "";
+              return `
+              <tr class="${rowClass}" data-branch-row-id="${branch.id}">
                 <td>
                   <button type="button" class="cw-inline-link" data-action="select-branch" data-branch-id="${branch.id}">${escapeHtml(branch.branchName)}</button>
-                  <div class="cw-table-subline">
-                    <span>${escapeHtml(branch.repositoryName)}</span>
-                    <span>latest SHA: ${escapeHtml(branch.latestAfterSha ?? "-")}</span>
-                    ${branch.possiblyInconsistent ? "<span>possibly_inconsistent</span>" : ""}
-                    ${branch.isBranchExcluded ? "<span>branch_excluded</span>" : ""}
-                    ${branch.monitoringClosedReason ? `<span>closed: ${escapeHtml(branch.monitoringClosedReason)}</span>` : ""}
-                  </div>
                   ${branch.memo ? `<p class="cw-row-note">${escapeHtml(branch.memo)}</p>` : ""}
                 </td>
                 <td>${renderStatusPill(branch.status)}</td>
+                <td>${escapeHtml(formatMonthDay(branch.lastPushAt))}</td>
                 <td>
-                  <div>${escapeHtml(formatDateTime(branch.lastPushAt))}</div>
-                  <div class="cw-table-subline">${escapeHtml(formatRelativeDays(branch.lastSeenAt, viewModel.now))}</div>
-                </td>
-                <td>
-                  <strong>${escapeHtml(branch.observedFileCount)}</strong>
-                  <div class="cw-table-subline">ignored: ${escapeHtml(branch.ignoredFileCount)}</div>
+                  <button
+                    type="button"
+                    class="cw-branch-files-toggle"
+                    data-action="toggle-branch-files"
+                    data-branch-id="${branch.id}"
+                    aria-expanded="${branch.isFileListOpen ? "true" : "false"}"
+                    aria-controls="cw-branch-files-${branch.id}"
+                  >
+                    <strong>${escapeHtml(branch.observedFileCount)}</strong>
+                    <span class="cw-branch-files-chevron" aria-hidden="true">${branch.isFileListOpen ? "▴" : "▾"}</span>
+                  </button>
+                  <div class="cw-table-subline">ルール除外: ${escapeHtml(branch.ignoredFileCount)}</div>
                 </td>
                 <td>${renderStatusPill(branch.confidence, branch.confidence)}</td>
                 <td>
                   <div class="cw-action-stack">
-                    <button type="button" class="ghost-button" data-action="toggle-excluded" data-branch-id="${branch.id}">${branch.isBranchExcluded ? "除外解除" : "除外"}</button>
-                    <button type="button" class="ghost-button" data-action="merge-branch" data-branch-id="${branch.id}">main/master マージ</button>
-                    <button type="button" class="ghost-button" data-action="reset-branch" data-branch-id="${branch.id}">手動リセット</button>
-                    <button type="button" class="ghost-button danger-text" data-action="delete-branch" data-branch-id="${branch.id}">deleted</button>
+                    <button type="button" class="ghost-button cw-compact-button" data-action="toggle-excluded" data-branch-id="${branch.id}">${branch.isBranchExcluded ? "除外解除" : "除外"}</button>
+                    <button type="button" class="ghost-button danger-text cw-compact-button" data-action="delete-branch" data-branch-id="${branch.id}">deleted</button>
                   </div>
                 </td>
               </tr>
-            `).join("")}
+              ${branch.isFileListOpen ? `
+                <tr class="cw-branch-files-row">
+                  <td colspan="6">
+                    <div id="cw-branch-files-${branch.id}" class="cw-branch-files-table-wrap">
+                      <table class="cw-inline-table cw-branch-files-table">
+                        <thead>
+                          <tr>
+                            <th>ファイル名</th>
+                            <th>状態</th>
+                            <th>ignore</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${branch.observedFiles.length ? branch.observedFiles.map((branchFile) => `
+                            <tr class="cw-branch-file-row${branchFile.isInConflict ? " is-conflicting" : ""}${branchFile.isBranchFileIgnored ? " is-ignored" : ""}">
+                              <td>
+                                ${branchFile.isInConflict ? `
+                                  <button
+                                    type="button"
+                                    class="cw-inline-link cw-branch-file-link"
+                                    data-action="jump-to-conflict"
+                                    data-conflict-key="${escapeHtml(branchFile.activeConflictKey)}"
+                                  >
+                                    ${escapeHtml(branchFile.normalizedFilePath)}
+                                  </button>
+                                ` : `
+                                  <span
+                                    class="cw-branch-file-name"
+                                    ${branchFile.isBranchFileIgnored && branchFile.branchFileIgnoreMemo
+                                      ? `title="${escapeHtml(branchFile.branchFileIgnoreMemo)}"`
+                                      : ""}
+                                  >
+                                    ${escapeHtml(branchFile.normalizedFilePath)}
+                                  </span>
+                                `}
+                                ${branchFile.previousPath ? `<div class="cw-table-subline">旧: ${escapeHtml(branchFile.previousPath)}</div>` : ""}
+                                ${branchFile.isBranchFileIgnored ? `
+                                  <div
+                                    class="cw-table-subline"
+                                    title="${escapeHtml(branchFile.branchFileIgnoreMemo || "ignore メモなし")}"
+                                  >
+                                    ignore 済み
+                                  </div>
+                                ` : ""}
+                              </td>
+                              <td>${escapeHtml(renderBranchFileStatus(branchFile.changeType))}</td>
+                              <td>
+                                ${branchFile.isBranchFileIgnored ? `
+                                  <span
+                                    class="cw-branch-file-ignore-badge"
+                                    title="${escapeHtml(branchFile.branchFileIgnoreMemo || "ignore メモなし")}"
+                                  >
+                                    ignore 済み
+                                  </span>
+                                ` : `
+                                  <button
+                                    type="button"
+                                    class="ghost-button cw-compact-button"
+                                    data-action="open-branch-file-ignore-modal"
+                                    data-branch-id="${branch.id}"
+                                    data-branch-name="${escapeHtml(branch.branchName)}"
+                                    data-file-path="${escapeHtml(branchFile.normalizedFilePath)}"
+                                  >
+                                    ignore
+                                  </button>
+                                `}
+                              </td>
+                            </tr>
+                          `).join("") : `
+                            <tr>
+                              <td colspan="3" class="cw-inline-table-empty">観測対象のファイルはありません。</td>
+                            </tr>
+                          `}
+                        </tbody>
+                      </table>
+                    </div>
+                  </td>
+                </tr>
+              ` : ""}
+            `;
+            }).join("")}
           </tbody>
         </table>
       </div>
@@ -427,23 +530,43 @@ function renderConflictTable(viewModel) {
               <th>first / last</th>
               <th>通知</th>
               <th>confidence</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
-            ${viewModel.conflicts.map((conflict) => `
-              <tr class="${conflict.conflictKey === viewModel.ui.selectedConflictKey ? "is-selected" : ""}">
+            ${viewModel.conflicts.map((conflict) => {
+              const rowClass = conflict.conflictKey === viewModel.ui.highlightedConflictKey
+                ? "is-forcused"
+                : conflict.conflictKey === viewModel.ui.selectedConflictKey
+                  ? "is-selected"
+                  : "";
+              return `
+              <tr
+                class="${rowClass}"
+                data-conflict-row-key="${escapeHtml(conflict.conflictKey)}"
+              >
                 <td>
                   <button type="button" class="cw-inline-link" data-action="select-conflict" data-conflict-key="${escapeHtml(conflict.conflictKey)}">${escapeHtml(conflict.normalizedFilePath)}</button>
-                  <div class="cw-table-subline">${escapeHtml(conflict.conflictKey)}</div>
                   ${conflict.memo ? `<p class="cw-row-note">${escapeHtml(conflict.memo)}</p>` : ""}
                 </td>
                 <td>${renderStatusPill(conflict.status)}</td>
                 <td>
-                  <strong>${escapeHtml(conflict.activeBranchIds?.length ?? 0)}</strong>
-                  <div class="cw-table-subline">${(conflict.activeBranchIds ?? []).map((branchId) => {
-                    const branch = viewModel.branches.find((item) => item.id === branchId);
-                    return escapeHtml(branch?.branchName ?? branchId);
-                  }).join(", ")}</div>
+                  ${(conflict.activeBranchIds?.length ?? 0) > 0 ? `
+                    <button
+                      type="button"
+                      class="cw-branch-files-toggle"
+                      data-action="toggle-conflict-branches"
+                      data-conflict-id="${conflict.id}"
+                      aria-expanded="${conflict.isBranchListOpen ? "true" : "false"}"
+                      aria-controls="cw-conflict-branches-${conflict.id}"
+                    >
+                      <strong>${escapeHtml(conflict.activeBranchIds?.length ?? 0)}</strong>
+                      <span class="cw-branch-files-chevron" aria-hidden="true">${conflict.isBranchListOpen ? "▴" : "▾"}</span>
+                    </button>
+                  ` : `
+                    <strong>-</strong>
+                  `}
+                  <div class="cw-table-subline">${(conflict.activeBranchIds?.length ?? 0) > 0 ? "branch 一覧を表示" : ""}</div>
                 </td>
                 <td>
                   <div>first: ${escapeHtml(formatDateTime(conflict.firstDetectedAt))}</div>
@@ -455,8 +578,46 @@ function renderConflictTable(viewModel) {
                   <div class="cw-table-subline">${escapeHtml(conflict.lastNotificationType ?? "-")}</div>
                 </td>
                 <td>${renderStatusPill(conflict.confidence ?? "low", conflict.confidence ?? "low")}</td>
+                <td>
+                  ${conflict.status === "resolved" ? `
+                    <button type="button" class="ghost-button danger-text" data-action="delete-conflict" data-conflict-id="${conflict.id}">削除</button>
+                  ` : ""}
+                </td>
               </tr>
-            `).join("")}
+              ${conflict.isBranchListOpen && (conflict.activeBranchIds?.length ?? 0) > 0 ? `
+                <tr class="cw-branch-files-row">
+                  <td colspan="7">
+                    <div id="cw-conflict-branches-${conflict.id}" class="cw-branch-files-panel">
+                      <div class="cw-branch-files-grid cw-branch-files-grid-header">
+                        <strong>branch 名</strong>
+                        <strong>変更種別</strong>
+                      </div>
+                      ${conflict.relatedBranches.length ? `
+                        ${conflict.relatedBranches.map((branch) => `
+                          <div class="cw-branch-files-grid">
+                            <div>
+                              <button
+                                type="button"
+                                class="cw-inline-link"
+                                data-action="jump-to-branch"
+                                data-branch-id="${branch.id}"
+                              >
+                                ${escapeHtml(branch.branchName)}
+                              </button>
+                              ${branch.previousPath ? `<div class="cw-table-subline">old_path: ${escapeHtml(branch.previousPath)}</div>` : ""}
+                            </div>
+                            <div>${escapeHtml(renderBranchFileStatus(branch.changeType))}</div>
+                          </div>
+                        `).join("")}
+                      ` : `
+                        <p class="cw-table-subline">関連 branch はありません。</p>
+                      `}
+                    </div>
+                  </td>
+                </tr>
+              ` : ""}
+            `;
+            }).join("")}
           </tbody>
         </table>
       </div>
@@ -577,7 +738,8 @@ function renderNotifications(viewModel) {
           <li>
             <strong>${escapeHtml(notification.notificationType)}</strong>
             <span>${escapeHtml(formatDateTime(notification.sentAt))}</span>
-            <p>${escapeHtml(notification.conflictKey)} → ${escapeHtml(notification.destinationValue)}</p>
+            <p>${escapeHtml(notification.normalizedFilePath ?? "削除済み conflict")} → ${escapeHtml(notification.destinationValue)}</p>
+            <p class="cw-table-subline">status: ${escapeHtml(notification.status)}</p>
           </li>
         `).join("") || "<li>通知はまだありません。</li>"}
       </ul>
@@ -782,6 +944,38 @@ function renderSideDrawer(viewModel) {
   `;
 }
 
+function renderBranchFileIgnoreModal(viewModel) {
+  const dialog = viewModel.ui.branchFileIgnoreDialog ?? {};
+  const isOpen = Boolean(dialog.isOpen);
+  if (!isOpen) {
+    return "";
+  }
+  return `
+    <div class="cw-modal-layer" aria-hidden="false">
+      <div class="cw-modal-backdrop" data-action="close-branch-file-ignore-modal"></div>
+      <section class="cw-modal" role="dialog" aria-modal="true" aria-labelledby="cw-branch-file-ignore-title">
+        <div class="cw-modal-header">
+          <div>
+            <p class="eyebrow">Ignore</p>
+            <h2 id="cw-branch-file-ignore-title">branch file を ignore 登録</h2>
+          </div>
+          <button type="button" class="cw-drawer-close" data-action="close-branch-file-ignore-modal" aria-label="ignore モーダルを閉じる">x</button>
+        </div>
+        <p><strong>${escapeHtml(dialog.branchName ?? "-")}</strong></p>
+        <p class="cw-table-subline">${escapeHtml(dialog.normalizedFilePath ?? "-")}</p>
+        <label class="cw-label-block">
+          <span>ignore メモ</span>
+          <textarea rows="4" data-field="branchFileIgnoreMemo">${escapeHtml(dialog.memo ?? "")}</textarea>
+        </label>
+        <div class="action-row">
+          <button type="button" class="secondary" data-action="close-branch-file-ignore-modal">キャンセル</button>
+          <button type="button" data-action="confirm-branch-file-ignore">ignore 登録</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 function renderRepositoryIndexPage(viewModel) {
   return `
     ${renderDashboard(viewModel)}
@@ -842,5 +1036,6 @@ export function renderConflictWatch(root, viewModel) {
       </div>
     </div>
     ${renderSideDrawer(viewModel)}
+    ${renderBranchFileIgnoreModal(viewModel)}
   `;
 }

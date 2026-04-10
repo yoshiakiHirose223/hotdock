@@ -7,6 +7,7 @@ from app.core.dependencies import build_template_context
 from app.core.database import get_db
 from app.tools.conflict_watch_schemas import (
     BranchActionRequest,
+    BranchFileIgnoreCreateRequest,
     BranchMemoUpdateRequest,
     ConflictMemoUpdateRequest,
     ConflictStatusUpdateRequest,
@@ -53,6 +54,7 @@ def build_conflict_watch_response(
     message: str,
     tone: str = "success",
 ) -> ConflictWatchApiResponse:
+    db.expire_all()
     return ConflictWatchApiResponse(
         message=message,
         tone=tone,
@@ -81,13 +83,15 @@ async def csv_to_json_form(request: Request):
 
 @router.get("/conflict-watch")
 async def conflict_watch_form(request: Request):
-    return build_tool_response(
+    response = build_tool_response(
         request,
         "tools/conflict_watch.html",
         "Conflict Watch",
         page_mode="repositories",
         selected_repository_id="",
     )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.get("/conflict-watch/{repository_id:int}")
@@ -99,17 +103,20 @@ async def conflict_watch_repository_detail(
     repositories = conflict_watch_service.list_repositories(db)
     if not any(repository["id"] == repository_id for repository in repositories):
         raise HTTPException(status_code=404, detail="Repository not found")
-    return build_tool_response(
+    response = build_tool_response(
         request,
         "tools/conflict_watch.html",
         "Conflict Watch Repository",
         page_mode="repository-detail",
         selected_repository_id=str(repository_id),
     )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.get("/conflict-watch/api/state", response_model=dict[str, Any])
-async def conflict_watch_state(db: Session = Depends(get_db)):
+async def conflict_watch_state(response: Response, db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
     return conflict_watch_service.get_state(db)
 
 
@@ -209,6 +216,20 @@ async def conflict_watch_update_branch_memo(
     return build_conflict_watch_response(db, result.message, result.tone)
 
 
+@router.post("/conflict-watch/api/branch-file-ignores", response_model=ConflictWatchApiResponse)
+async def conflict_watch_add_branch_file_ignore(
+    payload: BranchFileIgnoreCreateRequest,
+    db: Session = Depends(get_db),
+):
+    result = conflict_watch_service.add_branch_file_ignore(
+        db,
+        payload.branchId,
+        payload.normalizedFilePath,
+        payload.memo,
+    )
+    return build_conflict_watch_response(db, result.message, result.tone)
+
+
 @router.post("/conflict-watch/api/branches/{branch_id}/actions", response_model=ConflictWatchApiResponse)
 async def conflict_watch_branch_action(
     branch_id: int,
@@ -260,6 +281,24 @@ async def conflict_watch_update_conflict_status(
     db: Session = Depends(get_db),
 ):
     result = conflict_watch_service.update_conflict_status(db, conflict_id, payload.status)
+    return build_conflict_watch_response(db, result.message, result.tone)
+
+
+@router.delete("/conflict-watch/api/conflicts/{conflict_id}", response_model=ConflictWatchApiResponse)
+async def conflict_watch_delete_conflict(
+    conflict_id: int,
+    db: Session = Depends(get_db),
+):
+    result = conflict_watch_service.delete_conflict(db, conflict_id)
+    return build_conflict_watch_response(db, result.message, result.tone)
+
+
+@router.post("/conflict-watch/api/conflicts/{conflict_id}/delete", response_model=ConflictWatchApiResponse)
+async def conflict_watch_delete_conflict_post(
+    conflict_id: int,
+    db: Session = Depends(get_db),
+):
+    result = conflict_watch_service.delete_conflict(db, conflict_id)
     return build_conflict_watch_response(db, result.message, result.tone)
 
 

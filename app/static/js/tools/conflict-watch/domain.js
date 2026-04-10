@@ -3,7 +3,7 @@ import {
   CHANGE_TYPE_LABELS,
   CONFLICT_STATUS_LABELS,
   DEFAULT_SETTINGS,
-} from "./constants.js";
+} from "./constants.js?v=conflict-watch-20250410-09";
 
 function deepClone(value) {
   if (typeof structuredClone === "function") {
@@ -34,6 +34,10 @@ export function normalizePath(filePath) {
 
 function createConflictKey(repositoryId, normalizedFilePath) {
   return `${repositoryId}::${normalizedFilePath}`;
+}
+
+function createBranchFileKey(branchId, normalizedFilePath) {
+  return `${branchId}::${normalizedFilePath}`;
 }
 
 function nextId(state, counterKey, prefix) {
@@ -281,8 +285,10 @@ function buildConflictGroups(state) {
 function appendNotification(state, conflict, notificationType, sentAt, status = "sent", errorMessage = null) {
   state.notifications.unshift({
     id: nextId(state, "notification", "notification"),
+    repositoryId: conflict.repositoryId,
     conflictId: conflict.id,
     conflictKey: conflict.conflictKey,
+    normalizedFilePath: conflict.normalizedFilePath,
     notificationType,
     destinationType: "slack",
     destinationValue: state.settings.notificationDestination,
@@ -585,21 +591,59 @@ export function buildViewModel(rawState) {
   const state = rawState;
   const selectedRepository = getSelectedRepository(state);
   const repositoryId = selectedRepository?.id ?? "";
+  const branchFileIgnoreByKey = new Map(
+    (state.branchFileIgnores ?? [])
+      .filter((item) => item.isActive)
+      .map((item) => [createBranchFileKey(item.branchId, item.normalizedFilePath), item]),
+  );
+  const conflictByBranchFileKey = new Map();
+  state.conflicts
+    .filter((conflict) => (
+      conflict.repositoryId === repositoryId
+      && (conflict.status === "warning" || conflict.status === "notice")
+    ))
+    .forEach((conflict) => {
+      (conflict.activeBranchIds ?? []).forEach((branchId) => {
+        conflictByBranchFileKey.set(
+          createBranchFileKey(branchId, conflict.normalizedFilePath),
+          conflict,
+        );
+      });
+    });
 
   const branchFileCounts = new Map();
+  const branchObservedFiles = new Map();
   state.branches.forEach((branch) => {
     branchFileCounts.set(branch.id, { visible: 0, ignored: 0 });
+    branchObservedFiles.set(branch.id, []);
   });
 
   state.branchFiles.forEach((branchFile) => {
     const counts = branchFileCounts.get(branchFile.branchId) ?? { visible: 0, ignored: 0 };
-    const ignored = isIgnoredFile(branchFile.normalizedFilePath, state.ignoreRules);
-    if (ignored) {
+    const files = branchObservedFiles.get(branchFile.branchId) ?? [];
+    const repositoryIgnored = isIgnoredFile(branchFile.normalizedFilePath, state.ignoreRules);
+    if (repositoryIgnored) {
       counts.ignored += 1;
     } else {
       counts.visible += 1;
+      const branchFileIgnore = branchFileIgnoreByKey.get(
+        createBranchFileKey(branchFile.branchId, branchFile.normalizedFilePath),
+      );
+      const activeConflict = conflictByBranchFileKey.get(
+        createBranchFileKey(branchFile.branchId, branchFile.normalizedFilePath),
+      );
+      files.push({
+        ...branchFile,
+        ignored: false,
+        isBranchFileIgnored: Boolean(branchFileIgnore),
+        branchFileIgnoreMemo: branchFileIgnore?.memo ?? "",
+        activeConflictKey: activeConflict?.conflictKey ?? "",
+        activeConflictStatus: activeConflict?.status ?? null,
+        isInConflict: Boolean(activeConflict),
+      });
     }
     branchFileCounts.set(branchFile.branchId, counts);
+    branchObservedFiles.set(branchFile.branchId, files);
   });
 
   const branches = [...state.branches]
@@ -621,6 +665,10 @@ export function buildViewModel(rawState) {
       ...branch,
       observedFileCount: branchFileCounts.get(branch.id)?.visible ?? 0,
       ignoredFileCount: branchFileCounts.get(branch.id)?.ignored ?? 0,
+      observedFiles: (branchObservedFiles.get(branch.id) ?? [])
+        .slice()
+        .sort((left, right) => left.normalizedFilePath.localeCompare(right.normalizedFilePath)),
+      isFileListOpen: (state.ui.expandedBranchIds ?? []).includes(branch.id),
       repositoryName: selectedRepository?.repositoryName ?? "",
     }));
 
@@ -658,6 +706,11 @@ export function buildViewModel(rawState) {
       .map((branchFile) => ({
         ...branchFile,
         ignored: isIgnoredFile(branchFile.normalizedFilePath, state.ignoreRules),
+        isBranchFileIgnored: Boolean(
+          branchFileIgnoreByKey.get(createBranchFileKey(branchFile.branchId, branchFile.normalizedFilePath)),
+        ),
+        branchFileIgnoreMemo:
+          branchFileIgnoreByKey.get(createBranchFileKey(branchFile.branchId, branchFile.normalizedFilePath))?.memo ?? "",
       }))
     : [];
 
@@ -672,8 +725,24 @@ export function buildViewModel(rawState) {
     .filter((conflict) => conflict.repositoryId === repositoryId)
     .map((conflict) => {
       const notifications = state.notifications.filter((item) => item.conflictKey === conflict.conflictKey);
+      const relatedBranches = (conflict.activeBranchIds ?? []).map((branchId) => {
+        const branch = state.branches.find((item) => item.id === branchId);
+        const branchEntry = conflict.branchEntries?.find((entry) => entry.branchId === branchId);
+        if (!branch) {
+          return null;
+        }
+        return {
+          id: branch.id,
+          branchName: branch.branchName,
+          status: branch.status,
+          changeType: branchEntry?.changeType ?? null,
+          previousPath: branchEntry?.previousPath ?? null,
+        };
+      }).filter(Boolean);
       return {
         ...conflict,
+        relatedBranches,
+        isBranchListOpen: relatedBranches.length > 0 && (state.ui.expandedConflictIds ?? []).includes(conflict.id),
         notificationCount: notifications.length,
         lastNotificationType: notifications[0]?.notificationType ?? null,
       };
@@ -688,6 +757,33 @@ export function buildViewModel(rawState) {
     (conflict.status === "warning" || conflict.status === "notice")
     && diffDays(conflict.firstDetectedAt, state.now) >= state.settings.longUnresolvedDays
   )).length;
+  const recentNotifications = state.notifications
+    .filter((notification) => {
+      if (notification.repositoryId === repositoryId) {
+        return true;
+      }
+      const conflict = state.conflicts.find((item) => item.conflictKey === notification.conflictKey);
+      return conflict?.repositoryId === repositoryId;
+    })
+    .slice(0, 12);
+  const fallbackNotifications = recentNotifications.length
+    ? recentNotifications
+    : conflicts
+      .filter((conflict) => conflict.status === "warning" || conflict.status === "notice")
+      .slice(0, 12)
+      .map((conflict) => ({
+        id: `synthetic-${conflict.id}`,
+        repositoryId: conflict.repositoryId,
+        conflictId: conflict.id,
+        conflictKey: conflict.conflictKey,
+        normalizedFilePath: conflict.normalizedFilePath,
+        notificationType: "conflict_created",
+        destinationType: "slack",
+        destinationValue: state.settings.notificationDestination,
+        sentAt: conflict.lastDetectedAt ?? conflict.updatedAt ?? state.now,
+        status: "sent",
+        errorMessage: null,
+      }));
 
   return {
     repositories: state.repositories,
@@ -703,12 +799,7 @@ export function buildViewModel(rawState) {
     webhookEvents: state.webhookEvents
       .filter((event) => event.repositoryId === repositoryId || event.repositoryExternalId === selectedRepository?.externalRepoId)
       .slice(0, 12),
-    recentNotifications: state.notifications
-      .filter((notification) => {
-        const conflict = state.conflicts.find((item) => item.conflictKey === notification.conflictKey);
-        return conflict?.repositoryId === repositoryId;
-      })
-      .slice(0, 12),
+    recentNotifications: fallbackNotifications,
     securityLogs: state.securityLogs
       .filter((log) => log.repositoryExternalId === selectedRepository?.externalRepoId)
       .slice(0, 12),
@@ -767,7 +858,7 @@ export function updateConflictStatus(rawState, conflictKey, nextStatus) {
     return state;
   }
   if (nextStatus === "resolved" && (conflict.activeBranchIds?.length ?? 0) >= 2) {
-    state.ui.feedbackMessage = "resolved は監視対象 branch が 2 未満になったときだけ確定します。branch 側の merge / delete / reset を使ってください。";
+    state.ui.feedbackMessage = "resolved は監視対象 branch が 2 未満になったときだけ確定します。branch 側の deleted や除外で監視対象を減らしてください。";
     state.ui.feedbackTone = "warning";
     return state;
   }

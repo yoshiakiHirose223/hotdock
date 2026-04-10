@@ -1,6 +1,6 @@
-import { QUICK_WEBHOOK_PRESETS, WEBHOOK_FORM_DEFAULTS } from "./constants.js";
-import { buildViewModel } from "./domain.js";
-import { renderConflictWatch } from "./view.js";
+import { QUICK_WEBHOOK_PRESETS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20250410-09";
+import { buildViewModel } from "./domain.js?v=conflict-watch-20250410-09";
+import { renderConflictWatch } from "./view.js?v=conflict-watch-20250410-09";
 
 const root = document.querySelector("[data-conflict-watch-app]");
 const API_BASE = "/tools/conflict-watch/api";
@@ -16,6 +16,8 @@ const uiState = {
   selectedRepositoryId: initialSelectedRepositoryId ? Number(initialSelectedRepositoryId) : null,
   selectedConflictKey: "",
   selectedBranchId: null,
+  expandedBranchIds: [],
+  expandedConflictIds: [],
   pageMode,
   isSideDrawerOpen: false,
   webhookDraft: { ...WEBHOOK_FORM_DEFAULTS },
@@ -23,6 +25,17 @@ const uiState = {
   newRepositoryName: "",
   newRepositoryExternalId: "",
   newRepositoryProvider: "github",
+  pendingConflictScrollKey: "",
+  pendingBranchScrollId: null,
+  highlightedBranchId: null,
+  highlightedConflictKey: "",
+  branchFileIgnoreDialog: {
+    isOpen: false,
+    branchId: null,
+    branchName: "",
+    normalizedFilePath: "",
+    memo: "",
+  },
   feedbackMessage: "",
   feedbackTone: "info",
 };
@@ -41,6 +54,8 @@ function syncSelections() {
     uiState.selectedRepositoryId = null;
     uiState.selectedBranchId = null;
     uiState.selectedConflictKey = "";
+    uiState.expandedBranchIds = [];
+    uiState.expandedConflictIds = [];
     return;
   }
 
@@ -63,19 +78,32 @@ function syncSelections() {
   }
 
   const branches = (snapshot?.branches ?? []).filter((branch) => branch.repositoryId === uiState.selectedRepositoryId);
+  uiState.expandedBranchIds = uiState.expandedBranchIds.filter((branchId) => (
+    branches.some((branch) => branch.id === branchId)
+  ));
   if (!branches.some((branch) => branch.id === uiState.selectedBranchId)) {
     uiState.selectedBranchId = branches[0]?.id ?? null;
   }
+  if (uiState.highlightedBranchId !== null && !branches.some((branch) => branch.id === uiState.highlightedBranchId)) {
+    uiState.highlightedBranchId = null;
+  }
 
   const conflicts = (snapshot?.conflicts ?? []).filter((conflict) => conflict.repositoryId === uiState.selectedRepositoryId);
+  uiState.expandedConflictIds = uiState.expandedConflictIds.filter((conflictId) => (
+    conflicts.some((conflict) => conflict.id === conflictId)
+  ));
   if (!conflicts.some((conflict) => conflict.conflictKey === uiState.selectedConflictKey)) {
     uiState.selectedConflictKey = conflicts[0]?.conflictKey ?? "";
+  }
+  if (uiState.highlightedConflictKey && !conflicts.some((conflict) => conflict.conflictKey === uiState.highlightedConflictKey)) {
+    uiState.highlightedConflictKey = "";
   }
 }
 
 function render() {
   if (!snapshot) {
     document.body.classList.remove("cw-drawer-open");
+    document.body.classList.remove("cw-overlay-open");
     root.innerHTML = '<p class="notice">Conflict Watch を読み込んでいます...</p>';
     return;
   }
@@ -87,12 +115,36 @@ function render() {
   viewModel.now = snapshot.now;
   viewModel.ui.now = snapshot.now;
   document.body.classList.toggle("cw-drawer-open", uiState.pageMode === "repository-detail" && uiState.isSideDrawerOpen);
+  document.body.classList.toggle(
+    "cw-overlay-open",
+    (uiState.pageMode === "repository-detail" && uiState.isSideDrawerOpen)
+      || uiState.branchFileIgnoreDialog.isOpen,
+  );
   renderConflictWatch(root, viewModel);
+  if (uiState.pendingConflictScrollKey) {
+    const conflictRow = root.querySelector(
+      `[data-conflict-row-key="${CSS.escape(uiState.pendingConflictScrollKey)}"]`,
+    );
+    if (conflictRow instanceof HTMLElement) {
+      conflictRow.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    uiState.pendingConflictScrollKey = "";
+  }
+  if (uiState.pendingBranchScrollId !== null) {
+    const branchRow = root.querySelector(
+      `[data-branch-row-id="${CSS.escape(String(uiState.pendingBranchScrollId))}"]`,
+    );
+    if (branchRow instanceof HTMLElement) {
+      branchRow.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    uiState.pendingBranchScrollId = null;
+  }
 }
 
 async function fetchState() {
   const response = await fetch(`${API_BASE}/state`, {
     credentials: "same-origin",
+    cache: "no-store",
   });
   if (!response.ok) {
     throw new Error("Conflict Watch state の取得に失敗しました。");
@@ -108,24 +160,26 @@ async function applyResponse(response) {
     uiState.feedbackMessage = detail;
     uiState.feedbackTone = "warning";
     render();
-    return;
+    return false;
   }
   snapshot = payload.state;
   uiState.feedbackMessage = payload.message ?? "更新しました。";
   uiState.feedbackTone = payload.tone ?? "success";
   render();
+  return true;
 }
 
 async function requestJson(path, options = {}) {
   const response = await fetch(path, {
     credentials: "same-origin",
+    cache: "no-store",
     headers: {
       "Content-Type": "application/json",
       ...(options.headers ?? {}),
     },
     ...options,
   });
-  await applyResponse(response);
+  return applyResponse(response);
 }
 
 function getSelectedRepositoryId() {
@@ -151,6 +205,20 @@ function closeSideDrawer() {
     return;
   }
   uiState.isSideDrawerOpen = false;
+  render();
+}
+
+function closeBranchFileIgnoreDialog() {
+  if (!uiState.branchFileIgnoreDialog.isOpen) {
+    return;
+  }
+  uiState.branchFileIgnoreDialog = {
+    isOpen: false,
+    branchId: null,
+    branchName: "",
+    normalizedFilePath: "",
+    memo: "",
+  };
   render();
 }
 
@@ -186,6 +254,13 @@ root.addEventListener("change", (event) => {
       uiState.newRepositoryProvider = String(value);
       return;
     }
+    if (field === "branchFileIgnoreMemo") {
+      uiState.branchFileIgnoreDialog = {
+        ...uiState.branchFileIgnoreDialog,
+        memo: String(value),
+      };
+      return;
+    }
 
     uiState.webhookDraft = {
       ...uiState.webhookDraft,
@@ -211,9 +286,23 @@ root.addEventListener("click", async (event) => {
   if (!(target instanceof HTMLElement)) {
     return;
   }
+  const clickedBranchJumpTrigger = target.closest('[data-action="jump-to-branch"]');
+  const clickedJumpTrigger = target.closest('[data-action="jump-to-conflict"]');
+  let shouldRender = false;
+  if (!clickedBranchJumpTrigger && uiState.highlightedBranchId !== null) {
+    uiState.highlightedBranchId = null;
+    shouldRender = true;
+  }
+  if (!clickedJumpTrigger && uiState.highlightedConflictKey) {
+    uiState.highlightedConflictKey = "";
+    shouldRender = true;
+  }
 
   const actionTarget = target.closest("[data-action]");
   if (!(actionTarget instanceof HTMLElement)) {
+    if (shouldRender) {
+      render();
+    }
     return;
   }
 
@@ -230,6 +319,11 @@ root.addEventListener("click", async (event) => {
 
   if (action === "close-side-drawer") {
     closeSideDrawer();
+    return;
+  }
+
+  if (action === "close-branch-file-ignore-modal") {
+    closeBranchFileIgnoreDialog();
     return;
   }
 
@@ -316,19 +410,61 @@ root.addEventListener("click", async (event) => {
     return;
   }
 
+  if (action === "jump-to-branch") {
+    uiState.selectedBranchId = toNumber(actionTarget.getAttribute("data-branch-id"));
+    uiState.pendingBranchScrollId = uiState.selectedBranchId;
+    uiState.highlightedBranchId = uiState.selectedBranchId;
+    render();
+    return;
+  }
+
   if (action === "select-conflict") {
     uiState.selectedConflictKey = actionTarget.getAttribute("data-conflict-key") ?? "";
     render();
     return;
   }
 
-  if (action === "toggle-excluded" || action === "merge-branch" || action === "delete-branch" || action === "reset-branch") {
+  if (action === "jump-to-conflict") {
+    uiState.selectedConflictKey = actionTarget.getAttribute("data-conflict-key") ?? "";
+    uiState.pendingConflictScrollKey = uiState.selectedConflictKey;
+    uiState.highlightedConflictKey = uiState.selectedConflictKey;
+    render();
+    return;
+  }
+
+  if (action === "toggle-conflict-branches") {
+    const conflictId = toNumber(actionTarget.getAttribute("data-conflict-id"));
+    if (conflictId === null) {
+      return;
+    }
+    if (uiState.expandedConflictIds.includes(conflictId)) {
+      uiState.expandedConflictIds = uiState.expandedConflictIds.filter((id) => id !== conflictId);
+    } else {
+      uiState.expandedConflictIds = [...uiState.expandedConflictIds, conflictId];
+    }
+    render();
+    return;
+  }
+
+  if (action === "toggle-branch-files") {
+    const branchId = toNumber(actionTarget.getAttribute("data-branch-id"));
+    if (branchId === null) {
+      return;
+    }
+    if (uiState.expandedBranchIds.includes(branchId)) {
+      uiState.expandedBranchIds = uiState.expandedBranchIds.filter((id) => id !== branchId);
+    } else {
+      uiState.expandedBranchIds = [...uiState.expandedBranchIds, branchId];
+    }
+    render();
+    return;
+  }
+
+  if (action === "toggle-excluded" || action === "delete-branch") {
     const branchId = toNumber(actionTarget.getAttribute("data-branch-id"));
     const actionMap = {
       "toggle-excluded": "toggle-excluded",
-      "merge-branch": "merge",
       "delete-branch": "delete",
-      "reset-branch": "reset",
     };
     await requestJson(`${API_BASE}/branches/${branchId}/actions`, {
       method: "POST",
@@ -348,6 +484,37 @@ root.addEventListener("click", async (event) => {
     return;
   }
 
+  if (action === "open-branch-file-ignore-modal") {
+    uiState.branchFileIgnoreDialog = {
+      isOpen: true,
+      branchId: toNumber(actionTarget.getAttribute("data-branch-id")),
+      branchName: actionTarget.getAttribute("data-branch-name") ?? "",
+      normalizedFilePath: actionTarget.getAttribute("data-file-path") ?? "",
+      memo: "",
+    };
+    render();
+    return;
+  }
+
+  if (action === "confirm-branch-file-ignore") {
+    const dialog = uiState.branchFileIgnoreDialog;
+    if (!dialog.branchId || !dialog.normalizedFilePath) {
+      return;
+    }
+    const memoField = root.querySelector('[data-field="branchFileIgnoreMemo"]');
+    const memo = memoField instanceof HTMLTextAreaElement ? memoField.value : dialog.memo;
+    closeBranchFileIgnoreDialog();
+    await requestJson(`${API_BASE}/branch-file-ignores`, {
+      method: "POST",
+      body: JSON.stringify({
+        branchId: dialog.branchId,
+        normalizedFilePath: dialog.normalizedFilePath,
+        memo,
+      }),
+    });
+    return;
+  }
+
   if (action === "set-conflict-status") {
     const conflict = getSelectedConflict();
     if (!conflict) {
@@ -356,6 +523,17 @@ root.addEventListener("click", async (event) => {
     await requestJson(`${API_BASE}/conflicts/${conflict.id}/status`, {
       method: "PATCH",
       body: JSON.stringify({ status: actionTarget.getAttribute("data-status") }),
+    });
+    return;
+  }
+
+  if (action === "delete-conflict") {
+    const conflictId = toNumber(actionTarget.getAttribute("data-conflict-id"));
+    if (conflictId === null) {
+      return;
+    }
+    await requestJson(`${API_BASE}/conflicts/${conflictId}/delete`, {
+      method: "POST",
     });
     return;
   }
@@ -404,11 +582,37 @@ root.addEventListener("click", async (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
+    if (uiState.branchFileIgnoreDialog.isOpen) {
+      closeBranchFileIgnoreDialog();
+      return;
+    }
     closeSideDrawer();
   }
 });
 
+document.addEventListener("click", (event) => {
+  if (!uiState.highlightedConflictKey && uiState.highlightedBranchId === null) {
+    return;
+  }
+  const eventPath = typeof event.composedPath === "function" ? event.composedPath() : [];
+  if (eventPath.includes(root)) {
+    return;
+  }
+  const target = event.target;
+  if (!(target instanceof Node) || root.contains(target)) {
+    return;
+  }
+  if (uiState.highlightedConflictKey) {
+    uiState.highlightedConflictKey = "";
+  }
+  if (uiState.highlightedBranchId !== null) {
+    uiState.highlightedBranchId = null;
+  }
+  render();
+});
+
 boot().catch((error) => {
   document.body.classList.remove("cw-drawer-open");
+  document.body.classList.remove("cw-overlay-open");
   root.innerHTML = `<p class="notice error">${error.message}</p>`;
 });

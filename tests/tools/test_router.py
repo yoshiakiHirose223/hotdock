@@ -17,7 +17,8 @@ def test_conflict_watch_page(client):
 
     assert response.status_code == 200
     assert "Conflict Watch" in response.text
-    assert "/static/js/tools/conflict-watch/app.js" in response.text
+    assert "/static/js/tools/conflict-watch/app.js?v=conflict-watch-20250410-09" in response.text
+    assert response.headers["cache-control"] == "no-store"
     assert 'data-page-mode="repositories"' in response.text
 
 
@@ -33,6 +34,7 @@ def test_conflict_watch_state_api(client):
     response = client.get("/tools/conflict-watch/api/state")
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
     payload = response.json()
     assert "repositories" in payload
     assert "settings" in payload
@@ -183,6 +185,181 @@ def test_conflict_watch_simulated_webhook_duplicate_delivery_is_idempotent(clien
     assert second.status_code == 200
     assert "冪等性により再処理をスキップ" in second.json()["message"]
     assert len(second.json()["state"]["webhookEvents"]) == 1
+
+
+def test_conflict_watch_conflict_detection_creates_notification_log_entry(client):
+    repository_response = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "hotdock",
+            "externalRepoId": "notify/test",
+        },
+    )
+    repository_id = repository_response.json()["state"]["repositories"][0]["id"]
+
+    first = client.post(
+        "/tools/conflict-watch/api/simulate-webhook",
+        json={
+            "repositoryId": repository_id,
+            "provider": "github",
+            "deliveryId": "notify-delivery-1",
+            "branchName": "feature/notify-a",
+            "pusher": "tester",
+            "signatureStatus": "valid",
+            "deletedState": "false",
+            "simulateFailure": False,
+            "isForced": False,
+            "added": "",
+            "modified": "app/conflicts/service.py",
+            "removed": "",
+            "renamed": "",
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/tools/conflict-watch/api/simulate-webhook",
+        json={
+            "repositoryId": repository_id,
+            "provider": "github",
+            "deliveryId": "notify-delivery-2",
+            "branchName": "feature/notify-b",
+            "pusher": "tester",
+            "signatureStatus": "valid",
+            "deletedState": "false",
+            "simulateFailure": False,
+            "isForced": False,
+            "added": "",
+            "modified": "app/conflicts/service.py",
+            "removed": "",
+            "renamed": "",
+        },
+    )
+
+    assert second.status_code == 200
+    notifications = second.json()["state"]["notifications"]
+    assert any(notification["notificationType"] == "conflict_created" for notification in notifications)
+    assert any(notification["destinationType"] == "slack" for notification in notifications)
+    assert any(notification["status"] == "sent" for notification in notifications)
+
+
+def test_conflict_watch_delete_resolved_conflict(client):
+    repository_response = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "hotdock",
+            "externalRepoId": "resolved/delete-test",
+        },
+    )
+    repository_id = repository_response.json()["state"]["repositories"][0]["id"]
+
+    for delivery_id, branch_name in (
+        ("resolved-delivery-1", "feature/cleanup-a"),
+        ("resolved-delivery-2", "feature/cleanup-b"),
+    ):
+        response = client.post(
+            "/tools/conflict-watch/api/simulate-webhook",
+            json={
+                "repositoryId": repository_id,
+                "provider": "github",
+                "deliveryId": delivery_id,
+                "branchName": branch_name,
+                "pusher": "tester",
+                "signatureStatus": "valid",
+                "deletedState": "false",
+                "simulateFailure": False,
+                "isForced": False,
+                "added": "",
+                "modified": "app/conflicts/service.py",
+                "removed": "",
+                "renamed": "",
+            },
+        )
+        assert response.status_code == 200
+
+    state_before_resolve = client.get("/tools/conflict-watch/api/state").json()
+    branch_to_delete = next(branch for branch in state_before_resolve["branches"] if branch["branchName"] == "feature/cleanup-b")
+
+    branch_delete = client.post(
+        f"/tools/conflict-watch/api/branches/{branch_to_delete['id']}/actions",
+        json={"action": "delete"},
+    )
+    assert branch_delete.status_code == 200
+
+    resolved_conflict = next(conflict for conflict in branch_delete.json()["state"]["conflicts"] if conflict["status"] == "resolved")
+
+    delete_response = client.post(f"/tools/conflict-watch/api/conflicts/{resolved_conflict['id']}/delete")
+
+    assert delete_response.status_code == 200
+    assert all(conflict["id"] != resolved_conflict["id"] for conflict in delete_response.json()["state"]["conflicts"])
+
+    state_after_delete = client.get("/tools/conflict-watch/api/state")
+
+    assert state_after_delete.status_code == 200
+    assert all(conflict["id"] != resolved_conflict["id"] for conflict in state_after_delete.json()["conflicts"])
+
+
+def test_conflict_watch_branch_file_ignore_resolves_conflict_with_memo(client):
+    repository_response = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "hotdock",
+            "externalRepoId": "branch-file-ignore/test",
+        },
+    )
+    repository_id = repository_response.json()["state"]["repositories"][0]["id"]
+
+    for delivery_id, branch_name in (
+        ("branch-file-ignore-1", "feature/ignore-a"),
+        ("branch-file-ignore-2", "feature/ignore-b"),
+    ):
+        response = client.post(
+            "/tools/conflict-watch/api/simulate-webhook",
+            json={
+                "repositoryId": repository_id,
+                "provider": "github",
+                "deliveryId": delivery_id,
+                "branchName": branch_name,
+                "pusher": "tester",
+                "signatureStatus": "valid",
+                "deletedState": "false",
+                "simulateFailure": False,
+                "isForced": False,
+                "added": "",
+                "modified": "app/conflicts/service.py",
+                "removed": "",
+                "renamed": "",
+            },
+        )
+        assert response.status_code == 200
+
+    state_before_ignore = client.get("/tools/conflict-watch/api/state").json()
+    target_branch = next(branch for branch in state_before_ignore["branches"] if branch["branchName"] == "feature/ignore-a")
+    active_conflict = next(conflict for conflict in state_before_ignore["conflicts"] if conflict["status"] == "warning")
+
+    ignore_response = client.post(
+        "/tools/conflict-watch/api/branch-file-ignores",
+        json={
+            "branchId": target_branch["id"],
+            "normalizedFilePath": "app/conflicts/service.py",
+            "memo": "legacy branch なので個別に除外",
+        },
+    )
+
+    assert ignore_response.status_code == 200
+    ignore_state = ignore_response.json()["state"]
+    assert any(
+        item["branchId"] == target_branch["id"]
+        and item["normalizedFilePath"] == "app/conflicts/service.py"
+        and item["memo"] == "legacy branch なので個別に除外"
+        for item in ignore_state["branchFileIgnores"]
+    )
+    updated_conflict = next(conflict for conflict in ignore_state["conflicts"] if conflict["id"] == active_conflict["id"])
+    assert updated_conflict["status"] == "resolved"
+    assert updated_conflict["activeBranchIds"] == []
 
 
 def test_conflict_watch_github_webhook_signature_validation(client):
