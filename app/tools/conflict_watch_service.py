@@ -53,7 +53,6 @@ BRANCH_STATUS_ORDER = {
     "quiet": 3,
     "stale": 2,
     "branch_excluded": 1,
-    "deleted": 0,
 }
 
 
@@ -153,6 +152,9 @@ class ConflictWatchService:
                 for redundant in settings_rows[1:]:
                     db.delete(redundant)
                 db.flush()
+            if primary.stale_days == 30:
+                primary.stale_days = 15
+                db.flush()
             return primary
         settings_row = ConflictWatchSetting()
         db.add(settings_row)
@@ -220,8 +222,6 @@ class ConflictWatchService:
         return repository
 
     def _compute_branch_status(self, branch: ConflictWatchBranch, stale_days: int, now: datetime) -> str:
-        if branch.is_deleted:
-            return "deleted"
         if branch.is_branch_excluded:
             return "branch_excluded"
         if branch.last_seen_at is None:
@@ -245,6 +245,16 @@ class ConflictWatchService:
             return "medium"
         return "high"
 
+    def _remove_branch(self, db: Session, branch: ConflictWatchBranch) -> None:
+        db.query(ConflictWatchBranchFileIgnore).filter(
+            ConflictWatchBranchFileIgnore.branch_id == branch.id,
+        ).delete()
+        db.query(ConflictWatchBranchFile).filter(
+            ConflictWatchBranchFile.branch_id == branch.id,
+        ).delete()
+        db.delete(branch)
+        db.flush()
+
     def _compute_conflict_confidence(self, branches: list[ConflictWatchBranch]) -> str:
         if not branches:
             return "low"
@@ -253,6 +263,118 @@ class ConflictWatchService:
         if any(branch.confidence == "medium" for branch in branches):
             return "medium"
         return "high"
+
+    def _snapshot_conflict_branches(
+        self,
+        entries: list[tuple[ConflictWatchBranch, ConflictWatchBranchFile]],
+    ) -> list[dict[str, Any]]:
+        snapshots: list[dict[str, Any]] = []
+        for branch, branch_file in entries:
+            snapshots.append({
+                "branchId": branch.id,
+                "branchName": branch.branch_name,
+                "status": branch.status,
+                "lastPushAt": self._iso(branch.last_push_at),
+                "lastSeenAt": self._iso(branch.last_seen_at),
+                "changeType": branch_file.change_type,
+                "previousPath": branch_file.previous_path,
+            })
+        return snapshots
+
+    def _build_resolution_context(self, reason: str | None, **kwargs: Any) -> dict[str, Any]:
+        resolved_reason = reason or "other_observed_resolution"
+        context: dict[str, Any] = {"reason": resolved_reason}
+        for key, value in kwargs.items():
+            if value in (None, "", [], {}):
+                continue
+            context[key] = value
+        context["summary"] = self._format_resolution_summary(context)
+        return context
+
+    def _coerce_resolution_context(
+        self,
+        reason: str | None,
+        context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not context:
+            return self._build_resolution_context(reason)
+        if "reason" not in context and "summary" not in context:
+            return self._build_resolution_context(reason, **context)
+
+        detail: dict[str, Any] = {}
+        for key, value in context.items():
+            if value in (None, "", [], {}):
+                continue
+            detail[key] = value
+        detail["reason"] = str(detail.get("reason") or reason or "other_observed_resolution")
+        detail["summary"] = self._format_resolution_summary(detail)
+        return detail
+
+    def _format_branch_names(self, entries: list[tuple[ConflictWatchBranch, ConflictWatchBranchFile]]) -> str:
+        names = sorted({branch.branch_name for branch, _ in entries})
+        return ", ".join(names)
+
+    def _format_resolution_summary(self, context: dict[str, Any]) -> str:
+        reason = str(context.get("reason") or "other_observed_resolution")
+        branch_name = context.get("branchName")
+        normalized_file_path = context.get("normalizedFilePath")
+        pattern = context.get("pattern")
+        delivery_id = context.get("deliveryId")
+        after_sha = context.get("afterSha")
+
+        if reason == "webhook_branch_deleted":
+            details = [f"branch: {branch_name}"] if branch_name else []
+            if delivery_id:
+                details.append(f"delivery_id: {delivery_id}")
+            return f"Webhook で branch 削除が来て解消 ({', '.join(details)})" if details else "Webhook で branch 削除が来て解消"
+        if reason == "webhook_observed_resolution":
+            details = [f"branch: {branch_name}"] if branch_name else []
+            if delivery_id:
+                details.append(f"delivery_id: {delivery_id}")
+            if after_sha:
+                details.append(f"after: {after_sha}")
+            return f"push 再計算で解消 ({', '.join(details)})" if details else "push 再計算で解消"
+        if reason == "branch_excluded":
+            return f"branch を除外して解消 (branch: {branch_name})" if branch_name else "branch を除外して解消"
+        if reason == "branch_included":
+            return f"除外解除後の再計算で解消 (branch: {branch_name})" if branch_name else "除外解除後の再計算で解消"
+        if reason == "merged_to_main_or_master":
+            return f"main/master マージ扱いで解消 (branch: {branch_name})" if branch_name else "main/master マージ扱いで解消"
+        if reason == "branch_deleted":
+            return f"手動で branch 削除して解消 (branch: {branch_name})" if branch_name else "手動で branch 削除して解消"
+        if reason == "manual_reset":
+            return f"手動リセットで解消 (branch: {branch_name})" if branch_name else "手動リセットで解消"
+        if reason == "branch_file_ignored":
+            details = [f"branch: {branch_name}"] if branch_name else []
+            if normalized_file_path:
+                details.append(f"file: {normalized_file_path}")
+            return f"branch-file ignore で解消 ({', '.join(details)})" if details else "branch-file ignore で解消"
+        if reason == "branch_file_ignore_removed":
+            details = [f"branch: {branch_name}"] if branch_name else []
+            if normalized_file_path:
+                details.append(f"file: {normalized_file_path}")
+            return f"ignore 解除後の再計算で解消 ({', '.join(details)})" if details else "ignore 解除後の再計算で解消"
+        if reason == "ignore_rule_added":
+            return f"repository ignore rule 追加で解消 (pattern: {pattern})" if pattern else "repository ignore rule 追加で解消"
+        if reason == "ignore_rule_enabled":
+            return f"repository ignore rule 有効化で解消 (pattern: {pattern})" if pattern else "repository ignore rule 有効化で解消"
+        if reason == "ignore_rule_disabled":
+            return f"repository ignore rule 無効化後の再計算で解消 (pattern: {pattern})" if pattern else "repository ignore rule 無効化後の再計算で解消"
+        if reason == "manual_resolved":
+            return "手動で resolved に変更"
+        return "上記に当てはまらない再計算の fallback"
+
+    def _webhook_resolution_context(self, event: ConflictWatchWebhookEvent) -> tuple[str, dict[str, Any]]:
+        reason = "webhook_branch_deleted" if event.is_deleted is True else "webhook_observed_resolution"
+        context = self._build_resolution_context(
+            reason,
+            providerType=event.provider_type,
+            deliveryId=event.delivery_id,
+            branchName=event.branch_name,
+            afterSha=event.after_sha,
+            pusher=event.pusher,
+        )
+        return reason, context
 
     def _append_notification(
         self,
@@ -364,7 +486,13 @@ class ConflictWatchService:
             event.raw_payload_ref = None
             event.raw_payload_expired_at = now
 
-    def _reconcile_all(self, db: Session, resolution_reason: str | None = None, suppress_notifications: bool = False) -> None:
+    def _reconcile_all(
+        self,
+        db: Session,
+        resolution_reason: str | None = None,
+        resolution_context: dict[str, Any] | None = None,
+        suppress_notifications: bool = False,
+    ) -> None:
         settings_row = self._get_or_create_settings(db)
         self._refresh_raw_payload_retention(db, settings_row)
         now = self.now()
@@ -423,8 +551,10 @@ class ConflictWatchService:
                     reopened_at=None,
                     ignored_at=None,
                     resolved_reason=None,
+                    resolved_context=None,
                     confidence="medium",
                     last_long_unresolved_bucket=0,
+                    last_related_branches=[],
                     history=[],
                     created_at=now,
                     updated_at=now,
@@ -432,13 +562,23 @@ class ConflictWatchService:
                 if existing is None:
                     db.add(conflict)
                     db.flush()
-                    self._push_history(conflict, "warning", "新しい競合を検知", now)
+                    self._push_history(
+                        conflict,
+                        "warning",
+                        f"新しい競合を検知 (related branches: {self._format_branch_names(entries)})",
+                        now,
+                    )
                     if not suppress_notifications:
                         self._append_notification(db, settings_row, conflict, "conflict_created", now)
                 elif conflict.status == "resolved":
                     conflict.status = "warning"
                     conflict.reopened_at = now
-                    self._push_history(conflict, "warning", "resolved 済み conflict が再発", now)
+                    self._push_history(
+                        conflict,
+                        "warning",
+                        f"resolved 済み conflict が再発 (related branches: {self._format_branch_names(entries)})",
+                        now,
+                    )
                     if not suppress_notifications:
                         self._append_notification(db, settings_row, conflict, "conflict_reopened", now)
 
@@ -446,7 +586,9 @@ class ConflictWatchService:
                 conflict.updated_at = now
                 conflict.resolved_at = None
                 conflict.resolved_reason = None
+                conflict.resolved_context = None
                 conflict.confidence = self._compute_conflict_confidence(active_branches)
+                conflict.last_related_branches = self._snapshot_conflict_branches(entries)
                 self._update_conflict_links(db, conflict, branch_ids)
 
                 if existing is not None:
@@ -469,15 +611,17 @@ class ConflictWatchService:
                 if conflict.conflict_key in processed_keys:
                     continue
                 if conflict.status in {"warning", "notice"}:
+                    detail = self._coerce_resolution_context(resolution_reason, resolution_context)
                     conflict.status = "resolved"
                     conflict.resolved_at = now
-                    conflict.resolved_reason = resolution_reason or "other_observed_resolution"
+                    conflict.resolved_reason = detail["reason"]
+                    conflict.resolved_context = detail
                     conflict.updated_at = now
                     conflict.confidence = "low"
                     self._push_history(
                         conflict,
                         "resolved",
-                        f"観測上解消 ({conflict.resolved_reason})",
+                        str(detail["summary"]),
                         now,
                     )
                 self._update_conflict_links(db, conflict, [])
@@ -579,8 +723,10 @@ class ConflictWatchService:
             "reopenedAt": self._iso(conflict.reopened_at),
             "ignoredAt": self._iso(conflict.ignored_at),
             "resolvedReason": conflict.resolved_reason,
+            "resolvedContext": conflict.resolved_context,
             "confidence": conflict.confidence,
             "lastLongUnresolvedBucket": conflict.last_long_unresolved_bucket or 0,
+            "lastRelatedBranches": conflict.last_related_branches or [],
             "createdAt": self._iso(conflict.created_at),
             "updatedAt": self._iso(conflict.updated_at),
             "history": conflict.history or [],
@@ -716,7 +862,7 @@ class ConflictWatchService:
         return {
             "repositories": [self._serialize_repository(repository) for repository in repositories],
             "branches": sorted(
-                [self._serialize_branch(branch) for branch in branches],
+                [self._serialize_branch(branch) for branch in branches if not branch.is_deleted],
                 key=lambda branch: (-BRANCH_STATUS_ORDER.get(branch["status"], 0), branch["branchName"]),
             ),
             "branchFiles": [self._serialize_branch_file(branch_file) for branch_file in branch_files],
@@ -846,7 +992,11 @@ class ConflictWatchService:
         )
         db.add(rule)
         db.flush()
-        self._reconcile_all(db, resolution_reason="other_observed_resolution")
+        self._reconcile_all(
+            db,
+            resolution_reason="ignore_rule_added",
+            resolution_context=self._build_resolution_context("ignore_rule_added", pattern=normalized_pattern),
+        )
         db.commit()
         return ServiceMessage(f"ignore rule を追加しました: {normalized_pattern}")
 
@@ -856,7 +1006,12 @@ class ConflictWatchService:
             raise HTTPException(status_code=404, detail="Ignore rule not found")
         rule.is_active = not rule.is_active
         rule.updated_at = self.now()
-        self._reconcile_all(db, resolution_reason="other_observed_resolution")
+        reason = "ignore_rule_enabled" if rule.is_active else "ignore_rule_disabled"
+        self._reconcile_all(
+            db,
+            resolution_reason=reason,
+            resolution_context=self._build_resolution_context(reason, pattern=rule.pattern),
+        )
         db.commit()
         return ServiceMessage(f"ignore rule を {'有効' if rule.is_active else '無効'} にしました。")
 
@@ -914,9 +1069,99 @@ class ConflictWatchService:
                 updated_at=now,
             )
             db.add(ignore_entry)
-        self._reconcile_all(db, resolution_reason="branch_file_ignored")
+        self._reconcile_all(
+            db,
+            resolution_reason="branch_file_ignored",
+            resolution_context=self._build_resolution_context(
+                "branch_file_ignored",
+                branchName=branch.branch_name,
+                normalizedFilePath=normalized,
+                memo=memo.strip(),
+            ),
+        )
         db.commit()
         return ServiceMessage(f"{branch.branch_name} の {normalized} を ignore 登録しました。")
+
+    def _get_branch_file_ignore(
+        self,
+        db: Session,
+        branch_id: int,
+        normalized_file_path: str,
+    ) -> ConflictWatchBranchFileIgnore:
+        normalized = self.normalize_path(normalized_file_path)
+        ignore_entry = db.scalar(
+            select(ConflictWatchBranchFileIgnore).where(
+                ConflictWatchBranchFileIgnore.branch_id == branch_id,
+                ConflictWatchBranchFileIgnore.normalized_file_path == normalized,
+            )
+        )
+        if not ignore_entry:
+            raise HTTPException(status_code=404, detail="Branch file ignore not found")
+        return ignore_entry
+
+    def toggle_branch_file_ignore(
+        self,
+        db: Session,
+        ignore_id: int,
+    ) -> ServiceMessage:
+        ignore_entry = db.get(ConflictWatchBranchFileIgnore, ignore_id)
+        if not ignore_entry:
+            raise HTTPException(status_code=404, detail="Branch file ignore not found")
+        branch = db.get(ConflictWatchBranch, ignore_entry.branch_id)
+        ignore_entry.is_active = not ignore_entry.is_active
+        ignore_entry.updated_at = self.now()
+        reason = "branch_file_ignore_removed" if not ignore_entry.is_active else "branch_file_ignored"
+        self._reconcile_all(
+            db,
+            resolution_reason=reason,
+            resolution_context=self._build_resolution_context(
+                reason,
+                branchName=branch.branch_name if branch else None,
+                normalizedFilePath=ignore_entry.normalized_file_path,
+                memo=ignore_entry.memo or "",
+            ),
+        )
+        db.commit()
+        action = "取り消しました" if not ignore_entry.is_active else "再度有効化しました"
+        return ServiceMessage(f"{ignore_entry.normalized_file_path} の ignore を {action}。")
+
+    def remove_branch_file_ignore(
+        self,
+        db: Session,
+        branch_id: int,
+        normalized_file_path: str,
+    ) -> ServiceMessage:
+        ignore_entry = self._get_branch_file_ignore(db, branch_id, normalized_file_path)
+        if not ignore_entry.is_active:
+            return ServiceMessage(f"{ignore_entry.normalized_file_path} の ignore は既に解除されています。", tone="info")
+        ignore_entry.is_active = False
+        ignore_entry.updated_at = self.now()
+        branch = db.get(ConflictWatchBranch, ignore_entry.branch_id)
+        self._reconcile_all(
+            db,
+            resolution_reason="branch_file_ignore_removed",
+            resolution_context=self._build_resolution_context(
+                "branch_file_ignore_removed",
+                branchName=branch.branch_name if branch else None,
+                normalizedFilePath=ignore_entry.normalized_file_path,
+                memo=ignore_entry.memo or "",
+            ),
+        )
+        db.commit()
+        return ServiceMessage(f"{ignore_entry.normalized_file_path} の ignore を取り消しました。")
+
+    def update_branch_file_ignore_memo(
+        self,
+        db: Session,
+        branch_id: int,
+        normalized_file_path: str,
+        memo: str,
+    ) -> ServiceMessage:
+        ignore_entry = self._get_branch_file_ignore(db, branch_id, normalized_file_path)
+        ignore_entry.memo = memo.strip()
+        ignore_entry.updated_at = self.now()
+        db.commit()
+        return ServiceMessage(f"{ignore_entry.normalized_file_path} の ignore メモを更新しました。")
 
     def apply_branch_action(self, db: Session, branch_id: int, action: str) -> ServiceMessage:
         branch = db.get(ConflictWatchBranch, branch_id)
@@ -926,7 +1171,12 @@ class ConflictWatchService:
         if action == "toggle-excluded":
             branch.is_branch_excluded = not branch.is_branch_excluded
             branch.updated_at = now
-            self._reconcile_all(db, resolution_reason="branch_excluded")
+            reason = "branch_excluded" if branch.is_branch_excluded else "branch_included"
+            self._reconcile_all(
+                db,
+                resolution_reason=reason,
+                resolution_context=self._build_resolution_context(reason, branchName=branch.branch_name),
+            )
             db.commit()
             return ServiceMessage(f"{branch.branch_name} を {'branch_excluded' if branch.is_branch_excluded else '監視対象'} にしました。")
         if action == "merge":
@@ -935,25 +1185,33 @@ class ConflictWatchService:
             branch.monitoring_closed_at = now
             branch.updated_at = now
             db.query(ConflictWatchBranchFile).filter(ConflictWatchBranchFile.branch_id == branch.id).delete()
-            self._reconcile_all(db, resolution_reason="merged_to_main_or_master")
+            self._reconcile_all(
+                db,
+                resolution_reason="merged_to_main_or_master",
+                resolution_context=self._build_resolution_context("merged_to_main_or_master", branchName=branch.branch_name),
+            )
             db.commit()
             return ServiceMessage(f"{branch.branch_name} を main/master マージ扱いでクローズしました。")
         if action == "delete":
-            branch.is_deleted = True
-            branch.is_monitored = False
-            branch.monitoring_closed_reason = "branch_deleted"
-            branch.monitoring_closed_at = now
-            branch.updated_at = now
-            db.query(ConflictWatchBranchFile).filter(ConflictWatchBranchFile.branch_id == branch.id).delete()
-            self._reconcile_all(db, resolution_reason="branch_deleted")
+            branch_name = branch.branch_name
+            self._remove_branch(db, branch)
+            self._reconcile_all(
+                db,
+                resolution_reason="branch_deleted",
+                resolution_context=self._build_resolution_context("branch_deleted", branchName=branch_name),
+            )
             db.commit()
-            return ServiceMessage(f"{branch.branch_name} を deleted 扱いにしました。")
+            return ServiceMessage(f"{branch_name} を一覧から削除しました。")
         if action == "reset":
             branch.possibly_inconsistent = False
             branch.last_seen_at = None
             branch.updated_at = now
             db.query(ConflictWatchBranchFile).filter(ConflictWatchBranchFile.branch_id == branch.id).delete()
-            self._reconcile_all(db, resolution_reason="manual_reset")
+            self._reconcile_all(
+                db,
+                resolution_reason="manual_reset",
+                resolution_context=self._build_resolution_context("manual_reset", branchName=branch.branch_name),
+            )
             db.commit()
             return ServiceMessage(f"{branch.branch_name} の branch_files を手動リセットしました。")
         raise HTTPException(status_code=400, detail="Unknown branch action")
@@ -974,14 +1232,30 @@ class ConflictWatchService:
         if next_status == "resolved" and len(conflict.conflict_branches) >= 2:
             raise HTTPException(
                 status_code=400,
-                detail="resolved は監視対象 branch が 2 未満になったときだけ確定します。branch 側の deleted や除外で監視対象を減らしてください。",
+                detail="resolved は監視対象 branch が 2 未満になったときだけ確定します。branch 側の削除や除外で監視対象を減らしてください。",
             )
+        now = self.now()
         conflict.status = next_status
-        conflict.updated_at = self.now()
+        conflict.updated_at = now
         if next_status == "conflict_ignored":
-            conflict.ignored_at = self.now()
-        self._push_history(conflict, next_status, f"手動で {next_status} へ変更", self.now())
-        self._reconcile_all(db)
+            conflict.ignored_at = now
+        if next_status == "resolved":
+            detail = self._build_resolution_context("manual_resolved")
+            conflict.resolved_at = now
+            conflict.resolved_reason = detail["reason"]
+            conflict.resolved_context = detail
+            history_note = str(detail["summary"])
+        else:
+            conflict.resolved_at = None
+            conflict.resolved_reason = None
+            conflict.resolved_context = None
+            history_note = f"手動で {next_status} へ変更"
+        self._push_history(conflict, next_status, history_note, now)
+        self._reconcile_all(
+            db,
+            resolution_reason="manual_resolved" if next_status == "resolved" else None,
+            resolution_context=self._build_resolution_context("manual_resolved") if next_status == "resolved" else None,
+        )
         db.commit()
         return ServiceMessage(f"conflict status を {next_status} へ更新しました。")
 
@@ -1087,11 +1361,7 @@ class ConflictWatchService:
             branch.possibly_inconsistent = True
 
         if event.is_deleted is True:
-            branch.is_deleted = True
-            branch.is_monitored = False
-            branch.monitoring_closed_reason = "branch_deleted"
-            branch.monitoring_closed_at = now
-            db.query(ConflictWatchBranchFile).filter(ConflictWatchBranchFile.branch_id == branch.id).delete()
+            self._remove_branch(db, branch)
             return True
 
         def upsert_file(path: str, change_type: str, previous_path: str | None = None) -> None:
@@ -1285,9 +1555,11 @@ class ConflictWatchService:
         self._apply_event_to_branches(db, event)
         event.process_status = "processed"
         event.processed_at = self.now()
+        resolution_reason, resolution_context = self._webhook_resolution_context(event)
         self._reconcile_all(
             db,
-            resolution_reason="branch_deleted" if event.is_deleted is True else "other_observed_resolution",
+            resolution_reason=resolution_reason,
+            resolution_context=resolution_context,
         )
         db.commit()
         return ServiceMessage(f"{event.branch_name} へ Webhook を適用しました。")
@@ -1305,9 +1577,11 @@ class ConflictWatchService:
         event.processed_at = self.now()
         event.pushed_at = self.now()
         self._apply_event_to_branches(db, event)
+        resolution_reason, resolution_context = self._webhook_resolution_context(event)
         self._reconcile_all(
             db,
-            resolution_reason="branch_deleted" if event.is_deleted is True else "other_observed_resolution",
+            resolution_reason=resolution_reason,
+            resolution_context=resolution_context,
         )
         db.commit()
         return ServiceMessage(f"{event.delivery_id} を raw payload から再処理しました。")
@@ -1411,9 +1685,11 @@ class ConflictWatchService:
         self._apply_event_to_branches(db, event)
         event.process_status = "processed"
         event.processed_at = self.now()
+        resolution_reason, resolution_context = self._webhook_resolution_context(event)
         self._reconcile_all(
             db,
-            resolution_reason="branch_deleted" if event.is_deleted is True else "other_observed_resolution",
+            resolution_reason=resolution_reason,
+            resolution_context=resolution_context,
         )
         db.commit()
         return ServiceMessage("GitHub Webhook を処理しました。", "success")
@@ -1491,9 +1767,11 @@ class ConflictWatchService:
         self._apply_event_to_branches(db, event)
         event.process_status = "processed"
         event.processed_at = self.now()
+        resolution_reason, resolution_context = self._webhook_resolution_context(event)
         self._reconcile_all(
             db,
-            resolution_reason="branch_deleted" if event.is_deleted is True else "other_observed_resolution",
+            resolution_reason=resolution_reason,
+            resolution_context=resolution_context,
         )
         db.commit()
         return ServiceMessage("Backlog Webhook を処理しました。", "success")

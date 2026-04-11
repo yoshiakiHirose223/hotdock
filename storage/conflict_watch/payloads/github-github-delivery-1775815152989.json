@@ -1,0 +1,15 @@
+{
+  "repositoryId": 2,
+  "provider": "github",
+  "deliveryId": "",
+  "branchName": "feature/conflict-top",
+  "pusher": "yoshiaki0223",
+  "signatureStatus": "valid",
+  "deletedState": "false",
+  "simulateFailure": false,
+  "isForced": false,
+  "added": "",
+  "modified": "app/conflicts/service.py\n",
+  "removed": "",
+  "renamed": ""
+}

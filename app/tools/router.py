@@ -8,6 +8,8 @@ from app.core.database import get_db
 from app.tools.conflict_watch_schemas import (
     BranchActionRequest,
     BranchFileIgnoreCreateRequest,
+    BranchFileIgnoreMemoUpdateRequest,
+    BranchFileIgnoreTargetRequest,
     BranchMemoUpdateRequest,
     ConflictMemoUpdateRequest,
     ConflictStatusUpdateRequest,
@@ -222,6 +224,42 @@ async def conflict_watch_add_branch_file_ignore(
     db: Session = Depends(get_db),
 ):
     result = conflict_watch_service.add_branch_file_ignore(
+        db,
+        payload.branchId,
+        payload.normalizedFilePath,
+        payload.memo,
+    )
+    return build_conflict_watch_response(db, result.message, result.tone)
+
+
+@router.post("/conflict-watch/api/branch-file-ignores/{ignore_id}/toggle", response_model=ConflictWatchApiResponse)
+async def conflict_watch_toggle_branch_file_ignore(
+    ignore_id: int,
+    db: Session = Depends(get_db),
+):
+    result = conflict_watch_service.toggle_branch_file_ignore(db, ignore_id)
+    return build_conflict_watch_response(db, result.message, result.tone)
+
+
+@router.post("/conflict-watch/api/branch-file-ignores/remove", response_model=ConflictWatchApiResponse)
+async def conflict_watch_remove_branch_file_ignore(
+    payload: BranchFileIgnoreTargetRequest,
+    db: Session = Depends(get_db),
+):
+    result = conflict_watch_service.remove_branch_file_ignore(
+        db,
+        payload.branchId,
+        payload.normalizedFilePath,
+    )
+    return build_conflict_watch_response(db, result.message, result.tone)
+
+
+@router.patch("/conflict-watch/api/branch-file-ignores/memo", response_model=ConflictWatchApiResponse)
+async def conflict_watch_update_branch_file_ignore_memo(
+    payload: BranchFileIgnoreMemoUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    result = conflict_watch_service.update_branch_file_ignore_memo(
         db,
         payload.branchId,
         payload.normalizedFilePath,

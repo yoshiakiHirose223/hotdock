@@ -1,0 +1,15 @@
+{
+  "repositoryId": 2,
+  "provider": "github",
+  "deliveryId": "",
+  "branchName": "feature/conflict-menu",
+  "pusher": "yoshiaki0223",
+  "signatureStatus": "valid",
+  "deletedState": "false",
+  "simulateFailure": false,
+  "isForced": false,
+  "added": "",
+  "modified": "app/conflicts/dashboard.py",
+  "removed": "",
+  "renamed": ""
+}

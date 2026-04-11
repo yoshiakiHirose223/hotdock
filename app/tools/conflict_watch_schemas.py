@@ -58,6 +58,17 @@ class BranchFileIgnoreCreateRequest(BaseModel):
     memo: str = ""
 
 
+class BranchFileIgnoreTargetRequest(BaseModel):
+    branchId: int
+    normalizedFilePath: str
+
+
+class BranchFileIgnoreMemoUpdateRequest(BaseModel):
+    branchId: int
+    normalizedFilePath: str
+    memo: str = ""
+
+
 class SimulatedWebhookRequest(BaseModel):
     repositoryId: int
     provider: str

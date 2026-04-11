@@ -1,4 +1,4 @@
-import { DEFAULT_IGNORE_PATTERNS, DEFAULT_SETTINGS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20250410-09";
+import { DEFAULT_IGNORE_PATTERNS, DEFAULT_SETTINGS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20250410-21";
 
 function shiftIso(baseDate, days = 0, hours = 0) {
   const next = new Date(baseDate.getTime());
@@ -470,6 +470,13 @@ export function createMockState() {
       newRepositoryName: "",
       newRepositoryExternalId: "",
       newRepositoryProvider: "github",
+      branchSearchInput: "",
+      branchSearchQuery: "",
+      branchSearchMode: "both",
+      branchSortOrder: "updated_desc",
+      branchConflictOnly: false,
+      branchStatusFilter: "all",
+      activeMainTab: "simulator",
       expandedBranchIds: [],
       expandedConflictIds: [],
       pendingConflictScrollKey: "",
@@ -477,6 +484,8 @@ export function createMockState() {
       highlightedConflictKey: "",
       branchFileIgnoreDialog: {
         isOpen: false,
+        mode: "create",
+        ignoreId: null,
         branchId: null,
         branchName: "",
         normalizedFilePath: "",

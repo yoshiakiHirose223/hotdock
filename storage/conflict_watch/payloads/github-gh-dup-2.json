@@ -1,0 +1,1 @@
+{"ref": "refs/heads/feature/conflict-watch-3", "before": "before", "after": "after", "deleted": false, "forced": false, "repository": {"name": "hotdock", "full_name": "yoshiakiHirose223/hotdock"}, "pusher": {"name": "tester"}, "commits": [{"added": [], "modified": ["app/conflicts/service.py"], "removed": []}]}

@@ -17,7 +17,7 @@ def test_conflict_watch_page(client):
 
     assert response.status_code == 200
     assert "Conflict Watch" in response.text
-    assert "/static/js/tools/conflict-watch/app.js?v=conflict-watch-20250410-09" in response.text
+    assert "/static/js/tools/conflict-watch/app.js?v=conflict-watch-20250410-21" in response.text
     assert response.headers["cache-control"] == "no-store"
     assert 'data-page-mode="repositories"' in response.text
 
@@ -287,8 +287,20 @@ def test_conflict_watch_delete_resolved_conflict(client):
         json={"action": "delete"},
     )
     assert branch_delete.status_code == 200
+    assert all(
+        branch["id"] != branch_to_delete["id"]
+        for branch in branch_delete.json()["state"]["branches"]
+    )
 
     resolved_conflict = next(conflict for conflict in branch_delete.json()["state"]["conflicts"] if conflict["status"] == "resolved")
+    assert {item["branchName"] for item in resolved_conflict["lastRelatedBranches"]} == {
+        "feature/cleanup-a",
+        "feature/cleanup-b",
+    }
+    assert resolved_conflict["resolvedReason"] == "branch_deleted"
+    assert resolved_conflict["resolvedContext"]["branchName"] == "feature/cleanup-b"
+    assert "ブランチ削除で解消" in resolved_conflict["resolvedContext"]["summary"]
+    assert any(entry["label"] == "resolved" for entry in resolved_conflict["history"])
 
     delete_response = client.post(f"/tools/conflict-watch/api/conflicts/{resolved_conflict['id']}/delete")
 
@@ -299,6 +311,70 @@ def test_conflict_watch_delete_resolved_conflict(client):
 
     assert state_after_delete.status_code == 200
     assert all(conflict["id"] != resolved_conflict["id"] for conflict in state_after_delete.json()["conflicts"])
+    assert all(branch["id"] != branch_to_delete["id"] for branch in state_after_delete.json()["branches"])
+
+
+def test_conflict_watch_add_ignore_rule_resolves_conflict(client):
+    repository_response = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "hotdock",
+            "externalRepoId": "ignore-rule/test",
+        },
+    )
+    repository_id = repository_response.json()["state"]["repositories"][0]["id"]
+
+    for delivery_id, branch_name in (
+        ("ignore-rule-1", "feature/ignore-rule-a"),
+        ("ignore-rule-2", "feature/ignore-rule-b"),
+    ):
+        response = client.post(
+            "/tools/conflict-watch/api/simulate-webhook",
+            json={
+                "repositoryId": repository_id,
+                "provider": "github",
+                "deliveryId": delivery_id,
+                "branchName": branch_name,
+                "pusher": "tester",
+                "signatureStatus": "valid",
+                "deletedState": "false",
+                "simulateFailure": False,
+                "isForced": False,
+                "added": "",
+                "modified": "generated/conflicts/report.json",
+                "removed": "",
+                "renamed": "",
+            },
+        )
+        assert response.status_code == 200
+
+    ignore_response = client.post(
+        "/tools/conflict-watch/api/ignore-rules",
+        json={
+            "repositoryId": repository_id,
+            "pattern": "generated/**",
+        },
+    )
+
+    assert ignore_response.status_code == 200
+    ignore_state = ignore_response.json()["state"]
+    assert any(
+        rule["repositoryId"] == repository_id
+        and rule["pattern"] == "generated/**"
+        and rule["isActive"] is True
+        for rule in ignore_state["ignoreRules"]
+    )
+    resolved_conflict = next(
+        conflict
+        for conflict in ignore_state["conflicts"]
+        if conflict["normalizedFilePath"] == "generated/conflicts/report.json"
+    )
+    assert resolved_conflict["status"] == "resolved"
+    assert resolved_conflict["activeBranchIds"] == []
+    assert resolved_conflict["resolvedReason"] == "ignore_rule_added"
+    assert resolved_conflict["resolvedContext"]["pattern"] == "generated/**"
+    assert "repository ignore rule 追加で解消" in resolved_conflict["resolvedContext"]["summary"]
 
 
 def test_conflict_watch_branch_file_ignore_resolves_conflict_with_memo(client):
@@ -360,6 +436,164 @@ def test_conflict_watch_branch_file_ignore_resolves_conflict_with_memo(client):
     updated_conflict = next(conflict for conflict in ignore_state["conflicts"] if conflict["id"] == active_conflict["id"])
     assert updated_conflict["status"] == "resolved"
     assert updated_conflict["activeBranchIds"] == []
+    assert updated_conflict["resolvedReason"] == "branch_file_ignored"
+    assert updated_conflict["resolvedContext"]["branchName"] == "feature/ignore-a"
+    assert updated_conflict["resolvedContext"]["normalizedFilePath"] == "app/conflicts/service.py"
+
+
+def test_conflict_watch_webhook_resolution_context_includes_branch_and_delivery(client):
+    repository_response = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "hotdock",
+            "externalRepoId": "resolved/webhook-context",
+        },
+    )
+    repository_id = repository_response.json()["state"]["repositories"][0]["id"]
+
+    for delivery_id, branch_name in (
+        ("resolved-webhook-1", "feature/webhook-a"),
+        ("resolved-webhook-2", "feature/webhook-b"),
+    ):
+        response = client.post(
+            "/tools/conflict-watch/api/simulate-webhook",
+            json={
+                "repositoryId": repository_id,
+                "provider": "github",
+                "deliveryId": delivery_id,
+                "branchName": branch_name,
+                "pusher": "tester",
+                "signatureStatus": "valid",
+                "deletedState": "false",
+                "simulateFailure": False,
+                "isForced": False,
+                "added": "",
+                "modified": "app/conflicts/service.py",
+                "removed": "",
+                "renamed": "",
+            },
+        )
+        assert response.status_code == 200
+
+    delete_response = client.post(
+        "/tools/conflict-watch/api/simulate-webhook",
+        json={
+            "repositoryId": repository_id,
+            "provider": "github",
+            "deliveryId": "resolved-webhook-delete",
+            "branchName": "feature/webhook-b",
+            "pusher": "tester",
+            "signatureStatus": "valid",
+            "deletedState": "true",
+            "simulateFailure": False,
+            "isForced": False,
+            "added": "",
+            "modified": "",
+            "removed": "",
+            "renamed": "",
+        },
+    )
+
+    assert delete_response.status_code == 200
+    resolved_conflict = next(conflict for conflict in delete_response.json()["state"]["conflicts"] if conflict["status"] == "resolved")
+    assert resolved_conflict["resolvedReason"] == "webhook_branch_deleted"
+    assert resolved_conflict["resolvedContext"]["branchName"] == "feature/webhook-b"
+    assert resolved_conflict["resolvedContext"]["deliveryId"] == "resolved-webhook-delete"
+
+
+def test_conflict_watch_remove_branch_file_ignore_restores_conflict_and_updates_memo(client):
+    repository_response = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "hotdock",
+            "externalRepoId": "branch-file-ignore/toggle-test",
+        },
+    )
+    repository_id = repository_response.json()["state"]["repositories"][0]["id"]
+
+    for delivery_id, branch_name in (
+        ("branch-file-toggle-1", "feature/toggle-a"),
+        ("branch-file-toggle-2", "feature/toggle-b"),
+    ):
+        response = client.post(
+            "/tools/conflict-watch/api/simulate-webhook",
+            json={
+                "repositoryId": repository_id,
+                "provider": "github",
+                "deliveryId": delivery_id,
+                "branchName": branch_name,
+                "pusher": "tester",
+                "signatureStatus": "valid",
+                "deletedState": "false",
+                "simulateFailure": False,
+                "isForced": False,
+                "added": "",
+                "modified": "app/conflicts/service.py",
+                "removed": "",
+                "renamed": "",
+            },
+        )
+        assert response.status_code == 200
+
+    state_before_ignore = client.get("/tools/conflict-watch/api/state").json()
+    target_branch = next(branch for branch in state_before_ignore["branches"] if branch["branchName"] == "feature/toggle-a")
+
+    ignore_response = client.post(
+        "/tools/conflict-watch/api/branch-file-ignores",
+        json={
+            "branchId": target_branch["id"],
+            "normalizedFilePath": "app/conflicts/service.py",
+            "memo": "一時的に対象外",
+        },
+    )
+
+    assert ignore_response.status_code == 200
+    active_ignore = next(
+        item
+        for item in ignore_response.json()["state"]["branchFileIgnores"]
+        if item["branchId"] == target_branch["id"]
+        and item["normalizedFilePath"] == "app/conflicts/service.py"
+        and item["isActive"] is True
+    )
+
+    memo_response = client.patch(
+        "/tools/conflict-watch/api/branch-file-ignores/memo",
+        json={
+            "branchId": target_branch["id"],
+            "normalizedFilePath": "app/conflicts/service.py",
+            "memo": "解除前にメモ更新",
+        },
+    )
+
+    assert memo_response.status_code == 200
+    memo_updated_ignore = next(item for item in memo_response.json()["state"]["branchFileIgnores"] if item["id"] == active_ignore["id"])
+    assert memo_updated_ignore["memo"] == "解除前にメモ更新"
+
+    restore_response = client.post(
+        "/tools/conflict-watch/api/branch-file-ignores/remove",
+        json={
+            "branchId": target_branch["id"],
+            "normalizedFilePath": "app/conflicts/service.py",
+        },
+    )
+
+    assert restore_response.status_code == 200
+    restored_state = restore_response.json()["state"]
+    restored_ignore = next(item for item in restored_state["branchFileIgnores"] if item["id"] == active_ignore["id"])
+    assert restored_ignore["isActive"] is False
+    restored_conflict = next(
+        conflict
+        for conflict in restored_state["conflicts"]
+        if conflict["normalizedFilePath"] == "app/conflicts/service.py"
+    )
+    assert restored_conflict["status"] == "warning"
+    assert sorted(restored_conflict["activeBranchIds"]) == sorted(
+        branch["id"]
+        for branch in restored_state["branches"]
+        if branch["branchName"] in {"feature/toggle-a", "feature/toggle-b"}
+    )
 
 
 def test_conflict_watch_github_webhook_signature_validation(client):

@@ -1,6 +1,6 @@
-import { QUICK_WEBHOOK_PRESETS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20250410-09";
-import { buildViewModel } from "./domain.js?v=conflict-watch-20250410-09";
-import { renderConflictWatch } from "./view.js?v=conflict-watch-20250410-09";
+import { QUICK_WEBHOOK_PRESETS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20250410-21";
+import { buildViewModel } from "./domain.js?v=conflict-watch-20250410-21";
+import { renderConflictWatch } from "./view.js?v=conflict-watch-20250410-21";
 
 const root = document.querySelector("[data-conflict-watch-app]");
 const API_BASE = "/tools/conflict-watch/api";
@@ -19,18 +19,27 @@ const uiState = {
   expandedBranchIds: [],
   expandedConflictIds: [],
   pageMode,
+  activeMainTab: "simulator",
   isSideDrawerOpen: false,
   webhookDraft: { ...WEBHOOK_FORM_DEFAULTS },
   newIgnorePattern: "",
   newRepositoryName: "",
   newRepositoryExternalId: "",
   newRepositoryProvider: "github",
+  branchSearchInput: "",
+  branchSearchQuery: "",
+  branchSearchMode: "both",
+  branchSortOrder: "updated_desc",
+  branchConflictOnly: false,
+  branchStatusFilter: "all",
   pendingConflictScrollKey: "",
   pendingBranchScrollId: null,
   highlightedBranchId: null,
   highlightedConflictKey: "",
   branchFileIgnoreDialog: {
     isOpen: false,
+    mode: "create",
+    ignoreId: null,
     branchId: null,
     branchName: "",
     normalizedFilePath: "",
@@ -106,6 +115,12 @@ function render() {
     document.body.classList.remove("cw-overlay-open");
     root.innerHTML = '<p class="notice">Conflict Watch を読み込んでいます...</p>';
     return;
+  }
+  if (uiState.pendingConflictScrollKey) {
+    uiState.activeMainTab = "conflicts";
+  }
+  if (uiState.pendingBranchScrollId !== null) {
+    uiState.activeMainTab = "branches";
   }
   syncSelections();
   const viewModel = buildViewModel({
@@ -186,10 +201,6 @@ function getSelectedRepositoryId() {
   return uiState.selectedRepositoryId;
 }
 
-function getSelectedConflict() {
-  return (snapshot?.conflicts ?? []).find((conflict) => conflict.conflictKey === uiState.selectedConflictKey) ?? null;
-}
-
 function updateSettingField(key, value) {
   if (!snapshot) {
     return;
@@ -214,12 +225,30 @@ function closeBranchFileIgnoreDialog() {
   }
   uiState.branchFileIgnoreDialog = {
     isOpen: false,
+    mode: "create",
+    ignoreId: null,
     branchId: null,
     branchName: "",
     normalizedFilePath: "",
     memo: "",
   };
   render();
+}
+
+function toggleExpandedBranch(branchId) {
+  if (uiState.expandedBranchIds.includes(branchId)) {
+    uiState.expandedBranchIds = uiState.expandedBranchIds.filter((id) => id !== branchId);
+  } else {
+    uiState.expandedBranchIds = [...uiState.expandedBranchIds, branchId];
+  }
+}
+
+function toggleExpandedConflict(conflictId) {
+  if (uiState.expandedConflictIds.includes(conflictId)) {
+    uiState.expandedConflictIds = uiState.expandedConflictIds.filter((id) => id !== conflictId);
+  } else {
+    uiState.expandedConflictIds = [...uiState.expandedConflictIds, conflictId];
+  }
 }
 
 async function boot() {
@@ -252,6 +281,29 @@ root.addEventListener("change", (event) => {
     }
     if (field === "newRepositoryProvider") {
       uiState.newRepositoryProvider = String(value);
+      return;
+    }
+    if (field === "branchSearchInput") {
+      uiState.branchSearchInput = String(value);
+      return;
+    }
+    if (field === "branchSearchMode") {
+      uiState.branchSearchMode = String(value);
+      return;
+    }
+    if (field === "branchSortOrder") {
+      uiState.branchSortOrder = String(value);
+      render();
+      return;
+    }
+    if (field === "branchConflictOnly") {
+      uiState.branchConflictOnly = Boolean(value);
+      render();
+      return;
+    }
+    if (field === "branchStatusFilter") {
+      uiState.branchStatusFilter = String(value);
+      render();
       return;
     }
     if (field === "branchFileIgnoreMemo") {
@@ -324,6 +376,15 @@ root.addEventListener("click", async (event) => {
 
   if (action === "close-branch-file-ignore-modal") {
     closeBranchFileIgnoreDialog();
+    return;
+  }
+
+  if (action === "switch-main-tab") {
+    const tabId = actionTarget.getAttribute("data-tab-id");
+    if (tabId === "simulator" || tabId === "branches" || tabId === "conflicts") {
+      uiState.activeMainTab = tabId;
+      render();
+    }
     return;
   }
 
@@ -406,20 +467,59 @@ root.addEventListener("click", async (event) => {
 
   if (action === "select-branch") {
     uiState.selectedBranchId = toNumber(actionTarget.getAttribute("data-branch-id"));
+    uiState.activeMainTab = "branches";
+    render();
+    return;
+  }
+
+  if (action === "toggle-branch-row") {
+    const branchId = toNumber(actionTarget.getAttribute("data-branch-id"));
+    if (branchId === null) {
+      return;
+    }
+    uiState.selectedBranchId = branchId;
+    uiState.activeMainTab = "branches";
+    toggleExpandedBranch(branchId);
     render();
     return;
   }
 
   if (action === "jump-to-branch") {
     uiState.selectedBranchId = toNumber(actionTarget.getAttribute("data-branch-id"));
+    uiState.branchSearchInput = "";
+    uiState.branchSearchQuery = "";
+    uiState.branchSearchMode = "both";
+    uiState.branchConflictOnly = false;
+    uiState.branchStatusFilter = "all";
     uiState.pendingBranchScrollId = uiState.selectedBranchId;
     uiState.highlightedBranchId = uiState.selectedBranchId;
+    uiState.activeMainTab = "branches";
+    render();
+    return;
+  }
+
+  if (action === "apply-branch-search") {
+    uiState.branchSearchQuery = uiState.branchSearchInput.trim();
     render();
     return;
   }
 
   if (action === "select-conflict") {
     uiState.selectedConflictKey = actionTarget.getAttribute("data-conflict-key") ?? "";
+    uiState.activeMainTab = "conflicts";
+    render();
+    return;
+  }
+
+  if (action === "toggle-conflict-row") {
+    const conflictId = toNumber(actionTarget.getAttribute("data-conflict-id"));
+    const conflictKey = actionTarget.getAttribute("data-conflict-key") ?? "";
+    if (conflictId === null) {
+      return;
+    }
+    uiState.selectedConflictKey = conflictKey;
+    uiState.activeMainTab = "conflicts";
+    toggleExpandedConflict(conflictId);
     render();
     return;
   }
@@ -428,20 +528,19 @@ root.addEventListener("click", async (event) => {
     uiState.selectedConflictKey = actionTarget.getAttribute("data-conflict-key") ?? "";
     uiState.pendingConflictScrollKey = uiState.selectedConflictKey;
     uiState.highlightedConflictKey = uiState.selectedConflictKey;
+    uiState.activeMainTab = "conflicts";
     render();
     return;
   }
 
   if (action === "toggle-conflict-branches") {
     const conflictId = toNumber(actionTarget.getAttribute("data-conflict-id"));
+    const conflictKey = actionTarget.getAttribute("data-conflict-key") ?? "";
     if (conflictId === null) {
       return;
     }
-    if (uiState.expandedConflictIds.includes(conflictId)) {
-      uiState.expandedConflictIds = uiState.expandedConflictIds.filter((id) => id !== conflictId);
-    } else {
-      uiState.expandedConflictIds = [...uiState.expandedConflictIds, conflictId];
-    }
+    uiState.selectedConflictKey = conflictKey || uiState.selectedConflictKey;
+    toggleExpandedConflict(conflictId);
     render();
     return;
   }
@@ -451,11 +550,8 @@ root.addEventListener("click", async (event) => {
     if (branchId === null) {
       return;
     }
-    if (uiState.expandedBranchIds.includes(branchId)) {
-      uiState.expandedBranchIds = uiState.expandedBranchIds.filter((id) => id !== branchId);
-    } else {
-      uiState.expandedBranchIds = [...uiState.expandedBranchIds, branchId];
-    }
+    uiState.selectedBranchId = branchId;
+    toggleExpandedBranch(branchId);
     render();
     return;
   }
@@ -473,24 +569,15 @@ root.addEventListener("click", async (event) => {
     return;
   }
 
-  if (action === "save-branch-memo") {
-    const branchId = toNumber(actionTarget.getAttribute("data-branch-id"));
-    const memoField = root.querySelector(`[data-role="branch-memo"][data-branch-id="${CSS.escape(String(branchId))}"]`);
-    const memo = memoField instanceof HTMLTextAreaElement ? memoField.value : "";
-    await requestJson(`${API_BASE}/branches/${branchId}/memo`, {
-      method: "PATCH",
-      body: JSON.stringify({ memo }),
-    });
-    return;
-  }
-
   if (action === "open-branch-file-ignore-modal") {
     uiState.branchFileIgnoreDialog = {
       isOpen: true,
+      mode: actionTarget.getAttribute("data-ignore-mode") === "remove" ? "remove" : "create",
+      ignoreId: toNumber(actionTarget.getAttribute("data-ignore-id")),
       branchId: toNumber(actionTarget.getAttribute("data-branch-id")),
       branchName: actionTarget.getAttribute("data-branch-name") ?? "",
       normalizedFilePath: actionTarget.getAttribute("data-file-path") ?? "",
-      memo: "",
+      memo: actionTarget.getAttribute("data-ignore-memo") ?? "",
     };
     render();
     return;
@@ -498,6 +585,20 @@ root.addEventListener("click", async (event) => {
 
   if (action === "confirm-branch-file-ignore") {
     const dialog = uiState.branchFileIgnoreDialog;
+    if (dialog.mode === "remove") {
+      if (!dialog.branchId || !dialog.normalizedFilePath) {
+        return;
+      }
+      closeBranchFileIgnoreDialog();
+      await requestJson(`${API_BASE}/branch-file-ignores/remove`, {
+        method: "POST",
+        body: JSON.stringify({
+          branchId: dialog.branchId,
+          normalizedFilePath: dialog.normalizedFilePath,
+        }),
+      });
+      return;
+    }
     if (!dialog.branchId || !dialog.normalizedFilePath) {
       return;
     }
@@ -515,14 +616,24 @@ root.addEventListener("click", async (event) => {
     return;
   }
 
-  if (action === "set-conflict-status") {
-    const conflict = getSelectedConflict();
-    if (!conflict) {
+  if (action === "update-branch-file-ignore-memo") {
+    const dialog = uiState.branchFileIgnoreDialog;
+    if (!dialog.branchId || !dialog.normalizedFilePath) {
       return;
     }
-    await requestJson(`${API_BASE}/conflicts/${conflict.id}/status`, {
+    const memoField = root.querySelector('[data-field="branchFileIgnoreMemo"]');
+    const memo = memoField instanceof HTMLTextAreaElement ? memoField.value : dialog.memo;
+    uiState.branchFileIgnoreDialog = {
+      ...dialog,
+      memo,
+    };
+    await requestJson(`${API_BASE}/branch-file-ignores/memo`, {
       method: "PATCH",
-      body: JSON.stringify({ status: actionTarget.getAttribute("data-status") }),
+      body: JSON.stringify({
+        branchId: dialog.branchId,
+        normalizedFilePath: dialog.normalizedFilePath,
+        memo,
+      }),
     });
     return;
   }
@@ -534,20 +645,6 @@ root.addEventListener("click", async (event) => {
     }
     await requestJson(`${API_BASE}/conflicts/${conflictId}/delete`, {
       method: "POST",
-    });
-    return;
-  }
-
-  if (action === "save-conflict-memo") {
-    const conflict = getSelectedConflict();
-    if (!conflict) {
-      return;
-    }
-    const memoField = root.querySelector(`[data-role="conflict-memo"][data-conflict-key="${CSS.escape(conflict.conflictKey)}"]`);
-    const memo = memoField instanceof HTMLTextAreaElement ? memoField.value : "";
-    await requestJson(`${API_BASE}/conflicts/${conflict.id}/memo`, {
-      method: "PATCH",
-      body: JSON.stringify({ memo }),
     });
     return;
   }

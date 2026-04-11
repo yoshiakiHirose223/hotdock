@@ -7,7 +7,6 @@ export const BRANCH_STATUS_LABELS = {
   active: "active",
   quiet: "quiet",
   stale: "stale",
-  deleted: "deleted",
   branch_excluded: "branch_excluded",
 };
 
@@ -29,7 +28,7 @@ export const CHANGE_TYPE_LABELS = {
 export const CHANGE_TYPES = Object.keys(CHANGE_TYPE_LABELS);
 
 export const DEFAULT_SETTINGS = {
-  staleDays: 30,
+  staleDays: 15,
   longUnresolvedDays: 7,
   rawPayloadRetentionDays: 14,
   forcePushNoteEnabled: true,

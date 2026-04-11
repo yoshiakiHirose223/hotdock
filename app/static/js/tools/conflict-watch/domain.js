@@ -3,7 +3,7 @@ import {
   CHANGE_TYPE_LABELS,
   CONFLICT_STATUS_LABELS,
   DEFAULT_SETTINGS,
-} from "./constants.js?v=conflict-watch-20250410-09";
+} from "./constants.js?v=conflict-watch-20250410-21";
 
 function deepClone(value) {
   if (typeof structuredClone === "function") {
@@ -38,6 +38,55 @@ function createConflictKey(repositoryId, normalizedFilePath) {
 
 function createBranchFileKey(branchId, normalizedFilePath) {
   return `${branchId}::${normalizedFilePath}`;
+}
+
+function compareBranchUpdatedAt(left, right, order) {
+  const leftTime = left.lastPushAt ? new Date(left.lastPushAt).getTime() : null;
+  const rightTime = right.lastPushAt ? new Date(right.lastPushAt).getTime() : null;
+  if (leftTime === null && rightTime === null) {
+    return left.branchName.localeCompare(right.branchName);
+  }
+  if (leftTime === null) {
+    return 1;
+  }
+  if (rightTime === null) {
+    return -1;
+  }
+  if (leftTime !== rightTime) {
+    return order === "updated_asc" ? leftTime - rightTime : rightTime - leftTime;
+  }
+  return left.branchName.localeCompare(right.branchName);
+}
+
+function filterDisplayedBranches(branches, ui) {
+  const query = String(ui.branchSearchQuery ?? "").trim().toLowerCase();
+  const searchMode = ui.branchSearchMode ?? "both";
+  const statusFilter = ui.branchStatusFilter ?? "all";
+  const conflictOnly = Boolean(ui.branchConflictOnly);
+  const sortOrder = ui.branchSortOrder ?? "updated_desc";
+
+  return branches
+    .filter((branch) => {
+      if (conflictOnly && branch.healthStatus !== "abnormal") {
+        return false;
+      }
+      if (statusFilter !== "all" && branch.status !== statusFilter) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      const branchMatched = branch.branchName.toLowerCase().includes(query);
+      const fileMatched = branch.observedFiles.some((branchFile) => branchFile.normalizedFilePath.toLowerCase().includes(query));
+      if (searchMode === "branch") {
+        return branchMatched;
+      }
+      if (searchMode === "file") {
+        return fileMatched;
+      }
+      return branchMatched || fileMatched;
+    })
+    .sort((left, right) => compareBranchUpdatedAt(left, right, sortOrder));
 }
 
 function nextId(state, counterKey, prefix) {
@@ -205,10 +254,13 @@ function upsertBranchFile(state, repositoryId, branchId, normalizedFilePath, cha
   return branchFile;
 }
 
+function removeBranchFromState(state, branchId) {
+  state.branchFileIgnores = state.branchFileIgnores.filter((item) => item.branchId !== branchId);
+  state.branchFiles = state.branchFiles.filter((branchFile) => branchFile.branchId !== branchId);
+  state.branches = state.branches.filter((branch) => branch.id !== branchId);
+}
+
 function computeBranchStatus(branch, settings, nowIso) {
-  if (branch.isDeleted) {
-    return "deleted";
-  }
   if (branch.isBranchExcluded) {
     return "branch_excluded";
   }
@@ -250,6 +302,25 @@ function computeConflictConfidence(branches) {
     return "medium";
   }
   return "high";
+}
+
+function snapshotConflictBranches(branchIds, state, branchEntries) {
+  return branchIds.map((branchId) => {
+    const branch = state.branches.find((item) => item.id === branchId);
+    const branchEntry = branchEntries.find((entry) => entry.branchId === branchId);
+    if (!branch) {
+      return null;
+    }
+    return {
+      branchId: branch.id,
+      branchName: branch.branchName,
+      status: branch.status,
+      lastPushAt: branch.lastPushAt ?? null,
+      lastSeenAt: branch.lastSeenAt ?? null,
+      changeType: branchEntry?.changeType ?? null,
+      previousPath: branchEntry?.previousPath ?? null,
+    };
+  }).filter(Boolean);
 }
 
 function buildConflictGroups(state) {
@@ -390,6 +461,7 @@ function reconcileConflicts(state, options = {}) {
     conflict.resolvedReason = null;
     conflict.confidence = computeConflictConfidence(activeBranches);
     conflict.lastLongUnresolvedBucket = conflict.lastLongUnresolvedBucket ?? 0;
+    conflict.lastRelatedBranches = snapshotConflictBranches(branchIds, state, group.branchEntries);
 
     if (!existing) {
       conflict.status = "warning";
@@ -440,6 +512,7 @@ function reconcileConflicts(state, options = {}) {
 }
 
 function reconcileBranches(state) {
+  state.branches = state.branches.filter((branch) => !branch.isDeleted);
   state.branches.forEach((branch) => {
     branch.status = computeBranchStatus(branch, state.settings, state.now);
     branch.confidence = computeBranchConfidence(branch, state.settings, state.now);
@@ -559,11 +632,7 @@ function applyEventToBranches(state, event) {
   }
 
   if (event.isDeleted === true) {
-    branch.isDeleted = true;
-    branch.isMonitored = false;
-    branch.monitoringClosedReason = "branch_deleted";
-    branch.monitoringClosedAt = state.now;
-    state.branchFiles = state.branchFiles.filter((branchFile) => branchFile.branchId !== branch.id);
+    removeBranchFromState(state, branch.id);
     return true;
   }
 
@@ -635,6 +704,7 @@ export function buildViewModel(rawState) {
       files.push({
         ...branchFile,
         ignored: false,
+        branchFileIgnoreId: branchFileIgnore?.id ?? null,
         isBranchFileIgnored: Boolean(branchFileIgnore),
         branchFileIgnoreMemo: branchFileIgnore?.memo ?? "",
         activeConflictKey: activeConflict?.conflictKey ?? "",
@@ -646,31 +716,25 @@ export function buildViewModel(rawState) {
     branchObservedFiles.set(branchFile.branchId, files);
   });
 
-  const branches = [...state.branches]
-    .filter((branch) => branch.repositoryId === repositoryId)
-    .sort((left, right) => {
-      const statusWeight = {
-        active: 4,
-        quiet: 3,
-        stale: 2,
-        branch_excluded: 1,
-        deleted: 0,
-      };
-      if (statusWeight[right.status] !== statusWeight[left.status]) {
-        return statusWeight[right.status] - statusWeight[left.status];
-      }
-      return left.branchName.localeCompare(right.branchName);
-    })
-    .map((branch) => ({
-      ...branch,
-      observedFileCount: branchFileCounts.get(branch.id)?.visible ?? 0,
-      ignoredFileCount: branchFileCounts.get(branch.id)?.ignored ?? 0,
-      observedFiles: (branchObservedFiles.get(branch.id) ?? [])
+  const allBranches = [...state.branches]
+    .filter((branch) => branch.repositoryId === repositoryId && !branch.isDeleted)
+    .map((branch) => {
+      const observedFiles = (branchObservedFiles.get(branch.id) ?? [])
         .slice()
-        .sort((left, right) => left.normalizedFilePath.localeCompare(right.normalizedFilePath)),
-      isFileListOpen: (state.ui.expandedBranchIds ?? []).includes(branch.id),
-      repositoryName: selectedRepository?.repositoryName ?? "",
-    }));
+        .sort((left, right) => left.normalizedFilePath.localeCompare(right.normalizedFilePath));
+      const hasConflict = observedFiles.some((branchFile) => branchFile.isInConflict);
+      return {
+        ...branch,
+        observedFileCount: branchFileCounts.get(branch.id)?.visible ?? 0,
+        ignoredFileCount: branchFileCounts.get(branch.id)?.ignored ?? 0,
+        observedFiles,
+        healthStatus: hasConflict ? "abnormal" : "normal",
+        healthLabel: hasConflict ? "競合" : "正常",
+        isFileListOpen: (state.ui.expandedBranchIds ?? []).includes(branch.id),
+        repositoryName: selectedRepository?.repositoryName ?? "",
+      };
+    });
+  const branches = filterDisplayedBranches(allBranches, state.ui);
 
   const selectedConflict = state.conflicts.find((conflict) => (
     conflict.conflictKey === state.ui.selectedConflictKey && conflict.repositoryId === repositoryId
@@ -695,9 +759,7 @@ export function buildViewModel(rawState) {
     ? state.notifications.filter((notification) => notification.conflictKey === selectedConflict.conflictKey)
     : [];
 
-  const selectedBranch = state.branches.find((branch) => (
-    branch.id === state.ui.selectedBranchId && branch.repositoryId === repositoryId
-  )) ?? branches[0] ?? null;
+  const selectedBranch = branches.find((branch) => branch.id === state.ui.selectedBranchId) ?? branches[0] ?? null;
 
   const selectedBranchFiles = selectedBranch
     ? state.branchFiles
@@ -725,7 +787,7 @@ export function buildViewModel(rawState) {
     .filter((conflict) => conflict.repositoryId === repositoryId)
     .map((conflict) => {
       const notifications = state.notifications.filter((item) => item.conflictKey === conflict.conflictKey);
-      const relatedBranches = (conflict.activeBranchIds ?? []).map((branchId) => {
+      const activeRelatedBranches = (conflict.activeBranchIds ?? []).map((branchId) => {
         const branch = state.branches.find((item) => item.id === branchId);
         const branchEntry = conflict.branchEntries?.find((entry) => entry.branchId === branchId);
         if (!branch) {
@@ -735,14 +797,36 @@ export function buildViewModel(rawState) {
           id: branch.id,
           branchName: branch.branchName,
           status: branch.status,
+          lastPushAt: branch.lastPushAt ?? null,
           changeType: branchEntry?.changeType ?? null,
           previousPath: branchEntry?.previousPath ?? null,
+          isNavigable: true,
         };
       }).filter(Boolean);
+      const resolvedRelatedBranches = (conflict.lastRelatedBranches ?? []).map((entry) => {
+        const branch = state.branches.find((item) => item.id === entry.branchId);
+        return {
+          id: branch?.id ?? entry.branchId ?? null,
+          branchName: branch?.branchName ?? entry.branchName ?? "",
+          status: branch?.status ?? entry.status ?? null,
+          lastPushAt: branch?.lastPushAt ?? entry.lastPushAt ?? entry.lastSeenAt ?? null,
+          changeType: entry.changeType ?? null,
+          previousPath: entry.previousPath ?? null,
+          isNavigable: Boolean(branch),
+          isDeletedSnapshot: !branch,
+        };
+      });
+      const relatedBranches = activeRelatedBranches.length > 0 ? activeRelatedBranches : resolvedRelatedBranches;
+      const hasResolvedDetails = conflict.status === "resolved"
+        && Boolean(conflict.resolvedAt || conflict.resolvedReason || (conflict.history?.length ?? 0) > 0);
       return {
         ...conflict,
         relatedBranches,
-        isBranchListOpen: relatedBranches.length > 0 && (state.ui.expandedConflictIds ?? []).includes(conflict.id),
+        relatedBranchCount: relatedBranches.length,
+        hasResolvedDetails,
+        canExpand: relatedBranches.length > 0 || hasResolvedDetails,
+        isBranchListOpen: (relatedBranches.length > 0 || hasResolvedDetails)
+          && (state.ui.expandedConflictIds ?? []).includes(conflict.id),
         notificationCount: notifications.length,
         lastNotificationType: notifications[0]?.notificationType ?? null,
       };
@@ -751,8 +835,8 @@ export function buildViewModel(rawState) {
   const warningCount = conflicts.filter((conflict) => conflict.status === "warning").length;
   const noticeCount = conflicts.filter((conflict) => conflict.status === "notice").length;
   const ignoredCount = conflicts.filter((conflict) => conflict.status === "conflict_ignored").length;
-  const activeBranches = branches.filter((branch) => branch.status === "active").length;
-  const staleBranches = branches.filter((branch) => branch.status === "stale").length;
+  const activeBranches = allBranches.filter((branch) => branch.status === "active").length;
+  const staleBranches = allBranches.filter((branch) => branch.status === "stale").length;
   const longUnresolvedCount = conflicts.filter((conflict) => (
     (conflict.status === "warning" || conflict.status === "notice")
     && diffDays(conflict.firstDetectedAt, state.now) >= state.settings.longUnresolvedDays
@@ -789,6 +873,7 @@ export function buildViewModel(rawState) {
     repositories: state.repositories,
     selectedRepository,
     branches,
+    allBranchCount: allBranches.length,
     conflicts,
     selectedConflict,
     selectedConflictBranches,
@@ -806,6 +891,15 @@ export function buildViewModel(rawState) {
     ignoreRules: state.ignoreRules.filter((rule) => rule.repositoryId === repositoryId),
     settings: state.settings,
     ui: state.ui,
+    branchSummary: {
+      displayedCount: branches.length,
+      totalCount: allBranches.length,
+      hasActiveFilters: Boolean(
+        (state.ui.branchSearchQuery ?? "").trim()
+        || state.ui.branchConflictOnly
+        || (state.ui.branchStatusFilter ?? "all") !== "all",
+      ),
+    },
     dashboard: {
       repositories: state.repositories.filter((repository) => repository.isActive).length,
       activeBranches,
@@ -858,7 +952,7 @@ export function updateConflictStatus(rawState, conflictKey, nextStatus) {
     return state;
   }
   if (nextStatus === "resolved" && (conflict.activeBranchIds?.length ?? 0) >= 2) {
-    state.ui.feedbackMessage = "resolved は監視対象 branch が 2 未満になったときだけ確定します。branch 側の deleted や除外で監視対象を減らしてください。";
+    state.ui.feedbackMessage = "resolved は監視対象 branch が 2 未満になったときだけ確定します。branch 側の削除や除外で監視対象を減らしてください。";
     state.ui.feedbackTone = "warning";
     return state;
   }
@@ -1064,13 +1158,8 @@ export function applyBranchAction(rawState, branchId, action) {
   }
 
   if (action === "delete") {
-    branch.isDeleted = true;
-    branch.isMonitored = false;
-    branch.monitoringClosedReason = "branch_deleted";
-    branch.monitoringClosedAt = state.now;
-    branch.updatedAt = state.now;
-    state.branchFiles = state.branchFiles.filter((branchFile) => branchFile.branchId !== branch.id);
-    state.ui.feedbackMessage = `${branch.branchName} を deleted 扱いにしました。`;
+    removeBranchFromState(state, branch.id);
+    state.ui.feedbackMessage = `${branch.branchName} を一覧から削除しました。`;
     state.ui.feedbackTone = "success";
     return reconcileState(state, { resolutionReason: "branch_deleted" });
   }

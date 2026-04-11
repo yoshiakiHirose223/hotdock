@@ -1,0 +1,1 @@
+{"project": {"projectKey": "LEGACY"}, "repository": {"name": "reporting"}, "ref": "refs/heads/feature/backlog-sync", "before": "before-rev", "rev": "after-rev", "forced": false, "deleted": false, "user": {"name": "tester"}, "commits": [{"added": [], "modified": ["app/reports/legacy.php"], "removed": []}]}

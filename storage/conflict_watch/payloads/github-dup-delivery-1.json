@@ -1,0 +1,15 @@
+{
+  "repositoryId": 3,
+  "provider": "github",
+  "deliveryId": "dup-delivery-1",
+  "branchName": "feature/demo",
+  "pusher": "tester",
+  "signatureStatus": "valid",
+  "deletedState": "false",
+  "simulateFailure": false,
+  "isForced": false,
+  "added": "",
+  "modified": "app/conflicts/service.py",
+  "removed": "",
+  "renamed": ""
+}

@@ -71,3 +71,11 @@ def ensure_legacy_blog_schema() -> None:
         with engine.begin() as connection:
             if "slack_webhook_url" not in cw_columns:
                 connection.execute(text("ALTER TABLE cw_settings ADD COLUMN slack_webhook_url VARCHAR(500)"))
+
+    if "cw_conflicts" in inspector.get_table_names():
+        conflict_columns = {column["name"]: column for column in inspector.get_columns("cw_conflicts")}
+        with engine.begin() as connection:
+            if "resolved_context" not in conflict_columns:
+                connection.execute(text("ALTER TABLE cw_conflicts ADD COLUMN resolved_context JSON"))
+            if "last_related_branches" not in conflict_columns:
+                connection.execute(text("ALTER TABLE cw_conflicts ADD COLUMN last_related_branches JSON NOT NULL DEFAULT '[]'"))

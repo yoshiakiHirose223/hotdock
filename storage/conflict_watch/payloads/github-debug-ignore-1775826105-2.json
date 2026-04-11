@@ -1,0 +1,15 @@
+{
+  "repositoryId": 8,
+  "provider": "github",
+  "deliveryId": "debug-ignore-1775826105-2",
+  "branchName": "feature/debug-ignore-b",
+  "pusher": "tester",
+  "signatureStatus": "valid",
+  "deletedState": "false",
+  "simulateFailure": false,
+  "isForced": false,
+  "added": "",
+  "modified": "app/conflicts/service.py",
+  "removed": "",
+  "renamed": ""
+}

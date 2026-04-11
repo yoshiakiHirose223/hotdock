@@ -1,0 +1,15 @@
+{
+  "repositoryId": 2,
+  "provider": "github",
+  "deliveryId": "",
+  "branchName": "feature/no-conflict-list",
+  "pusher": "yoshiaki0223",
+  "signatureStatus": "valid",
+  "deletedState": "false",
+  "simulateFailure": false,
+  "isForced": false,
+  "added": "list.php\ncontroller.php\ndb.php\naccess.php",
+  "modified": "",
+  "removed": "",
+  "renamed": ""
+}

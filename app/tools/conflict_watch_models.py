@@ -147,8 +147,10 @@ class ConflictWatchConflict(Base):
     reopened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ignored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    resolved_context: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     confidence: Mapped[str] = mapped_column(String(20), default="medium")
     last_long_unresolved_bucket: Mapped[int] = mapped_column(default=0)
+    last_related_branches: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
     history: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -273,7 +275,7 @@ class ConflictWatchSetting(Base):
     __tablename__ = "cw_settings"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    stale_days: Mapped[int] = mapped_column(default=30)
+    stale_days: Mapped[int] = mapped_column(default=15)
     long_unresolved_days: Mapped[int] = mapped_column(default=7)
     raw_payload_retention_days: Mapped[int] = mapped_column(default=14)
     force_push_note_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
