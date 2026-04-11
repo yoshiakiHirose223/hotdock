@@ -200,6 +200,50 @@ def test_conflict_watch_simulated_webhook_raw_payload_is_viewable(client):
     assert raw_content["modified"] == "app/conflicts/service.py"
 
 
+def test_conflict_watch_simulated_webhook_payload_hash_is_fixed_length(client):
+    repository_response = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "hotdock",
+            "externalRepoId": "payload-hash/fixed-length",
+        },
+    )
+    repository_id = repository_response.json()["state"]["repositories"][0]["id"]
+    modified_paths = "\n".join(
+        f"very/long/path/segment/{index:03d}/" + ("nested-" * 8) + f"file-{index:03d}.py"
+        for index in range(40)
+    )
+
+    response = client.post(
+        "/tools/conflict-watch/api/simulate-webhook",
+        json={
+            "repositoryId": repository_id,
+            "provider": "github",
+            "deliveryId": "payload-hash-fixed-length-1",
+            "branchName": "feature/payload-hash-fixed-length",
+            "pusher": "tester",
+            "signatureStatus": "valid",
+            "deletedState": "false",
+            "simulateFailure": False,
+            "isForced": False,
+            "added": "",
+            "modified": modified_paths,
+            "removed": "",
+            "renamed": "",
+        },
+    )
+
+    assert response.status_code == 200
+    event = next(
+        item
+        for item in response.json()["state"]["webhookEvents"]
+        if item["deliveryId"] == "payload-hash-fixed-length-1"
+    )
+    assert event["payloadHash"].startswith("sha256:")
+    assert len(event["payloadHash"]) == 71
+
+
 def test_conflict_watch_simulated_webhook_duplicate_delivery_is_idempotent(client):
     repository_response = client.post(
         "/tools/conflict-watch/api/repositories",

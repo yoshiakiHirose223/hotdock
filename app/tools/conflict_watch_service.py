@@ -1343,7 +1343,7 @@ class ConflictWatchService:
                 ",".join(f"{item.get('oldPath')}->{item.get('newPath')}" for item in (event.files_renamed or [])),
             ]
         )
-        return f"hash-{re.sub(r'[^a-z0-9]+', '-', seed.lower()).strip('-')}"
+        return f"sha256:{hashlib.sha256(seed.encode('utf-8')).hexdigest()}"
 
     def _apply_event_to_branches(self, db: Session, event: ConflictWatchWebhookEvent) -> bool:
         repository = db.scalar(select(ConflictWatchRepository).where(ConflictWatchRepository.id == event.repository_id))
