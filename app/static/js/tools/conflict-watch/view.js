@@ -1,4 +1,4 @@
-import { PROVIDERS, QUICK_WEBHOOK_PRESETS } from "./constants.js?v=conflict-watch-20250410-21";
+import { PROVIDERS, QUICK_WEBHOOK_PRESETS } from "./constants.js?v=conflict-watch-20250410-22";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -759,17 +759,66 @@ function renderNotifications(viewModel) {
   `;
 }
 
+function renderWebhookPayloadPanel(payloadState, event) {
+  if (payloadState?.isLoading) {
+    return `
+      <div class="cw-webhook-payload">
+        <p class="cw-table-subline">raw payload を読み込んでいます...</p>
+      </div>
+    `;
+  }
+  if (payloadState?.errorMessage) {
+    return `
+      <div class="cw-webhook-payload">
+        <p class="cw-row-note">${escapeHtml(payloadState.errorMessage)}</p>
+      </div>
+    `;
+  }
+  if (!payloadState?.isAvailable) {
+    const message = event.rawPayloadExpiredAt
+      ? `保持期限切れです (${formatDateTime(event.rawPayloadExpiredAt)})`
+      : "raw payload はまだ取得されていません。";
+    return `
+      <div class="cw-webhook-payload">
+        <p class="cw-table-subline">${escapeHtml(message)}</p>
+      </div>
+    `;
+  }
+  return `
+    <div class="cw-webhook-payload">
+      <div class="cw-webhook-payload-header">
+        <span>raw payload</span>
+        <strong>${escapeHtml(payloadState.rawPayloadRef || event.rawPayloadRef || "-")}</strong>
+      </div>
+      <pre class="cw-webhook-payload-code"><code>${escapeHtml(payloadState.content)}</code></pre>
+    </div>
+  `;
+}
+
 function renderWebhookEvents(viewModel) {
   return `
     <section class="cw-card">
       <div class="cw-card-header">
         <div>
           <p class="eyebrow">Webhook events</p>
-          <h2>観測履歴と再処理</h2>
+          <h2>観測履歴 / raw payload / 再現</h2>
+        </div>
+      </div>
+      <div class="cw-webhook-endpoints">
+        <div class="cw-webhook-endpoint-row">
+          <span>GitHub endpoint</span>
+          <code>${escapeHtml(viewModel.settings.githubWebhookEndpoint)}</code>
+        </div>
+        <div class="cw-webhook-endpoint-row">
+          <span>Backlog endpoint</span>
+          <code>${escapeHtml(viewModel.settings.backlogWebhookEndpoint)}</code>
         </div>
       </div>
       <ul class="cw-history-list">
-        ${viewModel.webhookEvents.map((event) => `
+        ${viewModel.webhookEvents.map((event) => {
+          const isPayloadOpen = (viewModel.ui.expandedWebhookPayloadIds ?? []).includes(event.id);
+          const payloadState = viewModel.ui.webhookPayloadsByEventId?.[event.id] ?? null;
+          return `
           <li>
             <strong>${escapeHtml(event.providerType)} / ${escapeHtml(event.branchName)}</strong>
             <span>${escapeHtml(formatDateTime(event.receivedAt))}</span>
@@ -778,13 +827,19 @@ function renderWebhookEvents(viewModel) {
             <p class="cw-table-subline">before ${escapeHtml(event.beforeSha)} / after ${escapeHtml(event.afterSha)} / processed_at ${escapeHtml(formatDateTime(event.processedAt))}</p>
             <p class="cw-table-subline">added ${event.filesAdded.length} / modified ${event.filesModified.length} / removed ${event.filesRemoved.length} / deleted ${event.isDeleted === null ? "unknown" : event.isDeleted ? "true" : "false"}${event.isForced ? " / force push" : ""}</p>
             ${event.errorMessage ? `<p class="cw-row-note">${escapeHtml(event.errorMessage)}</p>` : ""}
-            ${event.processStatus === "processing_failed" ? `
-              <div class="action-row">
-                <button type="button" class="secondary" data-action="reprocess-webhook" data-webhook-id="${event.id}"${event.rawPayloadRef ? "" : " disabled"}>raw payload から再処理</button>
-              </div>
-            ` : ""}
+            <div class="action-row">
+              <button type="button" class="secondary" data-action="load-webhook-into-simulator" data-webhook-id="${event.id}">シミュレータへ反映</button>
+              <button type="button" class="secondary" data-action="toggle-webhook-payload" data-webhook-id="${event.id}">
+                ${isPayloadOpen ? "raw payload を閉じる" : "raw payload を表示"}
+              </button>
+              ${event.processStatus === "processing_failed"
+                ? `<button type="button" class="secondary" data-action="reprocess-webhook" data-webhook-id="${event.id}"${event.rawPayloadRef ? "" : " disabled"}>raw payload から再処理</button>`
+                : ""}
+            </div>
+            ${isPayloadOpen ? renderWebhookPayloadPanel(payloadState, event) : ""}
           </li>
-        `).join("") || "<li>Webhook はまだ受信していません。</li>"}
+        `;
+        }).join("") || "<li>Webhook はまだ受信していません。</li>"}
       </ul>
     </section>
   `;

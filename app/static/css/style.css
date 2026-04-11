@@ -2856,6 +2856,75 @@ body.cw-overlay-open {
   color: #475569;
 }
 
+.cw-webhook-endpoints {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.cw-webhook-endpoint-row {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.cw-webhook-endpoint-row span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.78rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cw-webhook-endpoint-row code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.86rem;
+  color: #0f172a;
+  word-break: break-all;
+}
+
+.cw-webhook-payload {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.cw-webhook-payload-header {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.cw-webhook-payload-header span {
+  font-size: 0.78rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cw-webhook-payload-header strong {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.86rem;
+  color: #0f172a;
+  word-break: break-all;
+}
+
+.cw-webhook-payload-code {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: #0f172a;
+}
+
 .cw-mono-text,
 .cw-rule-row code {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;

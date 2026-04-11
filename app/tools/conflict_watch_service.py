@@ -1278,6 +1278,35 @@ class ConflictWatchService:
         payload_path.write_bytes(payload_bytes)
         return str(payload_path.relative_to(self.settings.base_dir))
 
+    def _read_raw_payload(self, raw_payload_ref: str | None) -> str | None:
+        normalized_ref = str(raw_payload_ref or "").strip()
+        if not normalized_ref:
+            return None
+        base_dir = self.settings.base_dir.resolve()
+        payload_path = (base_dir / normalized_ref).resolve()
+        try:
+            payload_path.relative_to(base_dir)
+        except ValueError:
+            return None
+        if not payload_path.exists() or not payload_path.is_file():
+            return None
+        return payload_path.read_text(encoding="utf-8", errors="replace")
+
+    def get_webhook_event_raw_payload(self, db: Session, event_id: int) -> dict[str, Any]:
+        event = db.get(ConflictWatchWebhookEvent, event_id)
+        if not event:
+            raise HTTPException(status_code=404, detail="Webhook event not found")
+        content = self._read_raw_payload(event.raw_payload_ref)
+        return {
+            "eventId": event.id,
+            "providerType": event.provider_type,
+            "deliveryId": event.delivery_id,
+            "rawPayloadRef": event.raw_payload_ref or "",
+            "rawPayloadExpiredAt": self._iso(event.raw_payload_expired_at),
+            "isAvailable": content is not None,
+            "content": content or "",
+        }
+
     def _record_security_log(
         self,
         db: Session,

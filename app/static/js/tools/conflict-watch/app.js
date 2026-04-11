@@ -1,6 +1,6 @@
-import { QUICK_WEBHOOK_PRESETS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20250410-21";
-import { buildViewModel } from "./domain.js?v=conflict-watch-20250410-21";
-import { renderConflictWatch } from "./view.js?v=conflict-watch-20250410-21";
+import { QUICK_WEBHOOK_PRESETS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20250410-22";
+import { buildViewModel } from "./domain.js?v=conflict-watch-20250410-22";
+import { renderConflictWatch } from "./view.js?v=conflict-watch-20250410-22";
 
 const root = document.querySelector("[data-conflict-watch-app]");
 const API_BASE = "/tools/conflict-watch/api";
@@ -18,10 +18,12 @@ const uiState = {
   selectedBranchId: null,
   expandedBranchIds: [],
   expandedConflictIds: [],
+  expandedWebhookPayloadIds: [],
   pageMode,
   activeMainTab: "simulator",
   isSideDrawerOpen: false,
   webhookDraft: { ...WEBHOOK_FORM_DEFAULTS },
+  webhookPayloadsByEventId: {},
   newIgnorePattern: "",
   newRepositoryName: "",
   newRepositoryExternalId: "",
@@ -65,6 +67,8 @@ function syncSelections() {
     uiState.selectedConflictKey = "";
     uiState.expandedBranchIds = [];
     uiState.expandedConflictIds = [];
+    uiState.expandedWebhookPayloadIds = [];
+    uiState.webhookPayloadsByEventId = {};
     return;
   }
 
@@ -107,6 +111,20 @@ function syncSelections() {
   if (uiState.highlightedConflictKey && !conflicts.some((conflict) => conflict.conflictKey === uiState.highlightedConflictKey)) {
     uiState.highlightedConflictKey = "";
   }
+
+  const selectedRepository = repositories.find((repository) => repository.id === uiState.selectedRepositoryId) ?? null;
+  const webhookEventIds = new Set(
+    (snapshot?.webhookEvents ?? [])
+      .filter((event) => (
+        event.repositoryId === uiState.selectedRepositoryId
+        || event.repositoryExternalId === selectedRepository?.externalRepoId
+      ))
+      .map((event) => event.id),
+  );
+  uiState.expandedWebhookPayloadIds = uiState.expandedWebhookPayloadIds.filter((eventId) => webhookEventIds.has(eventId));
+  uiState.webhookPayloadsByEventId = Object.fromEntries(
+    Object.entries(uiState.webhookPayloadsByEventId).filter(([eventId]) => webhookEventIds.has(Number(eventId))),
+  );
 }
 
 function render() {
@@ -249,6 +267,92 @@ function toggleExpandedConflict(conflictId) {
   } else {
     uiState.expandedConflictIds = [...uiState.expandedConflictIds, conflictId];
   }
+}
+
+function toggleExpandedWebhookPayload(eventId) {
+  if (uiState.expandedWebhookPayloadIds.includes(eventId)) {
+    uiState.expandedWebhookPayloadIds = uiState.expandedWebhookPayloadIds.filter((id) => id !== eventId);
+  } else {
+    uiState.expandedWebhookPayloadIds = [...uiState.expandedWebhookPayloadIds, eventId];
+  }
+}
+
+function buildWebhookDraftFromEvent(event) {
+  const renamed = Array.isArray(event.filesRenamed)
+    ? event.filesRenamed
+      .map((item) => {
+        const oldPath = String(item?.oldPath ?? "").trim();
+        const newPath = String(item?.newPath ?? "").trim();
+        if (!oldPath || !newPath) {
+          return "";
+        }
+        return `${oldPath} -> ${newPath}`;
+      })
+      .filter(Boolean)
+      .join("\n")
+    : "";
+
+  return {
+    provider: event.providerType ?? uiState.webhookDraft.provider,
+    deliveryId: "",
+    branchName: event.branchName ?? "",
+    pusher: event.pusher ?? "",
+    signatureStatus: "valid",
+    deletedState: event.isDeleted === null ? "unknown" : event.isDeleted ? "true" : "false",
+    simulateFailure: false,
+    isForced: Boolean(event.isForced),
+    added: Array.isArray(event.filesAdded) ? event.filesAdded.join("\n") : "",
+    modified: Array.isArray(event.filesModified) ? event.filesModified.join("\n") : "",
+    removed: Array.isArray(event.filesRemoved) ? event.filesRemoved.join("\n") : "",
+    renamed,
+  };
+}
+
+async function fetchWebhookPayload(eventId) {
+  uiState.webhookPayloadsByEventId = {
+    ...uiState.webhookPayloadsByEventId,
+    [eventId]: {
+      ...(uiState.webhookPayloadsByEventId[eventId] ?? {}),
+      isLoading: true,
+      errorMessage: "",
+    },
+  };
+  render();
+
+  try {
+    const response = await fetch(`${API_BASE}/webhook-events/${eventId}/raw-payload`, {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.detail ?? "raw payload の取得に失敗しました。");
+    }
+    uiState.webhookPayloadsByEventId = {
+      ...uiState.webhookPayloadsByEventId,
+      [eventId]: {
+        ...payload,
+        isLoading: false,
+        errorMessage: "",
+      },
+    };
+  } catch (error) {
+    uiState.webhookPayloadsByEventId = {
+      ...uiState.webhookPayloadsByEventId,
+      [eventId]: {
+        eventId,
+        rawPayloadRef: "",
+        rawPayloadExpiredAt: null,
+        isAvailable: false,
+        content: "",
+        isLoading: false,
+        errorMessage: error instanceof Error ? error.message : "raw payload の取得に失敗しました。",
+      },
+    };
+    uiState.feedbackMessage = error instanceof Error ? error.message : "raw payload の取得に失敗しました。";
+    uiState.feedbackTone = "warning";
+  }
+  render();
 }
 
 async function boot() {
@@ -465,6 +569,38 @@ root.addEventListener("click", async (event) => {
     return;
   }
 
+  if (action === "load-webhook-into-simulator") {
+    const webhookId = toNumber(actionTarget.getAttribute("data-webhook-id"));
+    if (webhookId === null) {
+      return;
+    }
+    const webhookEvent = (snapshot?.webhookEvents ?? []).find((event) => event.id === webhookId);
+    if (!webhookEvent) {
+      return;
+    }
+    uiState.webhookDraft = buildWebhookDraftFromEvent(webhookEvent);
+    uiState.activeMainTab = "simulator";
+    uiState.feedbackMessage = `${webhookEvent.deliveryId} をシミュレータへ反映しました。再現しやすいように delivery_id は空欄にしています。`;
+    uiState.feedbackTone = "info";
+    render();
+    return;
+  }
+
+  if (action === "toggle-webhook-payload") {
+    const webhookId = toNumber(actionTarget.getAttribute("data-webhook-id"));
+    if (webhookId === null) {
+      return;
+    }
+    const wasExpanded = uiState.expandedWebhookPayloadIds.includes(webhookId);
+    toggleExpandedWebhookPayload(webhookId);
+    if (!wasExpanded && !uiState.webhookPayloadsByEventId[webhookId]) {
+      await fetchWebhookPayload(webhookId);
+      return;
+    }
+    render();
+    return;
+  }
+
   if (action === "select-branch") {
     uiState.selectedBranchId = toNumber(actionTarget.getAttribute("data-branch-id"));
     uiState.activeMainTab = "branches";
@@ -674,6 +810,7 @@ root.addEventListener("click", async (event) => {
     await requestJson(`${API_BASE}/webhook-events/${webhookId}/reprocess`, {
       method: "POST",
     });
+    return;
   }
 });
 

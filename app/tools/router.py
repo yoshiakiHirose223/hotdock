@@ -19,6 +19,7 @@ from app.tools.conflict_watch_schemas import (
     RepositoryCreateRequest,
     SettingsUpdateRequest,
     SimulatedWebhookRequest,
+    WebhookEventRawPayloadResponse,
 )
 from app.tools.conflict_watch_service import ConflictWatchService
 from app.tools.service import ToolsService
@@ -356,6 +357,16 @@ async def conflict_watch_reprocess_webhook(
 ):
     result = conflict_watch_service.reprocess_webhook_event(db, event_id)
     return build_conflict_watch_response(db, result.message, result.tone)
+
+
+@router.get("/conflict-watch/api/webhook-events/{event_id}/raw-payload", response_model=WebhookEventRawPayloadResponse)
+async def conflict_watch_webhook_raw_payload(
+    event_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "no-store"
+    return conflict_watch_service.get_webhook_event_raw_payload(db, event_id)
 
 
 @router.post(

@@ -3,7 +3,7 @@ import {
   CHANGE_TYPE_LABELS,
   CONFLICT_STATUS_LABELS,
   DEFAULT_SETTINGS,
-} from "./constants.js?v=conflict-watch-20250410-21";
+} from "./constants.js?v=conflict-watch-20250410-22";
 
 function deepClone(value) {
   if (typeof structuredClone === "function") {
@@ -882,8 +882,7 @@ export function buildViewModel(rawState) {
     selectedBranchFiles,
     selectedBranchEvents,
     webhookEvents: state.webhookEvents
-      .filter((event) => event.repositoryId === repositoryId || event.repositoryExternalId === selectedRepository?.externalRepoId)
-      .slice(0, 12),
+      .filter((event) => event.repositoryId === repositoryId || event.repositoryExternalId === selectedRepository?.externalRepoId),
     recentNotifications: fallbackNotifications,
     securityLogs: state.securityLogs
       .filter((log) => log.repositoryExternalId === selectedRepository?.externalRepoId)

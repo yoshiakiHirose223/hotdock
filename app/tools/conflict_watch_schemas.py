@@ -91,3 +91,13 @@ class ConflictWatchWebhookAccepted(BaseModel):
     deliveryId: str = Field(alias="delivery_id")
 
     model_config = {"populate_by_name": True}
+
+
+class WebhookEventRawPayloadResponse(BaseModel):
+    eventId: int
+    providerType: str
+    deliveryId: str
+    rawPayloadRef: str = ""
+    rawPayloadExpiredAt: str | None = None
+    isAvailable: bool = False
+    content: str = ""

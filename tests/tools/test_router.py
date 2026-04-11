@@ -17,7 +17,7 @@ def test_conflict_watch_page(client):
 
     assert response.status_code == 200
     assert "Conflict Watch" in response.text
-    assert "/static/js/tools/conflict-watch/app.js?v=conflict-watch-20250410-21" in response.text
+    assert "/static/js/tools/conflict-watch/app.js?v=conflict-watch-20250410-22" in response.text
     assert response.headers["cache-control"] == "no-store"
     assert 'data-page-mode="repositories"' in response.text
 
@@ -150,6 +150,54 @@ def test_conflict_watch_simulated_webhook_creates_branch(client):
     detail_response = client.get(f"/tools/conflict-watch/api/branches/{branch_id}")
     assert detail_response.status_code == 200
     assert detail_response.json()["branch"]["branchName"] == "feature/conflict-watch"
+
+
+def test_conflict_watch_simulated_webhook_raw_payload_is_viewable(client):
+    repository_response = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "hotdock",
+            "externalRepoId": "raw-payload/simulated",
+        },
+    )
+    repository_id = repository_response.json()["state"]["repositories"][0]["id"]
+
+    response = client.post(
+        "/tools/conflict-watch/api/simulate-webhook",
+        json={
+            "repositoryId": repository_id,
+            "provider": "github",
+            "deliveryId": "raw-payload-simulated-1",
+            "branchName": "feature/raw-payload",
+            "pusher": "tester",
+            "signatureStatus": "valid",
+            "deletedState": "false",
+            "simulateFailure": False,
+            "isForced": False,
+            "added": "",
+            "modified": "app/conflicts/service.py",
+            "removed": "",
+            "renamed": "",
+        },
+    )
+
+    assert response.status_code == 200
+    event = next(
+        item
+        for item in response.json()["state"]["webhookEvents"]
+        if item["deliveryId"] == "raw-payload-simulated-1"
+    )
+
+    payload_response = client.get(f"/tools/conflict-watch/api/webhook-events/{event['id']}/raw-payload")
+
+    assert payload_response.status_code == 200
+    payload = payload_response.json()
+    assert payload["isAvailable"] is True
+    assert payload["rawPayloadRef"].endswith(".json")
+    raw_content = json.loads(payload["content"])
+    assert raw_content["branchName"] == "feature/raw-payload"
+    assert raw_content["modified"] == "app/conflicts/service.py"
 
 
 def test_conflict_watch_simulated_webhook_duplicate_delivery_is_idempotent(client):
@@ -655,6 +703,59 @@ def test_conflict_watch_github_webhook_signature_validation(client):
     )
     assert duplicate.status_code == 202
     assert "冪等性により再処理をスキップ" in duplicate.json()["message"]
+
+
+def test_conflict_watch_github_webhook_raw_payload_preserves_original_json(client):
+    payload = {
+        "ref": "refs/heads/feature/raw-payload-github",
+        "before": "before-sha",
+        "after": "after-sha",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "yoshiakiHirose223/hotdock",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "added": [],
+                "modified": ["app/conflicts/service.py"],
+                "removed": [],
+            }
+        ],
+    }
+    payload_bytes = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new("ghs_demo_hotdock".encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
+
+    response = client.post(
+        "/tools/conflict-watch/webhooks/github",
+        content=payload_bytes,
+        headers={
+            "X-GitHub-Delivery": "github-delivery-raw-payload",
+            "X-GitHub-Event": "push",
+            "X-Hub-Signature-256": signature,
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    event = next(
+        item
+        for item in state["webhookEvents"]
+        if item["deliveryId"] == "github-delivery-raw-payload"
+    )
+
+    payload_response = client.get(f"/tools/conflict-watch/api/webhook-events/{event['id']}/raw-payload")
+
+    assert payload_response.status_code == 200
+    payload_log = payload_response.json()
+    assert payload_log["isAvailable"] is True
+    assert json.loads(payload_log["content"]) == payload
 
 
 def test_conflict_watch_backlog_webhook_secret_validation(client):
