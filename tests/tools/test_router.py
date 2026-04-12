@@ -1180,10 +1180,19 @@ def test_conflict_watch_github_force_push_known_after_can_rewind_to_first_commit
         [item for item in state["branchCommits"] if item["branchId"] == branch["id"]],
         key=lambda item: item["sequenceNo"],
     )
+    branch_commit_files = sorted(
+        [item for item in state["branchCommitFiles"] if item["branchId"] == branch["id"]],
+        key=lambda item: (item["commitSha"], item["normalizedFilePath"]),
+    )
 
     assert branch["possiblyInconsistent"] is False
     assert branch_files == ["lab_reset/a.txt"]
     assert [item["isActive"] for item in branch_commits] == [True, False, False]
+    assert [(item["normalizedFilePath"], item["isActive"]) for item in branch_commit_files] == [
+        ("lab_reset/a.txt", True),
+        ("lab_reset/b.txt", False),
+        ("lab_reset/c.txt", False),
+    ]
 
 
 def test_conflict_watch_github_out_of_order_reset_force_push_keeps_latest_branch_state(client):

@@ -630,6 +630,7 @@ class ConflictWatchService:
                 is_active=is_active,
                 observed_at=observed_at,
             )
+        db.flush()
 
     def _append_observed_commits(
         self,
@@ -715,6 +716,9 @@ class ConflictWatchService:
         db: Session,
         branch: ConflictWatchBranch,
     ) -> None:
+        # SessionLocal uses autoflush=False, so rollback/appended commit state changes
+        # must be flushed before the rebuild queries read active history rows.
+        db.flush()
         active_commits = db.scalars(
             select(ConflictWatchBranchCommit)
             .where(
