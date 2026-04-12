@@ -79,3 +79,67 @@ def ensure_legacy_blog_schema() -> None:
                 connection.execute(text("ALTER TABLE cw_conflicts ADD COLUMN resolved_context JSON"))
             if "last_related_branches" not in conflict_columns:
                 connection.execute(text("ALTER TABLE cw_conflicts ADD COLUMN last_related_branches JSON NOT NULL DEFAULT '[]'"))
+
+    ensure_conflict_watch_commit_history_schema()
+
+
+def ensure_conflict_watch_commit_history_schema() -> None:
+    statements = [
+        """
+        CREATE TABLE IF NOT EXISTS cw_branch_commits (
+            id INTEGER PRIMARY KEY,
+            repository_id INTEGER NOT NULL REFERENCES cw_repositories(id) ON DELETE CASCADE,
+            branch_id INTEGER NOT NULL REFERENCES cw_branches(id) ON DELETE CASCADE,
+            commit_sha VARCHAR(255) NOT NULL,
+            sequence_no INTEGER NOT NULL,
+            observed_via_event_id INTEGER REFERENCES cw_webhook_events(id) ON DELETE SET NULL,
+            observed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            first_seen_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            last_seen_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_cw_branch_commits_repo_branch_commit UNIQUE (repository_id, branch_id, commit_sha)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commits_repository_id ON cw_branch_commits (repository_id)",
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commits_branch_id ON cw_branch_commits (branch_id)",
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commits_sequence_no ON cw_branch_commits (sequence_no)",
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commits_observed_via_event_id ON cw_branch_commits (observed_via_event_id)",
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commits_is_active ON cw_branch_commits (is_active)",
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commits_commit_sha ON cw_branch_commits (commit_sha)",
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commits_repo_branch_sequence ON cw_branch_commits (repository_id, branch_id, sequence_no)",
+        """
+        CREATE TABLE IF NOT EXISTS cw_branch_commit_files (
+            id INTEGER PRIMARY KEY,
+            repository_id INTEGER NOT NULL REFERENCES cw_repositories(id) ON DELETE CASCADE,
+            branch_id INTEGER NOT NULL REFERENCES cw_branches(id) ON DELETE CASCADE,
+            branch_commit_id INTEGER NOT NULL REFERENCES cw_branch_commits(id) ON DELETE CASCADE,
+            commit_sha VARCHAR(255) NOT NULL,
+            file_path VARCHAR(500) NOT NULL,
+            normalized_file_path VARCHAR(500) NOT NULL,
+            change_type VARCHAR(30) NOT NULL,
+            previous_path VARCHAR(500),
+            observed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_cw_branch_commit_files_repo_branch_commit_path_type UNIQUE (
+                repository_id,
+                branch_id,
+                commit_sha,
+                normalized_file_path,
+                change_type
+            )
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commit_files_repository_id ON cw_branch_commit_files (repository_id)",
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commit_files_branch_id ON cw_branch_commit_files (branch_id)",
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commit_files_branch_commit_id ON cw_branch_commit_files (branch_commit_id)",
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commit_files_is_active ON cw_branch_commit_files (is_active)",
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commit_files_commit_sha ON cw_branch_commit_files (commit_sha)",
+        "CREATE INDEX IF NOT EXISTS ix_cw_branch_commit_files_normalized_path ON cw_branch_commit_files (normalized_file_path)",
+    ]
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -65,10 +65,96 @@ class ConflictWatchBranch(Base):
         back_populates="branch",
         cascade="all, delete-orphan",
     )
+    branch_commits: Mapped[list["ConflictWatchBranchCommit"]] = relationship(
+        back_populates="branch",
+        cascade="all, delete-orphan",
+    )
     conflict_links: Mapped[list["ConflictWatchConflictBranch"]] = relationship(
         back_populates="branch",
         cascade="all, delete-orphan",
     )
+
+
+class ConflictWatchBranchCommit(Base):
+    __tablename__ = "cw_branch_commits"
+    __table_args__ = (
+        UniqueConstraint(
+            "repository_id",
+            "branch_id",
+            "commit_sha",
+            name="uq_cw_branch_commits_repo_branch_commit",
+        ),
+        Index(
+            "ix_cw_branch_commits_repo_branch_sequence",
+            "repository_id",
+            "branch_id",
+            "sequence_no",
+        ),
+        Index("ix_cw_branch_commits_commit_sha", "commit_sha"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    repository_id: Mapped[int] = mapped_column(ForeignKey("cw_repositories.id", ondelete="CASCADE"), index=True)
+    branch_id: Mapped[int] = mapped_column(ForeignKey("cw_branches.id", ondelete="CASCADE"), index=True)
+    commit_sha: Mapped[str] = mapped_column(String(255))
+    sequence_no: Mapped[int] = mapped_column(index=True)
+    observed_via_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cw_webhook_events.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    branch: Mapped["ConflictWatchBranch"] = relationship(back_populates="branch_commits")
+    commit_files: Mapped[list["ConflictWatchBranchCommitFile"]] = relationship(
+        back_populates="branch_commit",
+        cascade="all, delete-orphan",
+    )
+
+
+class ConflictWatchBranchCommitFile(Base):
+    __tablename__ = "cw_branch_commit_files"
+    __table_args__ = (
+        UniqueConstraint(
+            "repository_id",
+            "branch_id",
+            "commit_sha",
+            "normalized_file_path",
+            "change_type",
+            name="uq_cw_branch_commit_files_repo_branch_commit_path_type",
+        ),
+        Index("ix_cw_branch_commit_files_normalized_path", "normalized_file_path"),
+        Index("ix_cw_branch_commit_files_commit_sha", "commit_sha"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    repository_id: Mapped[int] = mapped_column(ForeignKey("cw_repositories.id", ondelete="CASCADE"), index=True)
+    branch_id: Mapped[int] = mapped_column(ForeignKey("cw_branches.id", ondelete="CASCADE"), index=True)
+    branch_commit_id: Mapped[int] = mapped_column(ForeignKey("cw_branch_commits.id", ondelete="CASCADE"), index=True)
+    commit_sha: Mapped[str] = mapped_column(String(255))
+    file_path: Mapped[str] = mapped_column(String(500))
+    normalized_file_path: Mapped[str] = mapped_column(String(500))
+    change_type: Mapped[str] = mapped_column(String(30))
+    previous_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    branch_commit: Mapped["ConflictWatchBranchCommit"] = relationship(back_populates="commit_files")
 
 
 class ConflictWatchBranchFile(Base):

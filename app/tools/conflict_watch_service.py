@@ -10,12 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
 from app.tools.conflict_watch_models import (
     ConflictWatchBranch,
+    ConflictWatchBranchCommit,
+    ConflictWatchBranchCommitFile,
     ConflictWatchBranchFile,
     ConflictWatchBranchFileIgnore,
     ConflictWatchConflict,
@@ -60,6 +62,21 @@ BRANCH_STATUS_ORDER = {
 class ServiceMessage:
     message: str
     tone: str = "success"
+
+
+@dataclass(slots=True)
+class ObservedCommitFileChange:
+    file_path: str
+    normalized_file_path: str
+    change_type: str
+    previous_path: str | None = None
+
+
+@dataclass(slots=True)
+class ObservedCommit:
+    commit_sha: str
+    observed_at: datetime
+    changes: list[ObservedCommitFileChange]
 
 
 class ConflictWatchService:
@@ -252,7 +269,439 @@ class ConflictWatchService:
         db.query(ConflictWatchBranchFile).filter(
             ConflictWatchBranchFile.branch_id == branch.id,
         ).delete()
+        db.query(ConflictWatchBranchCommitFile).filter(
+            ConflictWatchBranchCommitFile.branch_id == branch.id,
+        ).delete()
+        db.query(ConflictWatchBranchCommit).filter(
+            ConflictWatchBranchCommit.branch_id == branch.id,
+        ).delete()
         db.delete(branch)
+        db.flush()
+
+    def _get_or_create_branch(
+        self,
+        db: Session,
+        repository: ConflictWatchRepository,
+        branch_name: str,
+        *,
+        now: datetime,
+    ) -> ConflictWatchBranch:
+        branch = db.scalar(
+            select(ConflictWatchBranch).where(
+                ConflictWatchBranch.repository_id == repository.id,
+                ConflictWatchBranch.branch_name == branch_name,
+            )
+        )
+        if branch:
+            return branch
+        branch = ConflictWatchBranch(
+            repository_id=repository.id,
+            branch_name=branch_name,
+            is_monitored=True,
+            status="active",
+            last_push_at=None,
+            latest_after_sha=None,
+            last_seen_at=None,
+            is_deleted=False,
+            is_branch_excluded=False,
+            possibly_inconsistent=False,
+            confidence="high",
+            memo="",
+            monitoring_closed_reason=None,
+            monitoring_closed_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(branch)
+        db.flush()
+        return branch
+
+    def _build_file_changes(
+        self,
+        *,
+        added: list[str] | None = None,
+        modified: list[str] | None = None,
+        removed: list[str] | None = None,
+        renamed: list[dict[str, str]] | None = None,
+    ) -> list[ObservedCommitFileChange]:
+        changes: list[ObservedCommitFileChange] = []
+        seen: set[tuple[str, str, str | None]] = set()
+
+        def append_change(path: str, change_type: str, previous_path: str | None = None) -> None:
+            normalized = self.normalize_path(path)
+            normalized_previous = self.normalize_path(previous_path) if previous_path else None
+            if not normalized:
+                return
+            key = (normalized, change_type, normalized_previous)
+            if key in seen:
+                return
+            seen.add(key)
+            changes.append(
+                ObservedCommitFileChange(
+                    file_path=normalized,
+                    normalized_file_path=normalized,
+                    change_type=change_type,
+                    previous_path=normalized_previous,
+                )
+            )
+
+        for file_path in added or []:
+            append_change(file_path, "added")
+        for file_path in modified or []:
+            append_change(file_path, "modified")
+        for file_path in removed or []:
+            append_change(file_path, "removed")
+        for item in renamed or []:
+            if not isinstance(item, dict):
+                continue
+            append_change(item.get("newPath") or item.get("to") or "", "renamed", item.get("oldPath") or item.get("from"))
+        return changes
+
+    def _make_synthetic_commit_sha(self, event: ConflictWatchWebhookEvent, suffix: str = "aggregate") -> str:
+        after_sha = self.normalize_path(event.after_sha or "")
+        if after_sha:
+            return after_sha
+        return f"synthetic:{event.provider_type}:{event.delivery_id}:{suffix}"
+
+    def _event_to_single_observed_commit(self, event: ConflictWatchWebhookEvent) -> list[ObservedCommit]:
+        changes = self._build_file_changes(
+            added=list(event.files_added or []),
+            modified=list(event.files_modified or []),
+            removed=list(event.files_removed or []),
+            renamed=list(event.files_renamed or []),
+        )
+        if not changes:
+            return []
+        return [
+            ObservedCommit(
+                commit_sha=self._make_synthetic_commit_sha(event),
+                observed_at=event.pushed_at or self.now(),
+                changes=changes,
+            )
+        ]
+
+    def _extract_github_commit_observations(
+        self,
+        payload: dict[str, Any],
+        *,
+        delivery_id: str,
+        pushed_at: datetime,
+    ) -> list[ObservedCommit]:
+        observed: list[ObservedCommit] = []
+        commits = payload.get("commits", []) or []
+        head_commit = payload.get("head_commit")
+        source_commits = commits
+        if not source_commits and isinstance(head_commit, dict):
+            source_commits = [head_commit]
+
+        for index, commit in enumerate(source_commits):
+            if not isinstance(commit, dict):
+                continue
+            commit_sha = str(commit.get("id") or "").strip() or f"synthetic:github:{delivery_id}:{index}"
+            changes = self._build_file_changes(
+                added=list(commit.get("added", []) or []),
+                modified=list(commit.get("modified", []) or []),
+                removed=list(commit.get("removed", []) or []),
+            )
+            observed.append(
+                ObservedCommit(
+                    commit_sha=commit_sha,
+                    observed_at=pushed_at,
+                    changes=changes,
+                )
+            )
+        return observed
+
+    def _next_branch_sequence_no(self, db: Session, branch: ConflictWatchBranch) -> int:
+        current_max = db.scalar(
+            select(func.max(ConflictWatchBranchCommit.sequence_no)).where(
+                ConflictWatchBranchCommit.repository_id == branch.repository_id,
+                ConflictWatchBranchCommit.branch_id == branch.id,
+            )
+        )
+        return int(current_max or 0) + 1
+
+    def _set_branch_commit_state(
+        self,
+        branch_commit: ConflictWatchBranchCommit,
+        *,
+        is_active: bool,
+        observed_at: datetime,
+        event_id: int | None,
+    ) -> None:
+        branch_commit.is_active = is_active
+        branch_commit.observed_at = observed_at
+        branch_commit.last_seen_at = observed_at
+        branch_commit.observed_via_event_id = event_id
+        branch_commit.updated_at = self.now()
+
+    def _set_branch_commit_files_state(
+        self,
+        db: Session,
+        branch_commit_id: int,
+        *,
+        is_active: bool,
+        observed_at: datetime,
+    ) -> None:
+        rows = db.scalars(
+            select(ConflictWatchBranchCommitFile).where(
+                ConflictWatchBranchCommitFile.branch_commit_id == branch_commit_id,
+            )
+        ).all()
+        now = self.now()
+        for row in rows:
+            row.is_active = is_active
+            row.observed_at = observed_at
+            row.updated_at = now
+
+    def _set_branch_history_active_through_sequence(
+        self,
+        db: Session,
+        branch: ConflictWatchBranch,
+        *,
+        max_active_sequence_no: int,
+        observed_at: datetime,
+        event_id: int | None,
+    ) -> None:
+        branch_commits = db.scalars(
+            select(ConflictWatchBranchCommit)
+            .where(
+                ConflictWatchBranchCommit.repository_id == branch.repository_id,
+                ConflictWatchBranchCommit.branch_id == branch.id,
+            )
+            .order_by(ConflictWatchBranchCommit.sequence_no.asc())
+        ).all()
+        for branch_commit in branch_commits:
+            is_active = branch_commit.sequence_no <= max_active_sequence_no
+            self._set_branch_commit_state(
+                branch_commit,
+                is_active=is_active,
+                observed_at=observed_at,
+                event_id=event_id,
+            )
+            self._set_branch_commit_files_state(
+                db,
+                branch_commit.id,
+                is_active=is_active,
+                observed_at=observed_at,
+            )
+
+    def _append_observed_commits(
+        self,
+        db: Session,
+        branch: ConflictWatchBranch,
+        event: ConflictWatchWebhookEvent,
+        observed_commits: list[ObservedCommit],
+        *,
+        is_active: bool,
+    ) -> None:
+        sequence_no = self._next_branch_sequence_no(db, branch)
+        now = self.now()
+        for observed_commit in observed_commits:
+            branch_commit = db.scalar(
+                select(ConflictWatchBranchCommit).where(
+                    ConflictWatchBranchCommit.repository_id == branch.repository_id,
+                    ConflictWatchBranchCommit.branch_id == branch.id,
+                    ConflictWatchBranchCommit.commit_sha == observed_commit.commit_sha,
+                )
+            )
+            if branch_commit is None:
+                branch_commit = ConflictWatchBranchCommit(
+                    repository_id=branch.repository_id,
+                    branch_id=branch.id,
+                    commit_sha=observed_commit.commit_sha,
+                    sequence_no=sequence_no,
+                    observed_via_event_id=event.id,
+                    observed_at=observed_commit.observed_at,
+                    is_active=is_active,
+                    first_seen_at=observed_commit.observed_at,
+                    last_seen_at=observed_commit.observed_at,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(branch_commit)
+                db.flush()
+                sequence_no += 1
+            else:
+                self._set_branch_commit_state(
+                    branch_commit,
+                    is_active=is_active,
+                    observed_at=observed_commit.observed_at,
+                    event_id=event.id,
+                )
+
+            for change in observed_commit.changes:
+                commit_file = db.scalar(
+                    select(ConflictWatchBranchCommitFile).where(
+                        ConflictWatchBranchCommitFile.repository_id == branch.repository_id,
+                        ConflictWatchBranchCommitFile.branch_id == branch.id,
+                        ConflictWatchBranchCommitFile.commit_sha == branch_commit.commit_sha,
+                        ConflictWatchBranchCommitFile.normalized_file_path == change.normalized_file_path,
+                        ConflictWatchBranchCommitFile.change_type == change.change_type,
+                    )
+                )
+                if commit_file is None:
+                    commit_file = ConflictWatchBranchCommitFile(
+                        repository_id=branch.repository_id,
+                        branch_id=branch.id,
+                        branch_commit_id=branch_commit.id,
+                        commit_sha=branch_commit.commit_sha,
+                        file_path=change.file_path,
+                        normalized_file_path=change.normalized_file_path,
+                        change_type=change.change_type,
+                        previous_path=change.previous_path,
+                        observed_at=observed_commit.observed_at,
+                        is_active=is_active,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    db.add(commit_file)
+                else:
+                    commit_file.branch_commit_id = branch_commit.id
+                    commit_file.file_path = change.file_path
+                    commit_file.previous_path = change.previous_path
+                    commit_file.observed_at = observed_commit.observed_at
+                    commit_file.is_active = is_active
+                    commit_file.updated_at = now
+        db.flush()
+
+    def _rebuild_branch_current_files(
+        self,
+        db: Session,
+        branch: ConflictWatchBranch,
+    ) -> None:
+        active_commits = db.scalars(
+            select(ConflictWatchBranchCommit)
+            .where(
+                ConflictWatchBranchCommit.repository_id == branch.repository_id,
+                ConflictWatchBranchCommit.branch_id == branch.id,
+                ConflictWatchBranchCommit.is_active.is_(True),
+            )
+            .order_by(ConflictWatchBranchCommit.sequence_no.asc())
+        ).all()
+        if not active_commits:
+            db.query(ConflictWatchBranchFileIgnore).filter(
+                ConflictWatchBranchFileIgnore.branch_id == branch.id,
+            ).delete()
+            db.query(ConflictWatchBranchFile).filter(
+                ConflictWatchBranchFile.branch_id == branch.id,
+            ).delete()
+            db.flush()
+            return
+
+        current_state: dict[str, dict[str, Any]] = {}
+        for branch_commit in active_commits:
+            commit_files = db.scalars(
+                select(ConflictWatchBranchCommitFile)
+                .where(
+                    ConflictWatchBranchCommitFile.branch_commit_id == branch_commit.id,
+                    ConflictWatchBranchCommitFile.is_active.is_(True),
+                )
+                .order_by(ConflictWatchBranchCommitFile.id.asc())
+            ).all()
+            for commit_file in commit_files:
+                if commit_file.change_type == "removed":
+                    current_state.pop(commit_file.normalized_file_path, None)
+                    continue
+                if commit_file.change_type == "renamed" and commit_file.previous_path:
+                    current_state.pop(self.normalize_path(commit_file.previous_path), None)
+                current_state[commit_file.normalized_file_path] = {
+                    "file_path": commit_file.file_path,
+                    "normalized_file_path": commit_file.normalized_file_path,
+                    "change_type": "modified" if commit_file.change_type == "renamed" else commit_file.change_type,
+                    "previous_path": commit_file.previous_path,
+                    "observed_at": commit_file.observed_at,
+                }
+
+        existing_rows = db.scalars(
+            select(ConflictWatchBranchFile).where(
+                ConflictWatchBranchFile.repository_id == branch.repository_id,
+                ConflictWatchBranchFile.branch_id == branch.id,
+            )
+        ).all()
+        existing_by_path = {row.normalized_file_path: row for row in existing_rows}
+        now = self.now()
+
+        for normalized_file_path, item in current_state.items():
+            existing = existing_by_path.pop(normalized_file_path, None)
+            if existing:
+                existing.file_path = str(item["file_path"])
+                existing.change_type = str(item["change_type"])
+                existing.previous_path = str(item["previous_path"]) if item["previous_path"] else None
+                existing.last_seen_at = item["observed_at"]
+                existing.updated_at = now
+                continue
+            db.add(
+                ConflictWatchBranchFile(
+                    repository_id=branch.repository_id,
+                    branch_id=branch.id,
+                    file_path=str(item["file_path"]),
+                    normalized_file_path=normalized_file_path,
+                    change_type=str(item["change_type"]),
+                    previous_path=str(item["previous_path"]) if item["previous_path"] else None,
+                    first_seen_at=item["observed_at"],
+                    last_seen_at=item["observed_at"],
+                    updated_at=now,
+                )
+            )
+
+        for stale_path, stale_row in existing_by_path.items():
+            db.query(ConflictWatchBranchFileIgnore).filter(
+                ConflictWatchBranchFileIgnore.branch_id == branch.id,
+                ConflictWatchBranchFileIgnore.normalized_file_path == stale_path,
+            ).delete()
+            db.delete(stale_row)
+        db.flush()
+
+        active_ignores = db.scalars(
+            select(ConflictWatchBranchFileIgnore).where(
+                ConflictWatchBranchFileIgnore.branch_id == branch.id,
+            )
+        ).all()
+        refreshed_branch_files = db.scalars(
+            select(ConflictWatchBranchFile).where(
+                ConflictWatchBranchFile.branch_id == branch.id,
+            )
+        ).all()
+        branch_file_by_path = {row.normalized_file_path: row for row in refreshed_branch_files}
+        for ignore_entry in active_ignores:
+            branch_file = branch_file_by_path.get(ignore_entry.normalized_file_path)
+            if branch_file is None:
+                db.delete(ignore_entry)
+                continue
+            ignore_entry.branch_file_id = branch_file.id
+            ignore_entry.updated_at = now
+        db.flush()
+
+    def _clear_branch_cache(self, db: Session, branch: ConflictWatchBranch) -> None:
+        db.query(ConflictWatchBranchFileIgnore).filter(
+            ConflictWatchBranchFileIgnore.branch_id == branch.id,
+        ).delete()
+        db.query(ConflictWatchBranchFile).filter(
+            ConflictWatchBranchFile.branch_id == branch.id,
+        ).delete()
+        db.flush()
+
+    def _mark_branch_history_inactive(self, db: Session, branch: ConflictWatchBranch, *, observed_at: datetime, event_id: int | None) -> None:
+        branch_commits = db.scalars(
+            select(ConflictWatchBranchCommit).where(
+                ConflictWatchBranchCommit.repository_id == branch.repository_id,
+                ConflictWatchBranchCommit.branch_id == branch.id,
+            )
+        ).all()
+        for branch_commit in branch_commits:
+            self._set_branch_commit_state(
+                branch_commit,
+                is_active=False,
+                observed_at=observed_at,
+                event_id=event_id,
+            )
+            self._set_branch_commit_files_state(
+                db,
+                branch_commit.id,
+                is_active=False,
+                observed_at=observed_at,
+            )
         db.flush()
 
     def _compute_conflict_confidence(self, branches: list[ConflictWatchBranch]) -> str:
@@ -676,6 +1125,41 @@ class ConflictWatchService:
             data["previousPath"] = branch_file.previous_path
         return data
 
+    def _serialize_branch_commit(self, branch_commit: ConflictWatchBranchCommit) -> dict[str, Any]:
+        return {
+            "id": branch_commit.id,
+            "repositoryId": branch_commit.repository_id,
+            "branchId": branch_commit.branch_id,
+            "commitSha": branch_commit.commit_sha,
+            "sequenceNo": branch_commit.sequence_no,
+            "observedViaEventId": branch_commit.observed_via_event_id,
+            "observedAt": self._iso(branch_commit.observed_at),
+            "isActive": branch_commit.is_active,
+            "firstSeenAt": self._iso(branch_commit.first_seen_at),
+            "lastSeenAt": self._iso(branch_commit.last_seen_at),
+            "createdAt": self._iso(branch_commit.created_at),
+            "updatedAt": self._iso(branch_commit.updated_at),
+        }
+
+    def _serialize_branch_commit_file(self, commit_file: ConflictWatchBranchCommitFile) -> dict[str, Any]:
+        data = {
+            "id": commit_file.id,
+            "repositoryId": commit_file.repository_id,
+            "branchId": commit_file.branch_id,
+            "branchCommitId": commit_file.branch_commit_id,
+            "commitSha": commit_file.commit_sha,
+            "filePath": commit_file.file_path,
+            "normalizedFilePath": commit_file.normalized_file_path,
+            "changeType": commit_file.change_type,
+            "observedAt": self._iso(commit_file.observed_at),
+            "isActive": commit_file.is_active,
+            "createdAt": self._iso(commit_file.created_at),
+            "updatedAt": self._iso(commit_file.updated_at),
+        }
+        if commit_file.previous_path:
+            data["previousPath"] = commit_file.previous_path
+        return data
+
     def _serialize_branch_file_ignore(self, branch_file_ignore: ConflictWatchBranchFileIgnore) -> dict[str, Any]:
         return {
             "id": branch_file_ignore.id,
@@ -832,6 +1316,8 @@ class ConflictWatchService:
             )
         ).all()
         branches = db.scalars(select(ConflictWatchBranch)).all()
+        branch_commits = db.scalars(select(ConflictWatchBranchCommit)).all()
+        branch_commit_files = db.scalars(select(ConflictWatchBranchCommitFile)).all()
         branch_files = db.scalars(select(ConflictWatchBranchFile)).all()
         branch_file_ignores = db.scalars(select(ConflictWatchBranchFileIgnore)).all()
         conflicts = db.scalars(
@@ -865,6 +1351,8 @@ class ConflictWatchService:
                 [self._serialize_branch(branch) for branch in branches if not branch.is_deleted],
                 key=lambda branch: (-BRANCH_STATUS_ORDER.get(branch["status"], 0), branch["branchName"]),
             ),
+            "branchCommits": [self._serialize_branch_commit(item) for item in branch_commits],
+            "branchCommitFiles": [self._serialize_branch_commit_file(item) for item in branch_commit_files],
             "branchFiles": [self._serialize_branch_file(branch_file) for branch_file in branch_files],
             "branchFileIgnores": [self._serialize_branch_file_ignore(item) for item in branch_file_ignores],
             "conflicts": [self._serialize_conflict(conflict, branch_files_by_conflict) for conflict in conflicts],
@@ -1184,7 +1672,8 @@ class ConflictWatchService:
             branch.monitoring_closed_reason = "merged_to_main_or_master"
             branch.monitoring_closed_at = now
             branch.updated_at = now
-            db.query(ConflictWatchBranchFile).filter(ConflictWatchBranchFile.branch_id == branch.id).delete()
+            self._mark_branch_history_inactive(db, branch, observed_at=now, event_id=None)
+            self._clear_branch_cache(db, branch)
             self._reconcile_all(
                 db,
                 resolution_reason="merged_to_main_or_master",
@@ -1204,9 +1693,16 @@ class ConflictWatchService:
             return ServiceMessage(f"{branch_name} を一覧から削除しました。")
         if action == "reset":
             branch.possibly_inconsistent = False
+            branch.latest_after_sha = None
             branch.last_seen_at = None
             branch.updated_at = now
-            db.query(ConflictWatchBranchFile).filter(ConflictWatchBranchFile.branch_id == branch.id).delete()
+            self._clear_branch_cache(db, branch)
+            db.query(ConflictWatchBranchCommitFile).filter(
+                ConflictWatchBranchCommitFile.branch_id == branch.id,
+            ).delete()
+            db.query(ConflictWatchBranchCommit).filter(
+                ConflictWatchBranchCommit.branch_id == branch.id,
+            ).delete()
             self._reconcile_all(
                 db,
                 resolution_reason="manual_reset",
@@ -1345,92 +1841,96 @@ class ConflictWatchService:
         )
         return f"sha256:{hashlib.sha256(seed.encode('utf-8')).hexdigest()}"
 
-    def _apply_event_to_branches(self, db: Session, event: ConflictWatchWebhookEvent) -> bool:
+    def _apply_event_to_branches(
+        self,
+        db: Session,
+        event: ConflictWatchWebhookEvent,
+        observed_commits: list[ObservedCommit] | None = None,
+    ) -> bool:
         repository = db.scalar(select(ConflictWatchRepository).where(ConflictWatchRepository.id == event.repository_id))
         if not repository:
             return False
-        branch = db.scalar(
-            select(ConflictWatchBranch).where(
-                ConflictWatchBranch.repository_id == repository.id,
-                ConflictWatchBranch.branch_name == event.branch_name,
-            )
-        )
         now = self.now()
-        if not branch:
-            branch = ConflictWatchBranch(
-                repository_id=repository.id,
-                branch_name=event.branch_name,
-                is_monitored=True,
-                status="active",
-                last_push_at=event.pushed_at or now,
-                latest_after_sha=event.after_sha,
-                last_seen_at=now,
-                is_deleted=False,
-                is_branch_excluded=False,
-                possibly_inconsistent=False,
-                confidence="high",
-                memo="",
-                monitoring_closed_reason=None,
-                monitoring_closed_at=None,
-                created_at=now,
-                updated_at=now,
-            )
-            db.add(branch)
-            db.flush()
-
+        branch = self._get_or_create_branch(db, repository, event.branch_name, now=now)
+        observed_at = event.pushed_at or now
         branch.last_push_at = event.pushed_at or now
         branch.last_seen_at = now
         branch.latest_after_sha = event.after_sha
         branch.updated_at = now
-        branch.is_deleted = False
         branch.is_monitored = True
         branch.monitoring_closed_reason = None
         branch.monitoring_closed_at = None
-        if event.is_forced:
-            branch.possibly_inconsistent = True
 
         if event.is_deleted is True:
-            self._remove_branch(db, branch)
+            branch.is_deleted = True
+            branch.possibly_inconsistent = False
+            self._mark_branch_history_inactive(
+                db,
+                branch,
+                observed_at=observed_at,
+                event_id=event.id,
+            )
+            self._clear_branch_cache(db, branch)
             return True
 
-        def upsert_file(path: str, change_type: str, previous_path: str | None = None) -> None:
-            normalized_file_path = self.normalize_path(path)
-            existing = db.scalar(
-                select(ConflictWatchBranchFile).where(
-                    ConflictWatchBranchFile.repository_id == repository.id,
-                    ConflictWatchBranchFile.branch_id == branch.id,
-                    ConflictWatchBranchFile.normalized_file_path == normalized_file_path,
-                )
-            )
-            if existing:
-                existing.file_path = normalized_file_path
-                existing.change_type = change_type
-                existing.previous_path = previous_path
-                existing.last_seen_at = now
-                existing.updated_at = now
-                return
-            db.add(
-                ConflictWatchBranchFile(
-                    repository_id=repository.id,
-                    branch_id=branch.id,
-                    file_path=normalized_file_path,
-                    normalized_file_path=normalized_file_path,
-                    change_type=change_type,
-                    previous_path=previous_path,
-                    first_seen_at=now,
-                    last_seen_at=now,
-                    updated_at=now,
-                )
-            )
+        branch.is_deleted = False
+        observed_commits = observed_commits if observed_commits is not None else self._event_to_single_observed_commit(event)
 
-        for file_path in event.files_added or []:
-            upsert_file(file_path, "added")
-        for file_path in event.files_modified or []:
-            upsert_file(file_path, "modified")
-        for file_path in event.files_removed or []:
-            upsert_file(file_path, "removed")
-        for item in event.files_renamed or []:
-            upsert_file(item.get("newPath", ""), "renamed", item.get("oldPath"))
+        if event.is_forced:
+            target_commit = None
+            if event.after_sha:
+                target_commit = db.scalar(
+                    select(ConflictWatchBranchCommit).where(
+                        ConflictWatchBranchCommit.repository_id == branch.repository_id,
+                        ConflictWatchBranchCommit.branch_id == branch.id,
+                        ConflictWatchBranchCommit.commit_sha == event.after_sha,
+                    )
+                )
+            if target_commit is None:
+                branch.possibly_inconsistent = True
+                if observed_commits:
+                    self._append_observed_commits(
+                        db,
+                        branch,
+                        event,
+                        observed_commits,
+                        is_active=False,
+                    )
+                return True
+            self._set_branch_history_active_through_sequence(
+                db,
+                branch,
+                max_active_sequence_no=target_commit.sequence_no,
+                observed_at=observed_at,
+                event_id=event.id,
+            )
+            new_observed_commits = [
+                item
+                for item in observed_commits
+                if item.commit_sha != target_commit.commit_sha
+            ]
+            if new_observed_commits:
+                self._append_observed_commits(
+                    db,
+                    branch,
+                    event,
+                    new_observed_commits,
+                    is_active=True,
+                )
+            branch.possibly_inconsistent = False
+            self._rebuild_branch_current_files(db, branch)
+            return True
+
+        if observed_commits:
+            self._append_observed_commits(
+                db,
+                branch,
+                event,
+                observed_commits,
+                is_active=True,
+            )
+        branch.possibly_inconsistent = False
+        self._rebuild_branch_current_files(db, branch)
         return True
 
     def _create_webhook_event(
@@ -1581,7 +2081,11 @@ class ConflictWatchService:
                 "warning",
             )
 
-        self._apply_event_to_branches(db, event)
+        self._apply_event_to_branches(
+            db,
+            event,
+            self._event_to_single_observed_commit(event),
+        )
         event.process_status = "processed"
         event.processed_at = self.now()
         resolution_reason, resolution_context = self._webhook_resolution_context(event)
@@ -1605,7 +2109,11 @@ class ConflictWatchService:
         event.process_status = "processed"
         event.processed_at = self.now()
         event.pushed_at = self.now()
-        self._apply_event_to_branches(db, event)
+        self._apply_event_to_branches(
+            db,
+            event,
+            self._observed_commits_for_reprocess(event),
+        )
         resolution_reason, resolution_context = self._webhook_resolution_context(event)
         self._reconcile_all(
             db,
@@ -1654,6 +2162,59 @@ class ConflictWatchService:
                     renamed_items.append(candidate)
         return renamed_items
 
+    def _extract_backlog_commit_observations(
+        self,
+        payload: dict[str, Any],
+        *,
+        delivery_id: str,
+        pushed_at: datetime,
+    ) -> list[ObservedCommit]:
+        observed: list[ObservedCommit] = []
+        commits = payload.get("commits") or payload.get("changes") or []
+        for index, commit in enumerate(commits):
+            if not isinstance(commit, dict):
+                continue
+            commit_sha = (
+                str(commit.get("id") or commit.get("rev") or "").strip()
+                or f"synthetic:backlog:{delivery_id}:{index}"
+            )
+            observed.append(
+                ObservedCommit(
+                    commit_sha=commit_sha,
+                    observed_at=pushed_at,
+                    changes=self._build_file_changes(
+                        added=list(commit.get("added", []) or []),
+                        modified=list(commit.get("modified", []) or []),
+                        removed=list(commit.get("removed", []) or []),
+                        renamed=list(commit.get("renamed", []) or []),
+                    ),
+                )
+            )
+        return observed
+
+    def _observed_commits_for_reprocess(self, event: ConflictWatchWebhookEvent) -> list[ObservedCommit]:
+        raw_payload = self._read_raw_payload(event.raw_payload_ref)
+        if raw_payload and event.provider_type == "github":
+            payload = json.loads(raw_payload)
+            if isinstance(payload, dict) and "ref" in payload and isinstance(payload.get("repository"), dict):
+                return self._extract_github_commit_observations(
+                    payload,
+                    delivery_id=event.delivery_id,
+                    pushed_at=event.pushed_at or self.now(),
+                )
+        if raw_payload and event.provider_type == "backlog":
+            raw = json.loads(raw_payload)
+            payload = raw.get("payload") if isinstance(raw, dict) and isinstance(raw.get("payload"), dict) else raw
+            if isinstance(payload, dict):
+                observed = self._extract_backlog_commit_observations(
+                    payload,
+                    delivery_id=event.delivery_id,
+                    pushed_at=event.pushed_at or self.now(),
+                )
+                if observed or any(key in payload for key in ("ref", "branch", "refName", "repository", "project")):
+                    return observed
+        return self._event_to_single_observed_commit(event)
+
     def handle_github_webhook(
         self,
         db: Session,
@@ -1693,6 +2254,8 @@ class ConflictWatchService:
         repository = self._ensure_repository(db, "github", repository_external_id, repository_name)
         raw_payload_ref = self._store_raw_payload("github", delivery_id, payload_bytes)
         commits = payload.get("commits", []) or []
+        source_commits = commits or ([payload.get("head_commit")] if isinstance(payload.get("head_commit"), dict) else [])
+        pushed_at = self.now()
         event = self._create_webhook_event(
             db,
             provider_type="github",
@@ -1702,16 +2265,21 @@ class ConflictWatchService:
             before_sha=payload.get("before"),
             after_sha=payload.get("after"),
             pusher=(payload.get("pusher") or {}).get("name"),
-            pushed_at=self.now(),
+            pushed_at=pushed_at,
             is_deleted=payload.get("deleted"),
             is_forced=bool(payload.get("forced", False)),
-            files_added=self._collect_github_files(commits, "added"),
-            files_modified=self._collect_github_files(commits, "modified"),
-            files_removed=self._collect_github_files(commits, "removed"),
+            files_added=self._collect_github_files(source_commits, "added"),
+            files_modified=self._collect_github_files(source_commits, "modified"),
+            files_removed=self._collect_github_files(source_commits, "removed"),
             files_renamed=[],
             raw_payload_ref=raw_payload_ref,
         )
-        self._apply_event_to_branches(db, event)
+        observed_commits = self._extract_github_commit_observations(
+            payload,
+            delivery_id=delivery_id,
+            pushed_at=pushed_at,
+        )
+        self._apply_event_to_branches(db, event, observed_commits)
         event.process_status = "processed"
         event.processed_at = self.now()
         resolution_reason, resolution_context = self._webhook_resolution_context(event)
@@ -1775,6 +2343,7 @@ class ConflictWatchService:
             )
         repository = self._ensure_repository(db, "backlog", repository_external_id, repository_name)
         raw_payload_ref = self._store_raw_payload("backlog", delivery_id, payload_bytes)
+        pushed_at = self.now()
         event = self._create_webhook_event(
             db,
             provider_type="backlog",
@@ -1784,7 +2353,7 @@ class ConflictWatchService:
             before_sha=payload.get("before") or payload.get("old"),
             after_sha=payload.get("after") or payload.get("rev"),
             pusher=(payload.get("pusher") or {}).get("name") or (payload.get("user") or {}).get("name"),
-            pushed_at=self.now(),
+            pushed_at=pushed_at,
             is_deleted=payload.get("deleted"),
             is_forced=bool(payload.get("forced", False)),
             files_added=self._extract_backlog_files(payload, "added"),
@@ -1793,7 +2362,12 @@ class ConflictWatchService:
             files_renamed=self._extract_backlog_renames(payload),
             raw_payload_ref=raw_payload_ref,
         )
-        self._apply_event_to_branches(db, event)
+        observed_commits = self._extract_backlog_commit_observations(
+            payload,
+            delivery_id=delivery_id,
+            pushed_at=pushed_at,
+        )
+        self._apply_event_to_branches(db, event, observed_commits)
         event.process_status = "processed"
         event.processed_at = self.now()
         resolution_reason, resolution_context = self._webhook_resolution_context(event)

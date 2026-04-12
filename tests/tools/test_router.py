@@ -3,6 +3,21 @@ import hmac
 import json
 
 
+def post_github_webhook(client, delivery_id, payload, *, secret="ghs_demo_hotdock"):
+    payload_bytes = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
+    return client.post(
+        "/tools/conflict-watch/webhooks/github",
+        content=payload_bytes,
+        headers={
+            "X-GitHub-Delivery": delivery_id,
+            "X-GitHub-Event": "push",
+            "X-Hub-Signature-256": signature,
+            "Content-Type": "application/json",
+        },
+    )
+
+
 def test_csv_to_json_page(client):
     response = client.get("/tools/csv-to-json")
 
@@ -800,6 +815,268 @@ def test_conflict_watch_github_webhook_raw_payload_preserves_original_json(clien
     payload_log = payload_response.json()
     assert payload_log["isAvailable"] is True
     assert json.loads(payload_log["content"]) == payload
+
+
+def test_conflict_watch_github_webhook_persists_branch_commit_history(client):
+    payload = {
+        "ref": "refs/heads/feature/history",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "commit-c",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "history/test",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "commit-a",
+                "added": ["lab_normal/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "commit-b",
+                "added": ["lab_normal/b.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "commit-c",
+                "added": [],
+                "modified": ["lab_normal/a.txt"],
+                "removed": [],
+            },
+        ],
+    }
+
+    response = post_github_webhook(client, "github-commit-history-1", payload)
+
+    assert response.status_code == 202
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/history")
+    branch_files = [item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]]
+    branch_commits = [item for item in state["branchCommits"] if item["branchId"] == branch["id"]]
+    branch_commit_files = [item for item in state["branchCommitFiles"] if item["branchId"] == branch["id"]]
+
+    assert sorted(branch_files) == ["lab_normal/a.txt", "lab_normal/b.txt"]
+    assert [item["commitSha"] for item in sorted(branch_commits, key=lambda item: item["sequenceNo"])] == [
+        "commit-a",
+        "commit-b",
+        "commit-c",
+    ]
+    assert all(item["isActive"] is True for item in branch_commits)
+    assert len(branch_commit_files) == 3
+
+
+def test_conflict_watch_github_force_push_known_after_rebuilds_current_files(client):
+    first_payload = {
+        "ref": "refs/heads/feature/reset-known-after",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "reset-c",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/known-after",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "reset-a",
+                "added": ["lab_reset/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "reset-b",
+                "added": ["lab_reset/b.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "reset-c",
+                "added": ["lab_reset/c.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    second_payload = {
+        "ref": "refs/heads/feature/reset-known-after",
+        "before": "reset-c",
+        "after": "reset-b",
+        "deleted": False,
+        "forced": True,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/known-after",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [],
+        "head_commit": {
+            "id": "reset-b",
+            "added": [],
+            "modified": [],
+            "removed": [],
+        },
+    }
+
+    assert post_github_webhook(client, "github-force-known-1", first_payload).status_code == 202
+    assert post_github_webhook(client, "github-force-known-2", second_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/reset-known-after")
+    branch_files = sorted(
+        item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
+    )
+    branch_commits = sorted(
+        [item for item in state["branchCommits"] if item["branchId"] == branch["id"]],
+        key=lambda item: item["sequenceNo"],
+    )
+
+    assert branch["possiblyInconsistent"] is False
+    assert branch_files == ["lab_reset/a.txt", "lab_reset/b.txt"]
+    assert [item["isActive"] for item in branch_commits] == [True, True, False]
+
+
+def test_conflict_watch_github_force_push_unknown_after_marks_branch_inconsistent_without_breaking_current_files(client):
+    first_payload = {
+        "ref": "refs/heads/feature/unknown-after",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "unknown-b",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/unknown-after",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "unknown-a",
+                "added": ["lab_rebase/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "unknown-b",
+                "added": ["lab_rebase/b.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    second_payload = {
+        "ref": "refs/heads/feature/unknown-after",
+        "before": "unknown-b",
+        "after": "unknown-rewritten",
+        "deleted": False,
+        "forced": True,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/unknown-after",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "unknown-rewritten",
+                "added": ["lab_rebase/c.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+
+    assert post_github_webhook(client, "github-force-unknown-1", first_payload).status_code == 202
+    assert post_github_webhook(client, "github-force-unknown-2", second_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/unknown-after")
+    branch_files = sorted(
+        item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
+    )
+    branch_commits = {
+        item["commitSha"]: item
+        for item in state["branchCommits"]
+        if item["branchId"] == branch["id"]
+    }
+
+    assert branch["possiblyInconsistent"] is True
+    assert branch_files == ["lab_rebase/a.txt", "lab_rebase/b.txt"]
+    assert branch_commits["unknown-rewritten"]["isActive"] is False
+
+
+def test_conflict_watch_github_branch_delete_marks_branch_deleted_and_clears_current_files(client):
+    from sqlalchemy import select
+
+    from app.core.database import SessionLocal
+    from app.tools.conflict_watch_models import ConflictWatchBranch, ConflictWatchBranchFile
+
+    push_payload = {
+        "ref": "refs/heads/lab/webhook-delete",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "delete-a",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "delete/test",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "delete-a",
+                "added": ["lab_delete/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    delete_payload = {
+        "ref": "refs/heads/lab/webhook-delete",
+        "before": "delete-a",
+        "after": "0000000000000000000000000000000000000000",
+        "deleted": True,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "delete/test",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [],
+    }
+
+    assert post_github_webhook(client, "github-branch-delete-1", push_payload).status_code == 202
+    assert post_github_webhook(client, "github-branch-delete-2", delete_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    assert all(branch["branchName"] != "lab/webhook-delete" for branch in state["branches"])
+
+    with SessionLocal() as db:
+        branch = db.scalar(
+            select(ConflictWatchBranch).where(ConflictWatchBranch.branch_name == "lab/webhook-delete")
+        )
+        assert branch is not None
+        assert branch.is_deleted is True
+        assert db.scalars(
+            select(ConflictWatchBranchFile).where(ConflictWatchBranchFile.branch_id == branch.id)
+        ).all() == []
 
 
 def test_conflict_watch_backlog_webhook_secret_validation(client):
