@@ -1018,6 +1018,435 @@ def test_conflict_watch_github_force_push_unknown_after_marks_branch_inconsisten
     assert branch_commits["unknown-rewritten"]["isActive"] is False
 
 
+def test_conflict_watch_github_amend_force_push_replaces_old_commit_with_new_active_commit(client):
+    first_payload = {
+        "ref": "refs/heads/feature/amend-force-push",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "amend-old",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/amend",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "amend-old",
+                "message": "feat: add amend target",
+                "added": ["lab_amend/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    second_payload = {
+        "ref": "refs/heads/feature/amend-force-push",
+        "before": "amend-old",
+        "after": "amend-new",
+        "deleted": False,
+        "forced": True,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/amend",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "amend-new",
+                "message": "feat: add amend target (amended)",
+                "added": ["lab_amend/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+
+    assert post_github_webhook(client, "github-amend-1", first_payload).status_code == 202
+    assert post_github_webhook(client, "github-amend-2", second_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/amend-force-push")
+    branch_commits = {
+        item["commitSha"]: item
+        for item in state["branchCommits"]
+        if item["branchId"] == branch["id"]
+    }
+    branch_files = sorted(
+        item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
+    )
+
+    assert branch["possiblyInconsistent"] is False
+    assert branch_commits["amend-old"]["isActive"] is False
+    assert branch_commits["amend-new"]["isActive"] is True
+    assert branch_files == ["lab_amend/a.txt"]
+
+
+def test_conflict_watch_github_rebase_drop_force_push_disables_old_tail_commits(client):
+    first_payload = {
+        "ref": "refs/heads/feature/rebase-drop",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "rebase-old-3",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/rebase-drop",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "rebase-old-1",
+                "message": "feat: add base path",
+                "added": ["lab_rebase/base.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "rebase-old-2",
+                "message": "feat: update shared path 1",
+                "added": [],
+                "modified": ["lab_rebase/shared.txt"],
+                "removed": [],
+            },
+            {
+                "id": "rebase-old-3",
+                "message": "feat: update shared path 2",
+                "added": [],
+                "modified": ["lab_rebase/shared.txt"],
+                "removed": [],
+            },
+        ],
+    }
+    second_payload = {
+        "ref": "refs/heads/feature/rebase-drop",
+        "before": "rebase-old-3",
+        "after": "rebase-new-1",
+        "deleted": False,
+        "forced": True,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/rebase-drop",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "rebase-new-1",
+                "message": "feat: rewritten shared path",
+                "added": [],
+                "modified": ["lab_rebase/shared.txt"],
+                "removed": [],
+            },
+        ],
+    }
+
+    assert post_github_webhook(client, "github-rebase-drop-1", first_payload).status_code == 202
+    assert post_github_webhook(client, "github-rebase-drop-2", second_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/rebase-drop")
+    branch_commits = {
+        item["commitSha"]: item
+        for item in state["branchCommits"]
+        if item["branchId"] == branch["id"]
+    }
+    branch_files = sorted(
+        item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
+    )
+
+    assert branch_commits["rebase-old-1"]["isActive"] is True
+    assert branch_commits["rebase-old-2"]["isActive"] is False
+    assert branch_commits["rebase-old-3"]["isActive"] is False
+    assert branch_commits["rebase-new-1"]["isActive"] is True
+    assert branch_files == ["lab_rebase/base.txt", "lab_rebase/shared.txt"]
+
+
+def test_conflict_watch_github_squash_force_push_replaces_old_multiple_commits_with_single_new_commit(client):
+    first_payload = {
+        "ref": "refs/heads/feature/squash-force-push",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "squash-old-3",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/squash",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "squash-old-1",
+                "message": "feat: add a",
+                "added": ["lab_squash/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "squash-old-2",
+                "message": "feat: add b",
+                "added": ["lab_squash/b.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "squash-old-3",
+                "message": "feat: add c",
+                "added": ["lab_squash/c.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    second_payload = {
+        "ref": "refs/heads/feature/squash-force-push",
+        "before": "squash-old-3",
+        "after": "squash-new-1",
+        "deleted": False,
+        "forced": True,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/squash",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "squash-new-1",
+                "message": "feat: squash a b c",
+                "added": ["lab_squash/a.txt", "lab_squash/b.txt", "lab_squash/c.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+
+    assert post_github_webhook(client, "github-squash-1", first_payload).status_code == 202
+    assert post_github_webhook(client, "github-squash-2", second_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/squash-force-push")
+    branch_commits = {
+        item["commitSha"]: item
+        for item in state["branchCommits"]
+        if item["branchId"] == branch["id"]
+    }
+    branch_files = sorted(
+        item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
+    )
+
+    assert branch_commits["squash-old-1"]["isActive"] is False
+    assert branch_commits["squash-old-2"]["isActive"] is False
+    assert branch_commits["squash-old-3"]["isActive"] is False
+    assert branch_commits["squash-new-1"]["isActive"] is True
+    assert branch_files == ["lab_squash/a.txt", "lab_squash/b.txt", "lab_squash/c.txt"]
+
+
+def test_conflict_watch_github_rename_infers_previous_path_and_rebuilds_current_files(client):
+    payload = {
+        "ref": "refs/heads/feature/rename-inference",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "rename-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "rename/inference",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "rename-1",
+                "message": "rename old to new",
+                "added": ["lab_rename/new_name.txt"],
+                "modified": [],
+                "removed": ["lab_rename/old_name.txt"],
+            },
+        ],
+    }
+
+    assert post_github_webhook(client, "github-rename-1", payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/rename-inference")
+    event = next(item for item in state["webhookEvents"] if item["deliveryId"] == "github-rename-1")
+    branch_files = [item for item in state["branchFiles"] if item["branchId"] == branch["id"]]
+    branch_commit_file = next(
+        item
+        for item in state["branchCommitFiles"]
+        if item["branchId"] == branch["id"] and item["commitSha"] == "rename-1"
+    )
+
+    assert event["filesRenamed"] == [{"oldPath": "lab_rename/old_name.txt", "newPath": "lab_rename/new_name.txt"}]
+    assert [item["normalizedFilePath"] for item in branch_files] == ["lab_rename/new_name.txt"]
+    assert branch_files[0]["previousPath"] == "lab_rename/old_name.txt"
+    assert branch_commit_file["changeType"] == "renamed"
+    assert branch_commit_file["previousPath"] == "lab_rename/old_name.txt"
+
+
+def test_conflict_watch_github_revert_heuristic_can_remove_reverted_path_from_current_files(client):
+    first_payload = {
+        "ref": "refs/heads/feature/revert-heuristic",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "abcdef1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "revert/heuristic",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "abcdef1",
+                "message": "feat: modify revert target",
+                "added": [],
+                "modified": ["lab_revert/a.txt"],
+                "removed": [],
+            },
+        ],
+    }
+    second_payload = {
+        "ref": "refs/heads/feature/revert-heuristic",
+        "before": "abcdef1",
+        "after": "abcdef2",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "revert/heuristic",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "abcdef2",
+                "message": "Revert \"feat: modify revert target\"\n\nThis reverts commit abcdef1.",
+                "added": [],
+                "modified": ["lab_revert/a.txt"],
+                "removed": [],
+            },
+        ],
+    }
+
+    assert post_github_webhook(client, "github-revert-1", first_payload).status_code == 202
+    assert post_github_webhook(client, "github-revert-2", second_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/revert-heuristic")
+    branch_files = [item for item in state["branchFiles"] if item["branchId"] == branch["id"]]
+
+    assert branch_files == []
+
+
+def test_conflict_watch_possibly_inconsistent_branch_is_not_treated_as_normal_conflict_input(client):
+    first_payload = {
+        "ref": "refs/heads/feature/inconsistent-a",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "inconsistent-a-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "conflict/inconsistent",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "inconsistent-a-1",
+                "message": "feat: branch a",
+                "added": [],
+                "modified": ["lab_conflict/shared.txt"],
+                "removed": [],
+            },
+        ],
+    }
+    second_payload = {
+        "ref": "refs/heads/feature/inconsistent-b",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "inconsistent-b-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "conflict/inconsistent",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "inconsistent-b-1",
+                "message": "feat: branch b",
+                "added": [],
+                "modified": ["lab_conflict/shared.txt"],
+                "removed": [],
+            },
+        ],
+    }
+    third_payload = {
+        "ref": "refs/heads/feature/inconsistent-b",
+        "before": "unknown-previous-head",
+        "after": "unknown-rewrite-head",
+        "deleted": False,
+        "forced": True,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "conflict/inconsistent",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "unknown-rewrite-head",
+                "message": "feat: rewritten branch b",
+                "added": [],
+                "modified": ["lab_conflict/other.txt"],
+                "removed": [],
+            },
+        ],
+    }
+
+    assert post_github_webhook(client, "github-inconsistent-1", first_payload).status_code == 202
+    second_response = post_github_webhook(client, "github-inconsistent-2", second_payload)
+    assert second_response.status_code == 202
+    second_state = client.get("/tools/conflict-watch/api/state").json()
+    active_conflict = next(
+        conflict for conflict in second_state["conflicts"] if conflict["normalizedFilePath"] == "lab_conflict/shared.txt"
+    )
+    assert active_conflict["status"] == "warning"
+
+    third_response = post_github_webhook(client, "github-inconsistent-3", third_payload)
+    assert third_response.status_code == 202
+    updated_state = client.get("/tools/conflict-watch/api/state").json()
+    branch_b = next(branch for branch in updated_state["branches"] if branch["branchName"] == "feature/inconsistent-b")
+    updated_conflict = next(
+        conflict for conflict in updated_state["conflicts"] if conflict["normalizedFilePath"] == "lab_conflict/shared.txt"
+    )
+
+    assert branch_b["possiblyInconsistent"] is True
+    assert updated_conflict["status"] == "notice"
+    assert updated_conflict["confidence"] == "low"
+
+
 def test_conflict_watch_github_branch_delete_marks_branch_deleted_and_clears_current_files(client):
     from sqlalchemy import select
 
