@@ -108,6 +108,7 @@ def test_conflict_watch_update_settings_persists_slack_webhook(client):
             "staleDays": 21,
             "longUnresolvedDays": 9,
             "rawPayloadRetentionDays": 15,
+            "processingTraceEnabled": False,
             "forcePushNoteEnabled": True,
             "suppressNoticeNotifications": False,
             "notificationDestination": "#alerts",
@@ -122,6 +123,7 @@ def test_conflict_watch_update_settings_persists_slack_webhook(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["state"]["settings"]["slackWebhookUrl"] == "https://hooks.slack.com/services/test/example"
+    assert payload["state"]["settings"]["processingTraceEnabled"] is False
 
 
 def test_conflict_watch_simulated_webhook_creates_branch(client):
@@ -213,6 +215,116 @@ def test_conflict_watch_simulated_webhook_raw_payload_is_viewable(client):
     raw_content = json.loads(payload["content"])
     assert raw_content["branchName"] == "feature/raw-payload"
     assert raw_content["modified"] == "app/conflicts/service.py"
+
+
+def test_conflict_watch_simulated_webhook_processing_trace_is_viewable(client):
+    repository_response = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "hotdock",
+            "externalRepoId": "processing-trace/simulated",
+        },
+    )
+    repository_id = repository_response.json()["state"]["repositories"][0]["id"]
+
+    response = client.post(
+        "/tools/conflict-watch/api/simulate-webhook",
+        json={
+            "repositoryId": repository_id,
+            "provider": "github",
+            "deliveryId": "processing-trace-simulated-1",
+            "branchName": "feature/processing-trace",
+            "pusher": "tester",
+            "signatureStatus": "valid",
+            "deletedState": "false",
+            "simulateFailure": False,
+            "isForced": False,
+            "added": "app/conflicts/service.py",
+            "modified": "",
+            "removed": "",
+            "renamed": "",
+        },
+    )
+
+    assert response.status_code == 200
+    event = next(
+        item
+        for item in response.json()["state"]["webhookEvents"]
+        if item["deliveryId"] == "processing-trace-simulated-1"
+    )
+
+    trace_response = client.get(f"/tools/conflict-watch/api/webhook-events/{event['id']}/processing-trace")
+
+    assert trace_response.status_code == 200
+    trace_payload = trace_response.json()
+    assert trace_payload["isAvailable"] is True
+    trace_json = json.loads(trace_payload["content"])
+    labels = [entry["label"] for entry in trace_json["entries"]]
+    assert "webhook_event_created" in labels
+    assert "normal_push_completed" in labels
+
+
+def test_conflict_watch_processing_trace_can_be_disabled_from_settings(client):
+    settings_response = client.patch(
+        "/tools/conflict-watch/api/settings",
+        json={
+            "staleDays": 21,
+            "longUnresolvedDays": 9,
+            "rawPayloadRetentionDays": 15,
+            "processingTraceEnabled": False,
+            "forcePushNoteEnabled": True,
+            "suppressNoticeNotifications": False,
+            "notificationDestination": "#alerts",
+            "slackWebhookUrl": "",
+            "githubWebhookEndpoint": "/tools/conflict-watch/webhooks/github",
+            "backlogWebhookEndpoint": "/tools/conflict-watch/webhooks/backlog",
+            "githubWebhookSecret": "ghs_demo_hotdock",
+            "backlogWebhookSecret": "backlog_demo_secret",
+        },
+    )
+    assert settings_response.status_code == 200
+
+    repository_response = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "hotdock",
+            "externalRepoId": "processing-trace/disabled",
+        },
+    )
+    repository_id = repository_response.json()["state"]["repositories"][0]["id"]
+
+    response = client.post(
+        "/tools/conflict-watch/api/simulate-webhook",
+        json={
+            "repositoryId": repository_id,
+            "provider": "github",
+            "deliveryId": "processing-trace-disabled-1",
+            "branchName": "feature/processing-trace-disabled",
+            "pusher": "tester",
+            "signatureStatus": "valid",
+            "deletedState": "false",
+            "simulateFailure": False,
+            "isForced": False,
+            "added": "app/conflicts/service.py",
+            "modified": "",
+            "removed": "",
+            "renamed": "",
+        },
+    )
+
+    assert response.status_code == 200
+    event = next(
+        item
+        for item in response.json()["state"]["webhookEvents"]
+        if item["deliveryId"] == "processing-trace-disabled-1"
+    )
+
+    trace_response = client.get(f"/tools/conflict-watch/api/webhook-events/{event['id']}/processing-trace")
+
+    assert trace_response.status_code == 200
+    assert trace_response.json()["isAvailable"] is False
 
 
 def test_conflict_watch_simulated_webhook_payload_hash_is_fixed_length(client):
@@ -815,6 +927,54 @@ def test_conflict_watch_github_webhook_raw_payload_preserves_original_json(clien
     payload_log = payload_response.json()
     assert payload_log["isAvailable"] is True
     assert json.loads(payload_log["content"]) == payload
+
+
+def test_conflict_watch_github_webhook_processing_trace_is_viewable(client):
+    payload = {
+        "ref": "refs/heads/feature/github-processing-trace",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "trace-commit-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "github/processing-trace",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "trace-commit-1",
+                "added": ["app/conflicts/service.py"],
+                "modified": [],
+                "removed": [],
+            }
+        ],
+    }
+
+    response = post_github_webhook(client, "github-delivery-processing-trace", payload)
+
+    assert response.status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    event = next(
+        item
+        for item in state["webhookEvents"]
+        if item["deliveryId"] == "github-delivery-processing-trace"
+    )
+
+    trace_response = client.get(f"/tools/conflict-watch/api/webhook-events/{event['id']}/processing-trace")
+
+    assert trace_response.status_code == 200
+    trace_payload = trace_response.json()
+    assert trace_payload["isAvailable"] is True
+    trace_json = json.loads(trace_payload["content"])
+    labels = [entry["label"] for entry in trace_json["entries"]]
+    assert "payload_parsed" in labels
+    assert "observed_commits_extracted" in labels
+    assert "normal_push_completed" in labels
+    assert "reconcile_repository_completed" in labels
 
 
 def test_conflict_watch_github_webhook_persists_branch_commit_history(client):

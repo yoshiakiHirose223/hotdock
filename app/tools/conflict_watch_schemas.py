@@ -21,6 +21,7 @@ class SettingsUpdateRequest(BaseModel):
     staleDays: int
     longUnresolvedDays: int
     rawPayloadRetentionDays: int
+    processingTraceEnabled: bool
     forcePushNoteEnabled: bool
     suppressNoticeNotifications: bool
     notificationDestination: str
@@ -99,5 +100,15 @@ class WebhookEventRawPayloadResponse(BaseModel):
     deliveryId: str
     rawPayloadRef: str = ""
     rawPayloadExpiredAt: str | None = None
+    isAvailable: bool = False
+    content: str = ""
+
+
+class WebhookEventProcessingTraceResponse(BaseModel):
+    eventId: int
+    providerType: str
+    deliveryId: str
+    processingTraceRef: str = ""
+    processingTraceExpiredAt: str | None = None
     isAvailable: bool = False
     content: str = ""

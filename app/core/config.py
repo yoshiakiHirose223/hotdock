@@ -62,6 +62,10 @@ class Settings(BaseSettings):
         return self.conflict_watch_dir / "payloads"
 
     @property
+    def conflict_watch_processing_logs_dir(self) -> Path:
+        return self.conflict_watch_dir / "processing_logs"
+
+    @property
     def shared_templates_dir(self) -> Path:
         return self.base_dir / "app" / "templates"
 

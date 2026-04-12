@@ -71,6 +71,8 @@ def ensure_legacy_blog_schema() -> None:
         with engine.begin() as connection:
             if "slack_webhook_url" not in cw_columns:
                 connection.execute(text("ALTER TABLE cw_settings ADD COLUMN slack_webhook_url VARCHAR(500)"))
+            if "processing_trace_enabled" not in cw_columns:
+                connection.execute(text("ALTER TABLE cw_settings ADD COLUMN processing_trace_enabled BOOLEAN NOT NULL DEFAULT TRUE"))
 
     if "cw_conflicts" in inspector.get_table_names():
         conflict_columns = {column["name"]: column for column in inspector.get_columns("cw_conflicts")}

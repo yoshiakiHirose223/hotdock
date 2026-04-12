@@ -24,6 +24,7 @@ const uiState = {
   isSideDrawerOpen: false,
   webhookDraft: { ...WEBHOOK_FORM_DEFAULTS },
   webhookPayloadsByEventId: {},
+  webhookProcessingTracesByEventId: {},
   newIgnorePattern: "",
   newRepositoryName: "",
   newRepositoryExternalId: "",
@@ -38,6 +39,7 @@ const uiState = {
   pendingBranchScrollId: null,
   highlightedBranchId: null,
   highlightedConflictKey: "",
+  expandedWebhookTraceIds: [],
   branchFileIgnoreDialog: {
     isOpen: false,
     mode: "create",
@@ -68,7 +70,9 @@ function syncSelections() {
     uiState.expandedBranchIds = [];
     uiState.expandedConflictIds = [];
     uiState.expandedWebhookPayloadIds = [];
+    uiState.expandedWebhookTraceIds = [];
     uiState.webhookPayloadsByEventId = {};
+    uiState.webhookProcessingTracesByEventId = {};
     return;
   }
 
@@ -122,8 +126,12 @@ function syncSelections() {
       .map((event) => event.id),
   );
   uiState.expandedWebhookPayloadIds = uiState.expandedWebhookPayloadIds.filter((eventId) => webhookEventIds.has(eventId));
+  uiState.expandedWebhookTraceIds = uiState.expandedWebhookTraceIds.filter((eventId) => webhookEventIds.has(eventId));
   uiState.webhookPayloadsByEventId = Object.fromEntries(
     Object.entries(uiState.webhookPayloadsByEventId).filter(([eventId]) => webhookEventIds.has(Number(eventId))),
+  );
+  uiState.webhookProcessingTracesByEventId = Object.fromEntries(
+    Object.entries(uiState.webhookProcessingTracesByEventId).filter(([eventId]) => webhookEventIds.has(Number(eventId))),
   );
 }
 
@@ -277,6 +285,14 @@ function toggleExpandedWebhookPayload(eventId) {
   }
 }
 
+function toggleExpandedWebhookTrace(eventId) {
+  if (uiState.expandedWebhookTraceIds.includes(eventId)) {
+    uiState.expandedWebhookTraceIds = uiState.expandedWebhookTraceIds.filter((id) => id !== eventId);
+  } else {
+    uiState.expandedWebhookTraceIds = [...uiState.expandedWebhookTraceIds, eventId];
+  }
+}
+
 function buildWebhookDraftFromEvent(event) {
   const renamed = Array.isArray(event.filesRenamed)
     ? event.filesRenamed
@@ -350,6 +366,53 @@ async function fetchWebhookPayload(eventId) {
       },
     };
     uiState.feedbackMessage = error instanceof Error ? error.message : "raw payload の取得に失敗しました。";
+    uiState.feedbackTone = "warning";
+  }
+  render();
+}
+
+async function fetchWebhookProcessingTrace(eventId) {
+  uiState.webhookProcessingTracesByEventId = {
+    ...uiState.webhookProcessingTracesByEventId,
+    [eventId]: {
+      ...(uiState.webhookProcessingTracesByEventId[eventId] ?? {}),
+      isLoading: true,
+      errorMessage: "",
+    },
+  };
+  render();
+
+  try {
+    const response = await fetch(`${API_BASE}/webhook-events/${eventId}/processing-trace`, {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.detail ?? "処理ログの取得に失敗しました。");
+    }
+    uiState.webhookProcessingTracesByEventId = {
+      ...uiState.webhookProcessingTracesByEventId,
+      [eventId]: {
+        ...payload,
+        isLoading: false,
+        errorMessage: "",
+      },
+    };
+  } catch (error) {
+    uiState.webhookProcessingTracesByEventId = {
+      ...uiState.webhookProcessingTracesByEventId,
+      [eventId]: {
+        eventId,
+        processingTraceRef: "",
+        processingTraceExpiredAt: null,
+        isAvailable: false,
+        content: "",
+        isLoading: false,
+        errorMessage: error instanceof Error ? error.message : "処理ログの取得に失敗しました。",
+      },
+    };
+    uiState.feedbackMessage = error instanceof Error ? error.message : "処理ログの取得に失敗しました。";
     uiState.feedbackTone = "warning";
   }
   render();
@@ -595,6 +658,21 @@ root.addEventListener("click", async (event) => {
     toggleExpandedWebhookPayload(webhookId);
     if (!wasExpanded && !uiState.webhookPayloadsByEventId[webhookId]) {
       await fetchWebhookPayload(webhookId);
+      return;
+    }
+    render();
+    return;
+  }
+
+  if (action === "toggle-webhook-processing-trace") {
+    const webhookId = toNumber(actionTarget.getAttribute("data-webhook-id"));
+    if (webhookId === null) {
+      return;
+    }
+    const wasExpanded = uiState.expandedWebhookTraceIds.includes(webhookId);
+    toggleExpandedWebhookTrace(webhookId);
+    if (!wasExpanded && !uiState.webhookProcessingTracesByEventId[webhookId]) {
+      await fetchWebhookProcessingTrace(webhookId);
       return;
     }
     render();

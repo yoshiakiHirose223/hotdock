@@ -31,6 +31,7 @@ export const DEFAULT_SETTINGS = {
   staleDays: 15,
   longUnresolvedDays: 7,
   rawPayloadRetentionDays: 14,
+  processingTraceEnabled: true,
   forcePushNoteEnabled: true,
   suppressNoticeNotifications: false,
   notificationDestination: "#conflict-watch",

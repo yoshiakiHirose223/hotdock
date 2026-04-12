@@ -1,0 +1,2 @@
+ALTER TABLE cw_settings
+ADD COLUMN IF NOT EXISTS processing_trace_enabled BOOLEAN NOT NULL DEFAULT TRUE;

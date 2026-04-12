@@ -19,6 +19,7 @@ from app.tools.conflict_watch_schemas import (
     RepositoryCreateRequest,
     SettingsUpdateRequest,
     SimulatedWebhookRequest,
+    WebhookEventProcessingTraceResponse,
     WebhookEventRawPayloadResponse,
 )
 from app.tools.conflict_watch_service import ConflictWatchService
@@ -178,6 +179,7 @@ async def conflict_watch_update_settings(
             "staleDays": payload.staleDays,
             "longUnresolvedDays": payload.longUnresolvedDays,
             "rawPayloadRetentionDays": payload.rawPayloadRetentionDays,
+            "processingTraceEnabled": payload.processingTraceEnabled,
             "forcePushNoteEnabled": payload.forcePushNoteEnabled,
             "suppressNoticeNotifications": payload.suppressNoticeNotifications,
             "notificationDestination": payload.notificationDestination,
@@ -367,6 +369,16 @@ async def conflict_watch_webhook_raw_payload(
 ):
     response.headers["Cache-Control"] = "no-store"
     return conflict_watch_service.get_webhook_event_raw_payload(db, event_id)
+
+
+@router.get("/conflict-watch/api/webhook-events/{event_id}/processing-trace", response_model=WebhookEventProcessingTraceResponse)
+async def conflict_watch_webhook_processing_trace(
+    event_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "no-store"
+    return conflict_watch_service.get_webhook_event_processing_trace(db, event_id)
 
 
 @router.post(

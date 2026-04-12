@@ -364,6 +364,7 @@ class ConflictWatchSetting(Base):
     stale_days: Mapped[int] = mapped_column(default=15)
     long_unresolved_days: Mapped[int] = mapped_column(default=7)
     raw_payload_retention_days: Mapped[int] = mapped_column(default=14)
+    processing_trace_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     force_push_note_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     suppress_notice_notifications: Mapped[bool] = mapped_column(Boolean, default=False)
     notification_destination: Mapped[str] = mapped_column(String(255), default="#conflict-watch")

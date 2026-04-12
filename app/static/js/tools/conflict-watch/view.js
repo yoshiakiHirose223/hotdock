@@ -795,6 +795,42 @@ function renderWebhookPayloadPanel(payloadState, event) {
   `;
 }
 
+function renderWebhookProcessingTracePanel(traceState, event) {
+  if (traceState?.isLoading) {
+    return `
+      <div class="cw-webhook-payload">
+        <p class="cw-table-subline">処理ログを読み込んでいます...</p>
+      </div>
+    `;
+  }
+  if (traceState?.errorMessage) {
+    return `
+      <div class="cw-webhook-payload">
+        <p class="cw-row-note">${escapeHtml(traceState.errorMessage)}</p>
+      </div>
+    `;
+  }
+  if (!traceState?.isAvailable) {
+    const message = event.rawPayloadExpiredAt
+      ? `保持期限切れです (${formatDateTime(event.rawPayloadExpiredAt)})`
+      : "処理ログはまだ保存されていません。";
+    return `
+      <div class="cw-webhook-payload">
+        <p class="cw-table-subline">${escapeHtml(message)}</p>
+      </div>
+    `;
+  }
+  return `
+    <div class="cw-webhook-payload">
+      <div class="cw-webhook-payload-header">
+        <span>processing trace</span>
+        <strong>${escapeHtml(traceState.processingTraceRef || "-")}</strong>
+      </div>
+      <pre class="cw-webhook-payload-code"><code>${escapeHtml(traceState.content)}</code></pre>
+    </div>
+  `;
+}
+
 function renderWebhookEvents(viewModel) {
   return `
     <section class="cw-card">
@@ -818,6 +854,8 @@ function renderWebhookEvents(viewModel) {
         ${viewModel.webhookEvents.map((event) => {
           const isPayloadOpen = (viewModel.ui.expandedWebhookPayloadIds ?? []).includes(event.id);
           const payloadState = viewModel.ui.webhookPayloadsByEventId?.[event.id] ?? null;
+          const isTraceOpen = (viewModel.ui.expandedWebhookTraceIds ?? []).includes(event.id);
+          const traceState = viewModel.ui.webhookProcessingTracesByEventId?.[event.id] ?? null;
           return `
           <li>
             <strong>${escapeHtml(event.providerType)} / ${escapeHtml(event.branchName)}</strong>
@@ -832,11 +870,15 @@ function renderWebhookEvents(viewModel) {
               <button type="button" class="secondary" data-action="toggle-webhook-payload" data-webhook-id="${event.id}">
                 ${isPayloadOpen ? "raw payload を閉じる" : "raw payload を表示"}
               </button>
+              <button type="button" class="secondary" data-action="toggle-webhook-processing-trace" data-webhook-id="${event.id}">
+                ${isTraceOpen ? "処理ログを閉じる" : "処理ログを表示"}
+              </button>
               ${event.processStatus === "processing_failed"
                 ? `<button type="button" class="secondary" data-action="reprocess-webhook" data-webhook-id="${event.id}"${event.rawPayloadRef ? "" : " disabled"}>raw payload から再処理</button>`
                 : ""}
             </div>
             ${isPayloadOpen ? renderWebhookPayloadPanel(payloadState, event) : ""}
+            ${isTraceOpen ? renderWebhookProcessingTracePanel(traceState, event) : ""}
           </li>
         `;
         }).join("") || "<li>Webhook はまだ受信していません。</li>"}
@@ -890,6 +932,10 @@ function renderSettings(viewModel) {
           <label>raw payload 保持日数</label>
           <input type="number" min="1" value="${escapeHtml(viewModel.settings.rawPayloadRetentionDays)}" data-setting="rawPayloadRetentionDays">
         </div>
+        <label class="cw-checkbox">
+          <input type="checkbox" data-setting="processingTraceEnabled"${viewModel.settings.processingTraceEnabled ? " checked" : ""}>
+          <span>Webhook 後処理の詳細ログを保存する</span>
+        </label>
         <div>
           <label>Slack 送信先</label>
           <input type="text" value="${escapeHtml(viewModel.settings.notificationDestination)}" data-setting="notificationDestination">

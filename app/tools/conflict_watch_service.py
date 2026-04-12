@@ -87,6 +87,7 @@ class ConflictWatchService:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.settings.conflict_watch_payloads_dir.mkdir(parents=True, exist_ok=True)
+        self.settings.conflict_watch_processing_logs_dir.mkdir(parents=True, exist_ok=True)
 
     def now(self) -> datetime:
         return datetime.now(UTC)
@@ -185,6 +186,7 @@ class ConflictWatchService:
                 primary.stale_days = latest.stale_days
                 primary.long_unresolved_days = latest.long_unresolved_days
                 primary.raw_payload_retention_days = latest.raw_payload_retention_days
+                primary.processing_trace_enabled = latest.processing_trace_enabled
                 primary.force_push_note_enabled = latest.force_push_note_enabled
                 primary.suppress_notice_notifications = latest.suppress_notice_notifications
                 primary.notification_destination = latest.notification_destination
@@ -1262,17 +1264,23 @@ class ConflictWatchService:
         expire_before = now - timedelta(days=settings_row.raw_payload_retention_days)
         expired_events = db.scalars(
             select(ConflictWatchWebhookEvent).where(
-                ConflictWatchWebhookEvent.raw_payload_ref.is_not(None),
                 ConflictWatchWebhookEvent.received_at < expire_before,
             )
         ).all()
         for event in expired_events:
+            removed_any = False
             if event.raw_payload_ref:
                 payload_path = self.settings.base_dir / event.raw_payload_ref
                 if payload_path.exists():
                     payload_path.unlink()
+                    removed_any = True
             event.raw_payload_ref = None
-            event.raw_payload_expired_at = now
+            trace_path = self._processing_trace_path(event.provider_type, event.delivery_id)
+            if trace_path.exists():
+                trace_path.unlink()
+                removed_any = True
+            if removed_any:
+                event.raw_payload_expired_at = now
 
     def _reconcile_all(
         self,
@@ -1280,6 +1288,8 @@ class ConflictWatchService:
         resolution_reason: str | None = None,
         resolution_context: dict[str, Any] | None = None,
         suppress_notifications: bool = False,
+        trace: dict[str, Any] | None = None,
+        trace_repository_id: int | None = None,
     ) -> None:
         settings_row = self._get_or_create_settings(db)
         self._refresh_raw_payload_retention(db, settings_row)
@@ -1432,6 +1442,17 @@ class ConflictWatchService:
                         now,
                     )
                 self._update_conflict_links(db, conflict, [])
+
+            if trace and (trace_repository_id is None or repository.id == trace_repository_id):
+                self._trace_step(
+                    trace,
+                    "reconcile_repository_completed",
+                    repositoryId=repository.id,
+                    repositoryName=repository.repository_name,
+                    activeGroupPaths=sorted(active_groups.keys()),
+                    inconsistentPaths=sorted(inconsistent_paths),
+                    conflicts=self._trace_repository_conflicts(db, repository.id),
+                )
 
         db.flush()
 
@@ -1653,6 +1674,7 @@ class ConflictWatchService:
             "staleDays": settings_row.stale_days,
             "longUnresolvedDays": settings_row.long_unresolved_days,
             "rawPayloadRetentionDays": settings_row.raw_payload_retention_days,
+            "processingTraceEnabled": settings_row.processing_trace_enabled,
             "forcePushNoteEnabled": settings_row.force_push_note_enabled,
             "suppressNoticeNotifications": settings_row.suppress_notice_notifications,
             "notificationDestination": settings_row.notification_destination,
@@ -1810,6 +1832,7 @@ class ConflictWatchService:
         settings_row.stale_days = int(payload.get("staleDays", settings_row.stale_days))
         settings_row.long_unresolved_days = int(payload.get("longUnresolvedDays", settings_row.long_unresolved_days))
         settings_row.raw_payload_retention_days = int(payload.get("rawPayloadRetentionDays", settings_row.raw_payload_retention_days))
+        settings_row.processing_trace_enabled = bool(payload.get("processingTraceEnabled", settings_row.processing_trace_enabled))
         settings_row.force_push_note_enabled = bool(payload.get("forcePushNoteEnabled", settings_row.force_push_note_enabled))
         settings_row.suppress_notice_notifications = bool(payload.get("suppressNoticeNotifications", settings_row.suppress_notice_notifications))
         settings_row.notification_destination = str(payload.get("notificationDestination", settings_row.notification_destination)).strip() or settings_row.notification_destination
@@ -2132,6 +2155,13 @@ class ConflictWatchService:
         payload_path.write_bytes(payload_bytes)
         return str(payload_path.relative_to(self.settings.base_dir))
 
+    def _processing_trace_path(self, provider_type: str, delivery_id: str) -> Path:
+        filename = f"{provider_type}-{delivery_id}.json"
+        return self.settings.conflict_watch_processing_logs_dir / filename
+
+    def _processing_trace_ref(self, provider_type: str, delivery_id: str) -> str:
+        return str(self._processing_trace_path(provider_type, delivery_id).relative_to(self.settings.base_dir))
+
     def _read_raw_payload(self, raw_payload_ref: str | None) -> str | None:
         normalized_ref = str(raw_payload_ref or "").strip()
         if not normalized_ref:
@@ -2146,6 +2176,172 @@ class ConflictWatchService:
             return None
         return payload_path.read_text(encoding="utf-8", errors="replace")
 
+    def _read_processing_trace(self, provider_type: str, delivery_id: str) -> str | None:
+        trace_path = self._processing_trace_path(provider_type, delivery_id)
+        if not trace_path.exists() or not trace_path.is_file():
+            return None
+        return trace_path.read_text(encoding="utf-8", errors="replace")
+
+    def _store_processing_trace(self, provider_type: str, delivery_id: str, trace_payload: dict[str, Any]) -> str:
+        trace_path = self._processing_trace_path(provider_type, delivery_id)
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_path.write_text(
+            json.dumps(trace_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return str(trace_path.relative_to(self.settings.base_dir))
+
+    def _delete_processing_trace_for_event(self, event: ConflictWatchWebhookEvent) -> None:
+        trace_path = self._processing_trace_path(event.provider_type, event.delivery_id)
+        if trace_path.exists() and trace_path.is_file():
+            trace_path.unlink()
+
+    def _trace_safe_value(self, value: Any) -> Any:
+        if isinstance(value, datetime):
+            return self._iso(value)
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, dict):
+            return {str(key): self._trace_safe_value(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [self._trace_safe_value(item) for item in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    def _start_processing_trace(
+        self,
+        *,
+        enabled: bool,
+        provider_type: str,
+        delivery_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "enabled": enabled,
+            "providerType": provider_type,
+            "deliveryId": delivery_id,
+            "startedAt": self._iso(self.now()),
+            "entries": [],
+        }
+
+    def _trace_step(self, trace: dict[str, Any] | None, label: str, **detail: Any) -> None:
+        if not trace or not trace.get("enabled"):
+            return
+        entries = trace.setdefault("entries", [])
+        entries.append({
+            "at": self._iso(self.now()),
+            "label": label,
+            "detail": self._trace_safe_value(detail),
+        })
+
+    def _trace_observed_commits(self, observed_commits: list[ObservedCommit]) -> list[dict[str, Any]]:
+        return [
+            {
+                "commitSha": observed_commit.commit_sha,
+                "observedAt": self._iso(observed_commit.observed_at),
+                "message": observed_commit.message,
+                "revertTargetSha": observed_commit.revert_target_sha,
+                "changes": [
+                    {
+                        "filePath": change.file_path,
+                        "normalizedFilePath": change.normalized_file_path,
+                        "changeType": change.change_type,
+                        "previousPath": change.previous_path,
+                    }
+                    for change in observed_commit.changes
+                ],
+            }
+            for observed_commit in observed_commits
+        ]
+
+    def _trace_branch_snapshot(self, db: Session, branch: ConflictWatchBranch) -> dict[str, Any]:
+        branch_commits = db.scalars(
+            select(ConflictWatchBranchCommit)
+            .where(
+                ConflictWatchBranchCommit.repository_id == branch.repository_id,
+                ConflictWatchBranchCommit.branch_id == branch.id,
+            )
+            .order_by(ConflictWatchBranchCommit.sequence_no.asc())
+        ).all()
+        branch_files = db.scalars(
+            select(ConflictWatchBranchFile)
+            .where(
+                ConflictWatchBranchFile.repository_id == branch.repository_id,
+                ConflictWatchBranchFile.branch_id == branch.id,
+            )
+            .order_by(ConflictWatchBranchFile.normalized_file_path.asc())
+        ).all()
+        return {
+            "branchId": branch.id,
+            "branchName": branch.branch_name,
+            "lastPushAt": self._iso(branch.last_push_at),
+            "lastSeenAt": self._iso(branch.last_seen_at),
+            "latestAfterSha": branch.latest_after_sha,
+            "isDeleted": branch.is_deleted,
+            "possiblyInconsistent": branch.possibly_inconsistent,
+            "activeCommits": [
+                {
+                    "commitSha": item.commit_sha,
+                    "sequenceNo": item.sequence_no,
+                }
+                for item in branch_commits
+                if item.is_active
+            ],
+            "inactiveCommits": [
+                {
+                    "commitSha": item.commit_sha,
+                    "sequenceNo": item.sequence_no,
+                }
+                for item in branch_commits
+                if not item.is_active
+            ],
+            "currentFiles": [
+                {
+                    "normalizedFilePath": item.normalized_file_path,
+                    "changeType": item.change_type,
+                    "previousPath": item.previous_path,
+                }
+                for item in branch_files
+            ],
+        }
+
+    def _trace_repository_conflicts(self, db: Session, repository_id: int) -> list[dict[str, Any]]:
+        conflicts = db.scalars(
+            select(ConflictWatchConflict)
+            .where(ConflictWatchConflict.repository_id == repository_id)
+            .order_by(ConflictWatchConflict.normalized_file_path.asc())
+        ).all()
+        return [
+            {
+                "conflictKey": conflict.conflict_key,
+                "normalizedFilePath": conflict.normalized_file_path,
+                "status": conflict.status,
+                "confidence": conflict.confidence,
+                "activeBranchIds": [link.branch_id for link in conflict.conflict_branches],
+            }
+            for conflict in conflicts
+        ]
+
+    def _finalize_processing_trace(
+        self,
+        event: ConflictWatchWebhookEvent | None,
+        trace: dict[str, Any] | None,
+        *,
+        outcome: str,
+        error: str | None = None,
+    ) -> None:
+        if not trace or not trace.get("enabled") or event is None:
+            return
+        trace["finishedAt"] = self._iso(self.now())
+        trace["outcome"] = outcome
+        if error:
+            trace["error"] = error
+        trace["processingTraceRef"] = self._store_processing_trace(
+            event.provider_type,
+            event.delivery_id,
+            trace,
+        )
+
     def get_webhook_event_raw_payload(self, db: Session, event_id: int) -> dict[str, Any]:
         event = db.get(ConflictWatchWebhookEvent, event_id)
         if not event:
@@ -2157,6 +2353,21 @@ class ConflictWatchService:
             "deliveryId": event.delivery_id,
             "rawPayloadRef": event.raw_payload_ref or "",
             "rawPayloadExpiredAt": self._iso(event.raw_payload_expired_at),
+            "isAvailable": content is not None,
+            "content": content or "",
+        }
+
+    def get_webhook_event_processing_trace(self, db: Session, event_id: int) -> dict[str, Any]:
+        event = db.get(ConflictWatchWebhookEvent, event_id)
+        if not event:
+            raise HTTPException(status_code=404, detail="Webhook event not found")
+        content = self._read_processing_trace(event.provider_type, event.delivery_id)
+        return {
+            "eventId": event.id,
+            "providerType": event.provider_type,
+            "deliveryId": event.delivery_id,
+            "processingTraceRef": self._processing_trace_ref(event.provider_type, event.delivery_id),
+            "processingTraceExpiredAt": self._iso(event.raw_payload_expired_at),
             "isAvailable": content is not None,
             "content": content or "",
         }
@@ -2204,6 +2415,7 @@ class ConflictWatchService:
         db: Session,
         event: ConflictWatchWebhookEvent,
         observed_commits: list[ObservedCommit] | None = None,
+        trace: dict[str, Any] | None = None,
     ) -> bool:
         repository = db.scalar(select(ConflictWatchRepository).where(ConflictWatchRepository.id == event.repository_id))
         if not repository:
@@ -2211,7 +2423,21 @@ class ConflictWatchService:
         now = self.now()
         branch = self._get_or_create_branch(db, repository, event.branch_name, now=now)
         observed_at = event.pushed_at or now
+        self._trace_step(
+            trace,
+            "branch_loaded",
+            repositoryId=repository.id,
+            repositoryName=repository.repository_name,
+            branchSnapshot=self._trace_branch_snapshot(db, branch),
+        )
         if self._is_stale_branch_event(branch, event):
+            self._trace_step(
+                trace,
+                "stale_event_skipped",
+                branchName=branch.branch_name,
+                branchLastPushAt=self._iso(branch.last_push_at),
+                eventPushedAt=self._iso(event.pushed_at),
+            )
             return True
         branch.last_push_at = event.pushed_at or now
         branch.last_seen_at = now
@@ -2224,6 +2450,7 @@ class ConflictWatchService:
         if event.is_deleted is True:
             branch.is_deleted = True
             branch.possibly_inconsistent = False
+            self._trace_step(trace, "branch_delete_detected", branchName=branch.branch_name)
             self._mark_branch_history_inactive(
                 db,
                 branch,
@@ -2231,15 +2458,29 @@ class ConflictWatchService:
                 event_id=event.id,
             )
             self._clear_branch_cache(db, branch)
+            self._trace_step(trace, "branch_deleted_applied", branchSnapshot=self._trace_branch_snapshot(db, branch))
             return True
 
         branch.is_deleted = False
         observed_commits = observed_commits if observed_commits is not None else self._event_to_single_observed_commit(event)
         observed_commits = self._apply_revert_heuristics(db, branch, observed_commits)
+        self._trace_step(
+            trace,
+            "observed_commits_ready",
+            branchName=branch.branch_name,
+            observedCommits=self._trace_observed_commits(observed_commits),
+        )
 
         if event.is_forced:
             after_commit = self._get_branch_commit_by_sha(db, branch, event.after_sha)
             if after_commit is not None:
+                self._trace_step(
+                    trace,
+                    "force_push_strategy_after_known",
+                    branchName=branch.branch_name,
+                    afterSha=event.after_sha,
+                    targetSequenceNo=after_commit.sequence_no,
+                )
                 self._set_branch_history_active_through_sequence(
                     db,
                     branch,
@@ -2262,6 +2503,7 @@ class ConflictWatchService:
                     )
                 branch.possibly_inconsistent = False
                 self._rebuild_branch_current_files(db, branch)
+                self._trace_step(trace, "branch_update_completed", branchSnapshot=self._trace_branch_snapshot(db, branch))
                 return True
 
             before_commit = self._get_branch_commit_by_sha(
@@ -2276,6 +2518,15 @@ class ConflictWatchService:
                     branch,
                     before_commit,
                     observed_commits,
+                )
+                self._trace_step(
+                    trace,
+                    "force_push_strategy_before_known",
+                    branchName=branch.branch_name,
+                    beforeSha=event.before_sha,
+                    beforeSequenceNo=before_commit.sequence_no,
+                    rewriteStartSequence=rewrite_start_sequence,
+                    highConfidence=high_confidence,
                 )
                 self._set_branch_history_active_through_sequence(
                     db,
@@ -2294,10 +2545,19 @@ class ConflictWatchService:
                     )
                 branch.possibly_inconsistent = not high_confidence
                 self._rebuild_branch_current_files(db, branch)
+                self._trace_step(trace, "branch_update_completed", branchSnapshot=self._trace_branch_snapshot(db, branch))
                 return True
 
             branch.possibly_inconsistent = True
             has_active_head = self._get_active_branch_head_commit(db, branch) is not None
+            self._trace_step(
+                trace,
+                "force_push_strategy_unknown",
+                branchName=branch.branch_name,
+                beforeSha=event.before_sha,
+                afterSha=event.after_sha,
+                hasActiveHead=has_active_head,
+            )
             if observed_commits:
                 self._append_observed_commits(
                     db,
@@ -2308,6 +2568,7 @@ class ConflictWatchService:
                 )
                 if not has_active_head:
                     self._rebuild_branch_current_files(db, branch)
+            self._trace_step(trace, "branch_update_completed", branchSnapshot=self._trace_branch_snapshot(db, branch))
             return True
 
         if observed_commits:
@@ -2320,6 +2581,7 @@ class ConflictWatchService:
             )
         branch.possibly_inconsistent = False
         self._rebuild_branch_current_files(db, branch)
+        self._trace_step(trace, "normal_push_completed", branchSnapshot=self._trace_branch_snapshot(db, branch))
         return True
 
     def _create_webhook_event(
@@ -2391,6 +2653,7 @@ class ConflictWatchService:
         repository_id: int,
         payload: dict[str, Any],
     ) -> ServiceMessage:
+        settings_row = self._get_or_create_settings(db)
         repository = self._get_repository(db, repository_id)
         if not repository.is_active:
             raise HTTPException(status_code=400, detail="Webhook を適用する前に active な repository を選択してください。")
@@ -2400,6 +2663,18 @@ class ConflictWatchService:
 
         provider_type = str(payload.get("provider", repository.provider_type))
         delivery_id = str(payload.get("deliveryId", "")).strip() or f"{provider_type}-delivery-{int(self.now().timestamp() * 1000)}"
+        trace = self._start_processing_trace(
+            enabled=settings_row.processing_trace_enabled,
+            provider_type=provider_type,
+            delivery_id=delivery_id,
+        )
+        self._trace_step(
+            trace,
+            "simulate_webhook_received",
+            repositoryId=repository.id,
+            repositoryName=repository.repository_name,
+            payload=payload,
+        )
         signature_status = str(payload.get("signatureStatus", "valid"))
         if signature_status != "valid":
             self._record_security_log(
@@ -2459,21 +2734,36 @@ class ConflictWatchService:
             files_renamed=parse_renamed(payload.get("renamed", "")),
             raw_payload_ref=raw_payload_ref,
         )
+        self._trace_step(
+            trace,
+            "webhook_event_created",
+            eventId=event.id,
+            rawPayloadRef=raw_payload_ref,
+            filesAdded=event.files_added,
+            filesModified=event.files_modified,
+            filesRemoved=event.files_removed,
+            filesRenamed=event.files_renamed,
+        )
 
         if bool(payload.get("simulateFailure", False)):
             event.process_status = "processing_failed"
             event.processed_at = self.now()
             event.error_message = "worker が provider 共通形式への正規化中に失敗しました。"
+            self._trace_step(trace, "simulated_processing_failure", errorMessage=event.error_message)
+            self._finalize_processing_trace(event, trace, outcome="processing_failed")
             db.commit()
             return ServiceMessage(
                 "Webhook は登録しましたが、非同期処理で failed にしました。イベント一覧から再処理できます。",
                 "warning",
             )
 
+        observed_commits = self._event_to_single_observed_commit(event)
+        self._trace_step(trace, "observed_commits_extracted", observedCommits=self._trace_observed_commits(observed_commits))
         self._apply_event_to_branches(
             db,
             event,
-            self._event_to_single_observed_commit(event),
+            observed_commits,
+            trace=trace,
         )
         event.process_status = "processed"
         event.processed_at = self.now()
@@ -2482,7 +2772,10 @@ class ConflictWatchService:
             db,
             resolution_reason=resolution_reason,
             resolution_context=resolution_context,
+            trace=trace,
+            trace_repository_id=repository.id,
         )
+        self._finalize_processing_trace(event, trace, outcome="processed")
         db.commit()
         return ServiceMessage(f"{event.branch_name} へ Webhook を適用しました。")
 
@@ -2494,21 +2787,34 @@ class ConflictWatchService:
             raise HTTPException(status_code=400, detail="reprocess できるのは processing_failed の event のみです。")
         if not event.raw_payload_ref:
             raise HTTPException(status_code=400, detail="raw payload の保持期限が切れているため再処理できません。")
+        settings_row = self._get_or_create_settings(db)
+        trace = self._start_processing_trace(
+            enabled=settings_row.processing_trace_enabled,
+            provider_type=event.provider_type,
+            delivery_id=event.delivery_id,
+        )
+        self._trace_step(trace, "reprocess_started", eventId=event.id, previousStatus=event.process_status)
         event.error_message = None
         event.process_status = "processed"
         event.processed_at = self.now()
         event.pushed_at = self.now()
+        observed_commits = self._observed_commits_for_reprocess(event)
+        self._trace_step(trace, "observed_commits_extracted", observedCommits=self._trace_observed_commits(observed_commits))
         self._apply_event_to_branches(
             db,
             event,
-            self._observed_commits_for_reprocess(event),
+            observed_commits,
+            trace=trace,
         )
         resolution_reason, resolution_context = self._webhook_resolution_context(event)
         self._reconcile_all(
             db,
             resolution_reason=resolution_reason,
             resolution_context=resolution_context,
+            trace=trace,
+            trace_repository_id=event.repository_id,
         )
+        self._finalize_processing_trace(event, trace, outcome="reprocessed")
         db.commit()
         return ServiceMessage(f"{event.delivery_id} を raw payload から再処理しました。")
 
@@ -2614,6 +2920,19 @@ class ConflictWatchService:
         event_type: str,
     ) -> ServiceMessage:
         settings_row = self._get_or_create_settings(db)
+        trace = self._start_processing_trace(
+            enabled=settings_row.processing_trace_enabled,
+            provider_type="github",
+            delivery_id=delivery_id,
+        )
+        self._trace_step(
+            trace,
+            "webhook_received",
+            providerType="github",
+            eventType=event_type,
+            payloadBytes=len(payload_bytes),
+            signatureHeaderPresent=bool(signature_header),
+        )
         payload = json.loads(payload_bytes.decode("utf-8"))
         if event_type != "push":
             raise HTTPException(status_code=202, detail="Unsupported GitHub event")
@@ -2622,6 +2941,18 @@ class ConflictWatchService:
         repository_name = str(payload.get("repository", {}).get("name", "")).strip() or repository_external_id
         ref = str(payload.get("ref", ""))
         branch_name = ref.replace("refs/heads/", "", 1)
+        self._trace_step(
+            trace,
+            "payload_parsed",
+            branchName=branch_name,
+            repositoryExternalId=repository_external_id,
+            beforeSha=payload.get("before"),
+            afterSha=payload.get("after"),
+            forced=bool(payload.get("forced", False)),
+            deleted=payload.get("deleted"),
+            commitCount=len(payload.get("commits", []) or []),
+            headCommitId=(payload.get("head_commit") or {}).get("id"),
+        )
 
         if not self._validate_github_signature(settings_row.github_webhook_secret, payload_bytes, signature_header):
             self._record_security_log(
@@ -2633,51 +2964,76 @@ class ConflictWatchService:
                 401,
                 "GitHub 署名検証に失敗したため queue に積まず破棄",
             )
+            self._trace_step(trace, "signature_validation_failed", branchName=branch_name)
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
         if self._find_existing_delivery(db, "github", delivery_id):
+            self._trace_step(trace, "duplicate_delivery_skipped", branchName=branch_name)
             return ServiceMessage(
                 f"delivery_id {delivery_id} は既に処理済みです。冪等性により再処理をスキップしました。",
                 "info",
             )
         repository = self._ensure_repository(db, "github", repository_external_id, repository_name)
+        self._trace_step(trace, "repository_ensured", repositoryId=repository.id, repositoryName=repository.repository_name)
         raw_payload_ref = self._store_raw_payload("github", delivery_id, payload_bytes)
         pushed_at = self._extract_github_pushed_at(payload) or self.now()
         files_added, files_modified, files_removed, files_renamed = self._extract_github_event_file_sets(payload)
-        event = self._create_webhook_event(
-            db,
-            provider_type="github",
-            repository=repository,
-            delivery_id=delivery_id,
-            branch_name=branch_name,
-            before_sha=payload.get("before"),
-            after_sha=payload.get("after"),
-            pusher=(payload.get("pusher") or {}).get("name"),
-            pushed_at=pushed_at,
-            is_deleted=payload.get("deleted"),
-            is_forced=bool(payload.get("forced", False)),
-            files_added=files_added,
-            files_modified=files_modified,
-            files_removed=files_removed,
-            files_renamed=files_renamed,
-            raw_payload_ref=raw_payload_ref,
-        )
-        observed_commits = self._extract_github_commit_observations(
-            payload,
-            delivery_id=delivery_id,
-            pushed_at=pushed_at,
-        )
-        self._apply_event_to_branches(db, event, observed_commits)
-        event.process_status = "processed"
-        event.processed_at = self.now()
-        resolution_reason, resolution_context = self._webhook_resolution_context(event)
-        self._reconcile_all(
-            db,
-            resolution_reason=resolution_reason,
-            resolution_context=resolution_context,
-        )
-        db.commit()
-        return ServiceMessage("GitHub Webhook を処理しました。", "success")
+        event: ConflictWatchWebhookEvent | None = None
+        try:
+            event = self._create_webhook_event(
+                db,
+                provider_type="github",
+                repository=repository,
+                delivery_id=delivery_id,
+                branch_name=branch_name,
+                before_sha=payload.get("before"),
+                after_sha=payload.get("after"),
+                pusher=(payload.get("pusher") or {}).get("name"),
+                pushed_at=pushed_at,
+                is_deleted=payload.get("deleted"),
+                is_forced=bool(payload.get("forced", False)),
+                files_added=files_added,
+                files_modified=files_modified,
+                files_removed=files_removed,
+                files_renamed=files_renamed,
+                raw_payload_ref=raw_payload_ref,
+            )
+            self._trace_step(
+                trace,
+                "webhook_event_created",
+                eventId=event.id,
+                pushedAt=self._iso(pushed_at),
+                rawPayloadRef=raw_payload_ref,
+                filesAdded=files_added,
+                filesModified=files_modified,
+                filesRemoved=files_removed,
+                filesRenamed=files_renamed,
+            )
+            observed_commits = self._extract_github_commit_observations(
+                payload,
+                delivery_id=delivery_id,
+                pushed_at=pushed_at,
+            )
+            self._trace_step(trace, "observed_commits_extracted", observedCommits=self._trace_observed_commits(observed_commits))
+            self._apply_event_to_branches(db, event, observed_commits, trace=trace)
+            event.process_status = "processed"
+            event.processed_at = self.now()
+            resolution_reason, resolution_context = self._webhook_resolution_context(event)
+            self._reconcile_all(
+                db,
+                resolution_reason=resolution_reason,
+                resolution_context=resolution_context,
+                trace=trace,
+                trace_repository_id=repository.id,
+            )
+            self._finalize_processing_trace(event, trace, outcome="processed")
+            db.commit()
+            return ServiceMessage("GitHub Webhook を処理しました。", "success")
+        except Exception as exc:
+            if event is not None:
+                self._trace_step(trace, "processing_exception", error=str(exc))
+                self._finalize_processing_trace(event, trace, outcome="failed", error=str(exc))
+            raise
 
     def _extract_backlog_files(self, payload: dict[str, Any], key: str) -> list[str]:
         files: list[str] = []
@@ -2698,6 +3054,18 @@ class ConflictWatchService:
         provided_secret: str | None,
     ) -> ServiceMessage:
         settings_row = self._get_or_create_settings(db)
+        trace = self._start_processing_trace(
+            enabled=settings_row.processing_trace_enabled,
+            provider_type="backlog",
+            delivery_id=delivery_id,
+        )
+        self._trace_step(
+            trace,
+            "webhook_received",
+            providerType="backlog",
+            payloadBytes=len(payload_bytes),
+            secretProvided=bool(provided_secret),
+        )
         raw = json.loads(payload_bytes.decode("utf-8"))
         payload = raw.get("payload") if isinstance(raw, dict) and isinstance(raw.get("payload"), dict) else raw
         branch_ref = str(payload.get("ref") or payload.get("branch") or payload.get("refName") or "").strip()
@@ -2711,6 +3079,16 @@ class ConflictWatchService:
         )
         project_key = str(project_info.get("projectKey") or project_info.get("key") or "").strip()
         repository_external_id = f"{project_key}/{repository_name}" if project_key else repository_name
+        self._trace_step(
+            trace,
+            "payload_parsed",
+            branchName=branch_name,
+            repositoryExternalId=repository_external_id,
+            beforeSha=payload.get("before") or payload.get("old"),
+            afterSha=payload.get("after") or payload.get("rev"),
+            forced=bool(payload.get("forced", False)),
+            deleted=payload.get("deleted"),
+        )
 
         if not self._validate_backlog_secret(settings_row.backlog_webhook_secret, provided_secret):
             self._record_security_log(
@@ -2722,47 +3100,76 @@ class ConflictWatchService:
                 401,
                 "Backlog 共有 secret 検証に失敗したため queue に積まず破棄",
             )
+            self._trace_step(trace, "secret_validation_failed", branchName=branch_name)
             raise HTTPException(status_code=401, detail="Invalid backlog webhook secret")
 
         if self._find_existing_delivery(db, "backlog", delivery_id):
+            self._trace_step(trace, "duplicate_delivery_skipped", branchName=branch_name)
             return ServiceMessage(
                 f"delivery_id {delivery_id} は既に処理済みです。冪等性により再処理をスキップしました。",
                 "info",
             )
         repository = self._ensure_repository(db, "backlog", repository_external_id, repository_name)
+        self._trace_step(trace, "repository_ensured", repositoryId=repository.id, repositoryName=repository.repository_name)
         raw_payload_ref = self._store_raw_payload("backlog", delivery_id, payload_bytes)
         pushed_at = self.now()
-        event = self._create_webhook_event(
-            db,
-            provider_type="backlog",
-            repository=repository,
-            delivery_id=delivery_id,
-            branch_name=branch_name,
-            before_sha=payload.get("before") or payload.get("old"),
-            after_sha=payload.get("after") or payload.get("rev"),
-            pusher=(payload.get("pusher") or {}).get("name") or (payload.get("user") or {}).get("name"),
-            pushed_at=pushed_at,
-            is_deleted=payload.get("deleted"),
-            is_forced=bool(payload.get("forced", False)),
-            files_added=self._extract_backlog_files(payload, "added"),
-            files_modified=self._extract_backlog_files(payload, "modified"),
-            files_removed=self._extract_backlog_files(payload, "removed"),
-            files_renamed=self._extract_backlog_renames(payload),
-            raw_payload_ref=raw_payload_ref,
-        )
-        observed_commits = self._extract_backlog_commit_observations(
-            payload,
-            delivery_id=delivery_id,
-            pushed_at=pushed_at,
-        )
-        self._apply_event_to_branches(db, event, observed_commits)
-        event.process_status = "processed"
-        event.processed_at = self.now()
-        resolution_reason, resolution_context = self._webhook_resolution_context(event)
-        self._reconcile_all(
-            db,
-            resolution_reason=resolution_reason,
-            resolution_context=resolution_context,
-        )
-        db.commit()
-        return ServiceMessage("Backlog Webhook を処理しました。", "success")
+        event: ConflictWatchWebhookEvent | None = None
+        files_added = self._extract_backlog_files(payload, "added")
+        files_modified = self._extract_backlog_files(payload, "modified")
+        files_removed = self._extract_backlog_files(payload, "removed")
+        files_renamed = self._extract_backlog_renames(payload)
+        try:
+            event = self._create_webhook_event(
+                db,
+                provider_type="backlog",
+                repository=repository,
+                delivery_id=delivery_id,
+                branch_name=branch_name,
+                before_sha=payload.get("before") or payload.get("old"),
+                after_sha=payload.get("after") or payload.get("rev"),
+                pusher=(payload.get("pusher") or {}).get("name") or (payload.get("user") or {}).get("name"),
+                pushed_at=pushed_at,
+                is_deleted=payload.get("deleted"),
+                is_forced=bool(payload.get("forced", False)),
+                files_added=files_added,
+                files_modified=files_modified,
+                files_removed=files_removed,
+                files_renamed=files_renamed,
+                raw_payload_ref=raw_payload_ref,
+            )
+            self._trace_step(
+                trace,
+                "webhook_event_created",
+                eventId=event.id,
+                pushedAt=self._iso(pushed_at),
+                rawPayloadRef=raw_payload_ref,
+                filesAdded=files_added,
+                filesModified=files_modified,
+                filesRemoved=files_removed,
+                filesRenamed=files_renamed,
+            )
+            observed_commits = self._extract_backlog_commit_observations(
+                payload,
+                delivery_id=delivery_id,
+                pushed_at=pushed_at,
+            )
+            self._trace_step(trace, "observed_commits_extracted", observedCommits=self._trace_observed_commits(observed_commits))
+            self._apply_event_to_branches(db, event, observed_commits, trace=trace)
+            event.process_status = "processed"
+            event.processed_at = self.now()
+            resolution_reason, resolution_context = self._webhook_resolution_context(event)
+            self._reconcile_all(
+                db,
+                resolution_reason=resolution_reason,
+                resolution_context=resolution_context,
+                trace=trace,
+                trace_repository_id=repository.id,
+            )
+            self._finalize_processing_trace(event, trace, outcome="processed")
+            db.commit()
+            return ServiceMessage("Backlog Webhook を処理しました。", "success")
+        except Exception as exc:
+            if event is not None:
+                self._trace_step(trace, "processing_exception", error=str(exc))
+                self._finalize_processing_trace(event, trace, outcome="failed", error=str(exc))
+            raise
