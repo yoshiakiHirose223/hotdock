@@ -82,6 +82,12 @@ def ensure_legacy_blog_schema() -> None:
             if "last_related_branches" not in conflict_columns:
                 connection.execute(text("ALTER TABLE cw_conflicts ADD COLUMN last_related_branches JSON NOT NULL DEFAULT '[]'"))
 
+    if "cw_branches" in inspector.get_table_names():
+        branch_columns = {column["name"]: column for column in inspector.get_columns("cw_branches")}
+        with engine.begin() as connection:
+            if "merged_detected_by" not in branch_columns:
+                connection.execute(text("ALTER TABLE cw_branches ADD COLUMN merged_detected_by VARCHAR(50)"))
+
     ensure_conflict_watch_commit_history_schema()
 
 

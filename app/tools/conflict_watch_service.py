@@ -55,10 +55,12 @@ BRANCH_STATUS_ORDER = {
     "active": 4,
     "quiet": 3,
     "stale": 2,
+    "merged_to_main_or_master": 1,
     "branch_excluded": 1,
 }
 
 ZERO_GIT_SHA = "0000000000000000000000000000000000000000"
+MAINLINE_BRANCH_NAMES = {"main", "master"}
 
 
 @dataclass(slots=True)
@@ -267,7 +269,12 @@ class ConflictWatchService:
         self._clone_default_ignore_rules(db, repository, now)
         return repository
 
+    def _is_mainline_branch_name(self, branch_name: str | None) -> bool:
+        return str(branch_name or "").strip() in MAINLINE_BRANCH_NAMES
+
     def _compute_branch_status(self, branch: ConflictWatchBranch, stale_days: int, now: datetime) -> str:
+        if branch.monitoring_closed_reason == "merged_to_main_or_master":
+            return "merged_to_main_or_master"
         if branch.is_branch_excluded:
             return "branch_excluded"
         if branch.last_seen_at is None:
@@ -280,6 +287,8 @@ class ConflictWatchService:
         return "active"
 
     def _compute_branch_confidence(self, branch: ConflictWatchBranch, stale_days: int, now: datetime) -> str:
+        if branch.monitoring_closed_reason == "merged_to_main_or_master":
+            return "high"
         if branch.possibly_inconsistent or branch.is_deleted:
             return "low"
         if branch.last_seen_at is None:
@@ -524,6 +533,52 @@ class ConflictWatchService:
             if commit_timestamp is not None:
                 return commit_timestamp
         return None
+
+    def _extract_github_pull_request_merge_payload(
+        self,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        action = str(payload.get("action") or "").strip()
+        pull_request = payload.get("pull_request")
+        if action != "closed" or not isinstance(pull_request, dict):
+            return None
+        if not bool(pull_request.get("merged")):
+            return None
+        base = pull_request.get("base") or {}
+        head = pull_request.get("head") or {}
+        base_ref = str(base.get("ref") or "").strip()
+        head_ref = str(head.get("ref") or "").strip()
+        if not self._is_mainline_branch_name(base_ref) or not head_ref:
+            return None
+        repository = payload.get("repository") if isinstance(payload.get("repository"), dict) else {}
+        repository_external_id = str(
+            repository.get("full_name")
+            or ((base.get("repo") or {}).get("full_name") if isinstance(base.get("repo"), dict) else "")
+            or ((head.get("repo") or {}).get("full_name") if isinstance(head.get("repo"), dict) else "")
+            or ""
+        ).strip()
+        repository_name = str(
+            repository.get("name")
+            or ((base.get("repo") or {}).get("name") if isinstance(base.get("repo"), dict) else "")
+            or ((head.get("repo") or {}).get("name") if isinstance(head.get("repo"), dict) else "")
+            or repository_external_id
+        ).strip() or repository_external_id
+        merged_at = self._coerce_datetime(pull_request.get("merged_at")) or self.now()
+        return {
+            "repositoryExternalId": repository_external_id,
+            "repositoryName": repository_name,
+            "headRef": head_ref,
+            "baseRef": base_ref,
+            "headSha": str(head.get("sha") or "").strip() or None,
+            "baseSha": str(base.get("sha") or "").strip() or None,
+            "mergedAt": merged_at,
+            "mergedBy": (
+                (pull_request.get("merged_by") or {}).get("login")
+                or (payload.get("sender") or {}).get("login")
+                or None
+            ),
+            "pullRequestNumber": pull_request.get("number"),
+        }
 
     def _next_branch_sequence_no(self, db: Session, branch: ConflictWatchBranch) -> int:
         current_max = db.scalar(
@@ -784,6 +839,219 @@ class ConflictWatchService:
             )
         db.flush()
 
+    def _get_branch_by_name(
+        self,
+        db: Session,
+        repository_id: int,
+        branch_name: str,
+    ) -> ConflictWatchBranch | None:
+        return db.scalar(
+            select(ConflictWatchBranch).where(
+                ConflictWatchBranch.repository_id == repository_id,
+                ConflictWatchBranch.branch_name == branch_name,
+            )
+        )
+
+    def _get_branch_latest_observed_commit_sha(
+        self,
+        db: Session,
+        branch: ConflictWatchBranch,
+    ) -> str | None:
+        latest_after_sha = str(branch.latest_after_sha or "").strip()
+        if latest_after_sha and latest_after_sha != ZERO_GIT_SHA:
+            return latest_after_sha
+        latest_commit = db.scalar(
+            select(ConflictWatchBranchCommit.commit_sha)
+            .where(
+                ConflictWatchBranchCommit.repository_id == branch.repository_id,
+                ConflictWatchBranchCommit.branch_id == branch.id,
+            )
+            .order_by(ConflictWatchBranchCommit.sequence_no.desc())
+            .limit(1)
+        )
+        normalized = str(latest_commit or "").strip()
+        return normalized or None
+
+    def _build_merged_resolution_context(
+        self,
+        *,
+        branch_names: list[str],
+        detected_by: str,
+        mainline_branch: str,
+        delivery_id: str | None = None,
+        after_sha: str | None = None,
+    ) -> dict[str, Any]:
+        ordered_branch_names = sorted({name for name in branch_names if name})
+        context_kwargs: dict[str, Any] = {
+            "branchName": ordered_branch_names[0] if len(ordered_branch_names) == 1 else None,
+            "branchNames": ordered_branch_names or None,
+            "detectedBy": detected_by,
+            "mainlineBranch": mainline_branch,
+            "deliveryId": delivery_id,
+            "afterSha": after_sha,
+        }
+        return self._build_resolution_context("merged_to_main_or_master", **context_kwargs)
+
+    def _mark_branch_merged_to_main_or_master(
+        self,
+        db: Session,
+        branch: ConflictWatchBranch,
+        *,
+        detected_at: datetime,
+        detected_by: str,
+        trace: dict[str, Any] | None = None,
+    ) -> bool:
+        if branch.monitoring_closed_reason == "merged_to_main_or_master":
+            self._trace_step(
+                trace,
+                "branch_merge_already_marked",
+                branchName=branch.branch_name,
+                detectedBy=branch.merged_detected_by,
+            )
+            return False
+        branch.is_monitored = False
+        branch.is_deleted = False
+        branch.possibly_inconsistent = False
+        branch.monitoring_closed_reason = "merged_to_main_or_master"
+        branch.monitoring_closed_at = detected_at
+        branch.merged_detected_by = detected_by
+        branch.updated_at = self.now()
+        self._trace_step(
+            trace,
+            "branch_marked_merged",
+            branchName=branch.branch_name,
+            detectedBy=detected_by,
+            mergedAt=self._iso(detected_at),
+        )
+        db.flush()
+        return True
+
+    def _resolve_conflicts_for_merged_branches(
+        self,
+        db: Session,
+        branches: list[ConflictWatchBranch],
+        *,
+        resolution_context: dict[str, Any],
+    ) -> int:
+        branch_ids = {branch.id for branch in branches}
+        if not branch_ids:
+            return 0
+        now = self.now()
+        branch_by_id = {branch.id: branch for branch in branches}
+        conflicts = db.scalars(
+            select(ConflictWatchConflict)
+            .options(selectinload(ConflictWatchConflict.conflict_branches))
+            .where(ConflictWatchConflict.status.in_(["warning", "notice"]))
+        ).all()
+        resolved_count = 0
+        for conflict in conflicts:
+            if not any(link.branch_id in branch_ids for link in conflict.conflict_branches):
+                continue
+            entries: list[tuple[ConflictWatchBranch, ConflictWatchBranchFile]] = []
+            for link in conflict.conflict_branches:
+                branch = branch_by_id.get(link.branch_id) or db.get(ConflictWatchBranch, link.branch_id)
+                if branch is None:
+                    continue
+                branch_file = db.scalar(
+                    select(ConflictWatchBranchFile).where(
+                        ConflictWatchBranchFile.repository_id == conflict.repository_id,
+                        ConflictWatchBranchFile.branch_id == branch.id,
+                        ConflictWatchBranchFile.normalized_file_path == conflict.normalized_file_path,
+                    )
+                )
+                if branch_file is None:
+                    continue
+                entries.append((branch, branch_file))
+            if entries:
+                conflict.last_related_branches = self._snapshot_conflict_branches(entries)
+            detail = self._coerce_resolution_context("merged_to_main_or_master", resolution_context)
+            conflict.status = "resolved"
+            conflict.resolved_at = now
+            conflict.resolved_reason = detail["reason"]
+            conflict.resolved_context = detail
+            conflict.updated_at = now
+            conflict.confidence = "low"
+            self._push_history(conflict, "resolved", str(detail["summary"]), now)
+            self._update_conflict_links(db, conflict, [])
+            resolved_count += 1
+        db.flush()
+        return resolved_count
+
+    def _detect_branches_merged_by_mainline_push(
+        self,
+        db: Session,
+        repository: ConflictWatchRepository,
+        *,
+        mainline_branch_name: str,
+        payload: dict[str, Any],
+        trace: dict[str, Any] | None = None,
+    ) -> list[ConflictWatchBranch]:
+        commit_sha_candidates: set[str] = set()
+        after_sha = str(payload.get("after") or "").strip()
+        if after_sha and after_sha != ZERO_GIT_SHA:
+            commit_sha_candidates.add(after_sha)
+        head_commit = payload.get("head_commit")
+        if isinstance(head_commit, dict):
+            head_sha = str(head_commit.get("id") or "").strip()
+            if head_sha:
+                commit_sha_candidates.add(head_sha)
+        for commit in payload.get("commits", []) or []:
+            if not isinstance(commit, dict):
+                continue
+            commit_sha = str(commit.get("id") or "").strip()
+            if commit_sha:
+                commit_sha_candidates.add(commit_sha)
+
+        candidate_branches = db.scalars(
+            select(ConflictWatchBranch).where(
+                ConflictWatchBranch.repository_id == repository.id,
+            )
+        ).all()
+        self._trace_step(
+            trace,
+            "mainline_push_merge_detection_started",
+            mainlineBranch=mainline_branch_name,
+            candidateBranchCount=len(candidate_branches),
+            commitCandidateCount=len(commit_sha_candidates),
+        )
+        if not commit_sha_candidates:
+            self._trace_step(
+                trace,
+                "mainline_push_merge_detection_completed",
+                mergedBranchNames=[],
+                scannedBranchCount=0,
+                reason="no_commit_candidates",
+            )
+            return []
+
+        merged_branches: list[ConflictWatchBranch] = []
+        scanned_count = 0
+        for branch in candidate_branches:
+            if branch.is_deleted or not branch.is_monitored:
+                continue
+            if self._is_mainline_branch_name(branch.branch_name):
+                continue
+            latest_commit_sha = self._get_branch_latest_observed_commit_sha(db, branch)
+            scanned_count += 1
+            if not latest_commit_sha or latest_commit_sha not in commit_sha_candidates:
+                continue
+            self._trace_step(
+                trace,
+                "mainline_push_merge_candidate_matched",
+                branchName=branch.branch_name,
+                matchedCommitSha=latest_commit_sha,
+                mainlineBranch=mainline_branch_name,
+            )
+            merged_branches.append(branch)
+
+        self._trace_step(
+            trace,
+            "mainline_push_merge_detection_completed",
+            mergedBranchNames=[branch.branch_name for branch in merged_branches],
+            scannedBranchCount=scanned_count,
+        )
+        return merged_branches
+
     def _compute_conflict_confidence(self, branches: list[ConflictWatchBranch]) -> str:
         if not branches:
             return "low"
@@ -846,10 +1114,13 @@ class ConflictWatchService:
     def _format_resolution_summary(self, context: dict[str, Any]) -> str:
         reason = str(context.get("reason") or "other_observed_resolution")
         branch_name = context.get("branchName")
+        branch_names = context.get("branchNames") or []
         normalized_file_path = context.get("normalizedFilePath")
         pattern = context.get("pattern")
         delivery_id = context.get("deliveryId")
         after_sha = context.get("afterSha")
+        detected_by = context.get("detectedBy")
+        mainline_branch = context.get("mainlineBranch")
 
         if reason == "webhook_branch_deleted":
             details = [f"branch: {branch_name}"] if branch_name else []
@@ -868,7 +1139,16 @@ class ConflictWatchService:
         if reason == "branch_included":
             return f"除外解除後の再計算で解消 (branch: {branch_name})" if branch_name else "除外解除後の再計算で解消"
         if reason == "merged_to_main_or_master":
-            return f"main/master マージ扱いで解消 (branch: {branch_name})" if branch_name else "main/master マージ扱いで解消"
+            details: list[str] = []
+            if branch_name:
+                details.append(f"branch: {branch_name}")
+            elif isinstance(branch_names, list) and branch_names:
+                details.append(f"branches: {', '.join(str(item) for item in branch_names)}")
+            if mainline_branch:
+                details.append(f"mainline: {mainline_branch}")
+            if detected_by:
+                details.append(f"detected_by: {detected_by}")
+            return f"main/master へマージされて解消 ({', '.join(details)})" if details else "main/master へマージされて解消"
         if reason == "branch_deleted":
             return f"手動で branch 削除して解消 (branch: {branch_name})" if branch_name else "手動で branch 削除して解消"
         if reason == "manual_reset":
@@ -1228,6 +1508,7 @@ class ConflictWatchService:
             "memo": branch.memo or "",
             "monitoringClosedReason": branch.monitoring_closed_reason,
             "monitoringClosedAt": self._iso(branch.monitoring_closed_at),
+            "mergedDetectedBy": branch.merged_detected_by,
             "createdAt": self._iso(branch.created_at),
             "updatedAt": self._iso(branch.updated_at),
         }
@@ -1793,16 +2074,29 @@ class ConflictWatchService:
             db.commit()
             return ServiceMessage(f"{branch.branch_name} を {'branch_excluded' if branch.is_branch_excluded else '監視対象'} にしました。")
         if action == "merge":
-            branch.is_monitored = False
-            branch.monitoring_closed_reason = "merged_to_main_or_master"
-            branch.monitoring_closed_at = now
-            branch.updated_at = now
-            self._mark_branch_history_inactive(db, branch, observed_at=now, event_id=None)
-            self._clear_branch_cache(db, branch)
+            changed = self._mark_branch_merged_to_main_or_master(
+                db,
+                branch,
+                detected_at=now,
+                detected_by="manual",
+            )
+            if not changed:
+                db.commit()
+                return ServiceMessage(f"{branch.branch_name} は既に main/master 取込済みです。", tone="info")
+            resolution_context = self._build_merged_resolution_context(
+                branch_names=[branch.branch_name],
+                detected_by="manual",
+                mainline_branch="main/master",
+            )
+            self._resolve_conflicts_for_merged_branches(
+                db,
+                [branch],
+                resolution_context=resolution_context,
+            )
             self._reconcile_all(
                 db,
-                resolution_reason="merged_to_main_or_master",
-                resolution_context=self._build_resolution_context("merged_to_main_or_master", branchName=branch.branch_name),
+                resolution_reason="other_observed_resolution",
+                resolution_context=self._build_resolution_context("other_observed_resolution"),
             )
             db.commit()
             return ServiceMessage(f"{branch.branch_name} を main/master マージ扱いでクローズしました。")
@@ -2034,6 +2328,9 @@ class ConflictWatchService:
             "latestAfterSha": branch.latest_after_sha,
             "isDeleted": branch.is_deleted,
             "possiblyInconsistent": branch.possibly_inconsistent,
+            "monitoringClosedReason": branch.monitoring_closed_reason,
+            "monitoringClosedAt": self._iso(branch.monitoring_closed_at),
+            "mergedDetectedBy": branch.merged_detected_by,
             "activeCommits": [
                 {
                     "commitSha": item.commit_sha,
@@ -2183,6 +2480,9 @@ class ConflictWatchService:
         branch = self._get_or_create_branch(db, repository, event.branch_name, now=now)
         observed_at = event.pushed_at or now
         previous_last_push_at = branch.last_push_at
+        previous_monitoring_closed_reason = branch.monitoring_closed_reason
+        previous_monitoring_closed_at = branch.monitoring_closed_at
+        previous_merged_detected_by = branch.merged_detected_by
         self._trace_step(
             trace,
             "branch_loaded",
@@ -2210,8 +2510,21 @@ class ConflictWatchService:
         branch.is_monitored = True
         branch.monitoring_closed_reason = None
         branch.monitoring_closed_at = None
+        branch.merged_detected_by = None
 
         if event.is_deleted is True:
+            if previous_monitoring_closed_reason == "merged_to_main_or_master":
+                branch.is_monitored = False
+                branch.monitoring_closed_reason = previous_monitoring_closed_reason
+                branch.monitoring_closed_at = previous_monitoring_closed_at
+                branch.merged_detected_by = previous_merged_detected_by
+                branch.is_deleted = False
+                self._trace_step(
+                    trace,
+                    "branch_delete_observed_after_merge",
+                    branchName=branch.branch_name,
+                )
+                return True
             branch.is_deleted = True
             branch.possibly_inconsistent = False
             self._trace_step(trace, "branch_delete_detected", branchName=branch.branch_name)
@@ -2284,6 +2597,7 @@ class ConflictWatchService:
         self,
         db: Session,
         *,
+        event_type: str,
         provider_type: str,
         repository: ConflictWatchRepository,
         delivery_id: str,
@@ -2304,7 +2618,7 @@ class ConflictWatchService:
             repository_id=repository.id,
             provider_type=provider_type,
             delivery_id=delivery_id,
-            event_type="push",
+            event_type=event_type,
             repository_external_id=repository.external_repo_id,
             repository_name=repository.repository_name,
             branch_name=branch_name,
@@ -2414,6 +2728,7 @@ class ConflictWatchService:
         is_deleted = None if deleted_state == "unknown" else deleted_state == "true"
         event = self._create_webhook_event(
             db,
+            event_type="push",
             provider_type=provider_type,
             repository=repository,
             delivery_id=delivery_id,
@@ -2606,6 +2921,181 @@ class ConflictWatchService:
                     return observed
         return self._event_to_single_observed_commit(event)
 
+    def _handle_github_pull_request_merged_webhook(
+        self,
+        db: Session,
+        payload: dict[str, Any],
+        *,
+        delivery_id: str,
+        raw_payload_ref: str,
+        trace: dict[str, Any] | None,
+    ) -> ServiceMessage:
+        merge_payload = self._extract_github_pull_request_merge_payload(payload)
+        if merge_payload is None:
+            self._trace_step(trace, "github_pull_request_ignored", reason="not_merged_to_mainline")
+            return ServiceMessage("Ignored non-merged GitHub pull_request event", "info")
+
+        repository = self._ensure_repository(
+            db,
+            "github",
+            str(merge_payload["repositoryExternalId"]),
+            str(merge_payload["repositoryName"]),
+        )
+        self._trace_step(
+            trace,
+            "pull_request_merge_detected",
+            repositoryId=repository.id,
+            repositoryName=repository.repository_name,
+            branchName=merge_payload["headRef"],
+            mainlineBranch=merge_payload["baseRef"],
+            headSha=merge_payload["headSha"],
+            mergedAt=self._iso(merge_payload["mergedAt"]),
+        )
+        event: ConflictWatchWebhookEvent | None = None
+        try:
+            event = self._create_webhook_event(
+                db,
+                event_type="pull_request",
+                provider_type="github",
+                repository=repository,
+                delivery_id=delivery_id,
+                branch_name=str(merge_payload["headRef"]),
+                before_sha=merge_payload["baseSha"],
+                after_sha=merge_payload["headSha"],
+                pusher=merge_payload["mergedBy"],
+                pushed_at=merge_payload["mergedAt"],
+                is_deleted=None,
+                is_forced=False,
+                files_added=[],
+                files_modified=[],
+                files_removed=[],
+                files_renamed=[],
+                raw_payload_ref=raw_payload_ref,
+            )
+            self._trace_step(
+                trace,
+                "webhook_event_created",
+                eventId=event.id,
+                pushedAt=self._iso(merge_payload["mergedAt"]),
+                rawPayloadRef=raw_payload_ref,
+                eventType="pull_request",
+            )
+
+            branch = self._get_branch_by_name(db, repository.id, str(merge_payload["headRef"]))
+            merged_branch_names: list[str] = []
+            resolved_conflict_count = 0
+            if branch is None:
+                self._trace_step(
+                    trace,
+                    "pull_request_merge_branch_not_found",
+                    branchName=merge_payload["headRef"],
+                )
+            else:
+                changed = self._mark_branch_merged_to_main_or_master(
+                    db,
+                    branch,
+                    detected_at=merge_payload["mergedAt"],
+                    detected_by="pull_request",
+                    trace=trace,
+                )
+                if changed:
+                    merged_branch_names = [branch.branch_name]
+                    resolution_context = self._build_merged_resolution_context(
+                        branch_names=merged_branch_names,
+                        detected_by="pull_request",
+                        mainline_branch=str(merge_payload["baseRef"]),
+                        delivery_id=delivery_id,
+                        after_sha=merge_payload["headSha"],
+                    )
+                    resolved_conflict_count = self._resolve_conflicts_for_merged_branches(
+                        db,
+                        [branch],
+                        resolution_context=resolution_context,
+                    )
+            self._trace_step(
+                trace,
+                "pull_request_merge_completed",
+                mergedBranchNames=merged_branch_names,
+                resolvedConflictCount=resolved_conflict_count,
+            )
+            event.process_status = "processed"
+            event.processed_at = self.now()
+            self._reconcile_all(
+                db,
+                resolution_reason="other_observed_resolution",
+                resolution_context=self._build_resolution_context("other_observed_resolution"),
+                trace=trace,
+                trace_repository_id=repository.id,
+            )
+            self._finalize_processing_trace(event, trace, outcome="processed")
+            db.commit()
+            return ServiceMessage("GitHub pull_request merged event を処理しました。", "success")
+        except Exception as exc:
+            if event is not None:
+                self._trace_step(trace, "processing_exception", error=str(exc))
+                self._finalize_processing_trace(event, trace, outcome="failed", error=str(exc))
+            raise
+
+    def _apply_mainline_push_merge_detection(
+        self,
+        db: Session,
+        repository: ConflictWatchRepository,
+        payload: dict[str, Any],
+        *,
+        branch_name: str,
+        delivery_id: str,
+        trace: dict[str, Any] | None,
+    ) -> tuple[list[str], int]:
+        if not self._is_mainline_branch_name(branch_name):
+            return [], 0
+        merged_branches = self._detect_branches_merged_by_mainline_push(
+            db,
+            repository,
+            mainline_branch_name=branch_name,
+            payload=payload,
+            trace=trace,
+        )
+        merged_branch_names: list[str] = []
+        if not merged_branches:
+            return merged_branch_names, 0
+
+        merged_at = self._extract_github_pushed_at(payload) or self.now()
+        changed_branches: list[ConflictWatchBranch] = []
+        for branch in merged_branches:
+            changed = self._mark_branch_merged_to_main_or_master(
+                db,
+                branch,
+                detected_at=merged_at,
+                detected_by="push_contains_commit",
+                trace=trace,
+            )
+            if changed:
+                changed_branches.append(branch)
+                merged_branch_names.append(branch.branch_name)
+        if not changed_branches:
+            return [], 0
+
+        resolution_context = self._build_merged_resolution_context(
+            branch_names=merged_branch_names,
+            detected_by="push_contains_commit",
+            mainline_branch=branch_name,
+            delivery_id=delivery_id,
+            after_sha=str(payload.get("after") or "").strip() or None,
+        )
+        resolved_conflict_count = self._resolve_conflicts_for_merged_branches(
+            db,
+            changed_branches,
+            resolution_context=resolution_context,
+        )
+        self._trace_step(
+            trace,
+            "mainline_push_merge_applied",
+            mainlineBranch=branch_name,
+            mergedBranchNames=merged_branch_names,
+            resolvedConflictCount=resolved_conflict_count,
+        )
+        return merged_branch_names, resolved_conflict_count
+
     def handle_github_webhook(
         self,
         db: Session,
@@ -2630,24 +3120,55 @@ class ConflictWatchService:
             signatureHeaderPresent=bool(signature_header),
         )
         payload = json.loads(payload_bytes.decode("utf-8"))
-        if event_type != "push":
-            raise HTTPException(status_code=202, detail="Unsupported GitHub event")
+        merge_payload = self._extract_github_pull_request_merge_payload(payload) if event_type == "pull_request" else None
+        if event_type == "push":
+            repository_external_id = str(payload.get("repository", {}).get("full_name", "")).strip()
+            repository_name = str(payload.get("repository", {}).get("name", "")).strip() or repository_external_id
+            ref = str(payload.get("ref", ""))
+            branch_name = ref.replace("refs/heads/", "", 1)
+            before_sha = payload.get("before")
+            after_sha = payload.get("after")
+            forced = bool(payload.get("forced", False))
+            deleted = payload.get("deleted")
+            commit_count = len(payload.get("commits", []) or [])
+            head_commit_id = (payload.get("head_commit") or {}).get("id")
+        elif event_type == "pull_request":
+            repository_external_id = str(
+                (merge_payload or {}).get("repositoryExternalId")
+                or (payload.get("repository") or {}).get("full_name")
+                or ""
+            ).strip()
+            repository_name = str(
+                (merge_payload or {}).get("repositoryName")
+                or (payload.get("repository") or {}).get("name")
+                or repository_external_id
+            ).strip() or repository_external_id
+            branch_name = str(
+                (merge_payload or {}).get("headRef")
+                or ((payload.get("pull_request") or {}).get("head") or {}).get("ref")
+                or "unknown"
+            ).strip() or "unknown"
+            before_sha = (merge_payload or {}).get("baseSha")
+            after_sha = (merge_payload or {}).get("headSha")
+            forced = False
+            deleted = False
+            commit_count = len(payload.get("commits", []) or [])
+            head_commit_id = after_sha
+        else:
+            self._trace_step(trace, "github_event_ignored", reason="unsupported_event_type")
+            return ServiceMessage("Unsupported GitHub event", "info")
 
-        repository_external_id = str(payload.get("repository", {}).get("full_name", "")).strip()
-        repository_name = str(payload.get("repository", {}).get("name", "")).strip() or repository_external_id
-        ref = str(payload.get("ref", ""))
-        branch_name = ref.replace("refs/heads/", "", 1)
         self._trace_step(
             trace,
             "payload_parsed",
             branchName=branch_name,
             repositoryExternalId=repository_external_id,
-            beforeSha=payload.get("before"),
-            afterSha=payload.get("after"),
-            forced=bool(payload.get("forced", False)),
-            deleted=payload.get("deleted"),
-            commitCount=len(payload.get("commits", []) or []),
-            headCommitId=(payload.get("head_commit") or {}).get("id"),
+            beforeSha=before_sha,
+            afterSha=after_sha,
+            forced=forced,
+            deleted=deleted,
+            commitCount=commit_count,
+            headCommitId=head_commit_id,
         )
 
         if not self._validate_github_signature(settings_row.github_webhook_secret, payload_bytes, signature_header):
@@ -2669,6 +3190,15 @@ class ConflictWatchService:
                 f"delivery_id {delivery_id} は既に処理済みです。冪等性により再処理をスキップしました。",
                 "info",
             )
+        if event_type == "pull_request":
+            raw_payload_ref = self._store_raw_payload("github", delivery_id, payload_bytes)
+            return self._handle_github_pull_request_merged_webhook(
+                db,
+                payload,
+                delivery_id=delivery_id,
+                raw_payload_ref=raw_payload_ref,
+                trace=trace,
+            )
         repository = self._ensure_repository(db, "github", repository_external_id, repository_name)
         self._trace_step(trace, "repository_ensured", repositoryId=repository.id, repositoryName=repository.repository_name)
         raw_payload_ref = self._store_raw_payload("github", delivery_id, payload_bytes)
@@ -2678,16 +3208,17 @@ class ConflictWatchService:
         try:
             event = self._create_webhook_event(
                 db,
+                event_type="push",
                 provider_type="github",
                 repository=repository,
                 delivery_id=delivery_id,
                 branch_name=branch_name,
-                before_sha=payload.get("before"),
-                after_sha=payload.get("after"),
+                before_sha=before_sha,
+                after_sha=after_sha,
                 pusher=(payload.get("pusher") or {}).get("name"),
                 pushed_at=pushed_at,
-                is_deleted=payload.get("deleted"),
-                is_forced=bool(payload.get("forced", False)),
+                is_deleted=deleted,
+                is_forced=forced,
                 files_added=files_added,
                 files_modified=files_modified,
                 files_removed=files_removed,
@@ -2712,6 +3243,14 @@ class ConflictWatchService:
             )
             self._trace_step(trace, "observed_commits_extracted", observedCommits=self._trace_observed_commits(observed_commits))
             self._apply_event_to_branches(db, event, observed_commits, trace=trace)
+            merged_branch_names, resolved_conflict_count = self._apply_mainline_push_merge_detection(
+                db,
+                repository,
+                payload,
+                branch_name=branch_name,
+                delivery_id=delivery_id,
+                trace=trace,
+            )
             event.process_status = "processed"
             event.processed_at = self.now()
             resolution_reason, resolution_context = self._webhook_resolution_context(event)
@@ -2721,6 +3260,13 @@ class ConflictWatchService:
                 resolution_context=resolution_context,
                 trace=trace,
                 trace_repository_id=repository.id,
+            )
+            self._trace_step(
+                trace,
+                "github_push_processing_completed",
+                branchName=branch_name,
+                mergedBranchNames=merged_branch_names,
+                resolvedConflictCount=resolved_conflict_count,
             )
             self._finalize_processing_trace(event, trace, outcome="processed")
             db.commit()
@@ -2817,6 +3363,7 @@ class ConflictWatchService:
         try:
             event = self._create_webhook_event(
                 db,
+                event_type="push",
                 provider_type="backlog",
                 repository=repository,
                 delivery_id=delivery_id,

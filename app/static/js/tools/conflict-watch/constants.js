@@ -7,6 +7,7 @@ export const BRANCH_STATUS_LABELS = {
   active: "active",
   quiet: "quiet",
   stale: "stale",
+  merged_to_main_or_master: "main/master 取込済み",
   branch_excluded: "branch_excluded",
 };
 

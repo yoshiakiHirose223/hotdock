@@ -393,8 +393,8 @@ async def conflict_watch_github_webhook(
     x_hub_signature_256: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    if x_github_event != "push":
-        return ConflictWatchWebhookAccepted(message="Ignored non-push GitHub event", delivery_id=x_github_delivery)
+    if x_github_event not in {"push", "pull_request"}:
+        return ConflictWatchWebhookAccepted(message="Ignored unsupported GitHub event", delivery_id=x_github_delivery)
     payload_bytes = await request.body()
     result = conflict_watch_service.handle_github_webhook(
         db,

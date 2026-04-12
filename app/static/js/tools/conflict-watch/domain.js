@@ -3,7 +3,7 @@ import {
   CHANGE_TYPE_LABELS,
   CONFLICT_STATUS_LABELS,
   DEFAULT_SETTINGS,
-} from "./constants.js?v=conflict-watch-20260412-rename-ui";
+} from "./constants.js?v=conflict-watch-20260412-mainline-merge";
 
 function deepClone(value) {
   if (typeof structuredClone === "function") {
@@ -302,6 +302,7 @@ function ensureBranch(state, repositoryId, branchName, nowIso) {
     memo: "",
     monitoringClosedReason: null,
     monitoringClosedAt: null,
+    mergedDetectedBy: null,
     createdAt: nowIso,
     updatedAt: nowIso,
   };
@@ -365,6 +366,9 @@ function removeBranchFromState(state, branchId) {
 }
 
 function computeBranchStatus(branch, settings, nowIso) {
+  if (branch.monitoringClosedReason === "merged_to_main_or_master") {
+    return "merged_to_main_or_master";
+  }
   if (branch.isBranchExcluded) {
     return "branch_excluded";
   }
@@ -382,6 +386,9 @@ function computeBranchStatus(branch, settings, nowIso) {
 }
 
 function computeBranchConfidence(branch, settings, nowIso) {
+  if (branch.monitoringClosedReason === "merged_to_main_or_master") {
+    return "high";
+  }
   if (branch.possiblyInconsistent || branch.isDeleted) {
     return "low";
   }
@@ -723,6 +730,9 @@ function applyEventToBranches(state, event) {
   }
 
   const branch = ensureBranch(state, repository.id, event.branchName, state.now);
+  const previousMonitoringClosedReason = branch.monitoringClosedReason;
+  const previousMonitoringClosedAt = branch.monitoringClosedAt;
+  const previousMergedDetectedBy = branch.mergedDetectedBy;
   branch.lastPushAt = event.pushedAt ?? state.now;
   branch.lastSeenAt = state.now;
   branch.latestAfterSha = event.afterSha;
@@ -731,11 +741,19 @@ function applyEventToBranches(state, event) {
   branch.isMonitored = true;
   branch.monitoringClosedReason = null;
   branch.monitoringClosedAt = null;
+  branch.mergedDetectedBy = null;
   if (event.isForced) {
     branch.possiblyInconsistent = true;
   }
 
   if (event.isDeleted === true) {
+    if (previousMonitoringClosedReason === "merged_to_main_or_master") {
+      branch.isMonitored = false;
+      branch.monitoringClosedReason = previousMonitoringClosedReason;
+      branch.monitoringClosedAt = previousMonitoringClosedAt;
+      branch.mergedDetectedBy = previousMergedDetectedBy;
+      return true;
+    }
     removeBranchFromState(state, branch.id);
     return true;
   }
@@ -829,6 +847,14 @@ export function buildViewModel(rawState) {
       const hasConflict = observedFiles.some((branchFile) => branchFile.isInConflict);
       return {
         ...branch,
+        statusLabel: BRANCH_STATUS_LABELS[branch.status] ?? branch.status,
+        mergedDetectedByLabel: branch.mergedDetectedBy === "pull_request"
+          ? "PRマージ"
+          : branch.mergedDetectedBy === "push_contains_commit"
+            ? "main/master push 判定"
+            : branch.mergedDetectedBy === "manual"
+              ? "手動"
+              : null,
         observedFileCount: observedFiles.length,
         ignoredFileCount: observedFiles.filter((branchFile) => branchFile.isBranchFileIgnored).length,
         observedFiles,
@@ -1265,8 +1291,8 @@ export function applyBranchAction(rawState, branchId, action) {
     branch.isMonitored = false;
     branch.monitoringClosedReason = "merged_to_main_or_master";
     branch.monitoringClosedAt = state.now;
+    branch.mergedDetectedBy = "manual";
     branch.updatedAt = state.now;
-    state.branchFiles = state.branchFiles.filter((branchFile) => branchFile.branchId !== branch.id);
     state.ui.feedbackMessage = `${branch.branchName} を main/master マージ扱いでクローズしました。`;
     state.ui.feedbackTone = "success";
     return reconcileState(state, { resolutionReason: "merged_to_main_or_master" });

@@ -53,6 +53,7 @@ class ConflictWatchBranch(Base):
     memo: Mapped[str] = mapped_column(Text, default="")
     monitoring_closed_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
     monitoring_closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    merged_detected_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

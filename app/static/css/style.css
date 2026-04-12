@@ -2837,7 +2837,8 @@ body.cw-overlay-open {
 }
 
 .cw-pill-active,
-.cw-pill-high {
+.cw-pill-high,
+.cw-pill-merged_to_main_or_master {
   background: #e8f8ef;
   color: #0f766e;
 }

@@ -1,4 +1,4 @@
-import { PROVIDERS, QUICK_WEBHOOK_PRESETS } from "./constants.js?v=conflict-watch-20260412-rename-ui";
+import { BRANCH_STATUS_LABELS, PROVIDERS, QUICK_WEBHOOK_PRESETS } from "./constants.js?v=conflict-watch-20260412-mainline-merge";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -198,7 +198,7 @@ function renderResolvedReason(reason, context = null) {
     webhook_observed_resolution: "push 再計算で解消",
     branch_excluded: "branch を除外して解消",
     branch_included: "除外解除後の再計算で解消",
-    merged_to_main_or_master: "main/master マージ扱いで解消",
+    merged_to_main_or_master: "main/master へマージされて解消",
     branch_deleted: "手動で branch 削除して解消",
     manual_reset: "手動リセットで解消",
     branch_file_ignored: "branch-file ignore で解消",
@@ -231,12 +231,24 @@ function renderResolutionContext(context) {
   if (!context) {
     return "";
   }
+  const branchNames = Array.isArray(context.branchNames) && context.branchNames.length
+    ? context.branchNames.join(", ")
+    : null;
+  const detectedBy = context.detectedBy === "pull_request"
+    ? "PRマージ"
+    : context.detectedBy === "push_contains_commit"
+      ? "main/master push 判定"
+      : context.detectedBy === "manual"
+        ? "手動"
+        : context.detectedBy;
   const items = [
-    { label: "ブランチ", value: context.branchName },
+    { label: "ブランチ", value: context.branchName ?? branchNames },
     { label: "ファイル", value: context.normalizedFilePath },
     { label: "pattern", value: context.pattern },
     { label: "provider", value: context.providerType },
     { label: "delivery_id", value: context.deliveryId },
+    { label: "本流ブランチ", value: context.mainlineBranch },
+    { label: "検知経路", value: detectedBy },
     { label: "after SHA", value: context.afterSha },
     { label: "pusher", value: context.pusher },
   ].filter((item) => item.value);
@@ -524,9 +536,10 @@ function renderWebhookForm(viewModel) {
 function renderBranchTable(viewModel) {
   const statusOptions = [
     { value: "all", label: "全て" },
-    { value: "active", label: "active" },
-    { value: "quiet", label: "quiet" },
-    { value: "stale", label: "stale" },
+    { value: "active", label: BRANCH_STATUS_LABELS.active },
+    { value: "quiet", label: BRANCH_STATUS_LABELS.quiet },
+    { value: "stale", label: BRANCH_STATUS_LABELS.stale },
+    { value: "merged_to_main_or_master", label: BRANCH_STATUS_LABELS.merged_to_main_or_master },
     { value: "branch_excluded", label: "除外" },
   ];
   return `
@@ -607,8 +620,14 @@ function renderBranchTable(viewModel) {
                 <td>
                   <span class="cw-row-title">${escapeHtml(branch.branchName)}</span>
                   ${branch.memo ? `<p class="cw-row-note">${escapeHtml(branch.memo)}</p>` : ""}
+                  ${branch.status === "merged_to_main_or_master" ? `
+                    <p class="cw-table-subline">
+                      ${escapeHtml(branch.mergedDetectedByLabel ?? "main/master 取込済み")}
+                      ${branch.monitoringClosedAt ? ` / ${escapeHtml(formatFullDateTime(branch.monitoringClosedAt))}` : ""}
+                    </p>
+                  ` : ""}
                 </td>
-                <td>${renderStatusPill(branch.status)}</td>
+                <td>${renderStatusPill(branch.statusLabel ?? branch.status, branch.status)}</td>
                 <td>${escapeHtml(formatFullDateTime(branch.lastPushAt))}</td>
                 <td>
                   <button
@@ -934,7 +953,7 @@ function renderWebhookEvents(viewModel) {
           <li>
             <strong>${escapeHtml(event.providerType)} / ${escapeHtml(event.branchName)}</strong>
             <span>${escapeHtml(formatDateTime(event.receivedAt))}</span>
-            <p>delivery_id: ${escapeHtml(event.deliveryId)} / process_status: ${escapeHtml(event.processStatus)} / payload_hash: ${escapeHtml(event.payloadHash)}</p>
+            <p>event_type: ${escapeHtml(event.eventType)} / delivery_id: ${escapeHtml(event.deliveryId)} / process_status: ${escapeHtml(event.processStatus)} / payload_hash: ${escapeHtml(event.payloadHash)}</p>
             <p class="cw-table-subline">raw_payload_ref: ${escapeHtml(event.rawPayloadRef ?? "expired")} ${event.rawPayloadExpiredAt ? `(expired ${escapeHtml(formatDateTime(event.rawPayloadExpiredAt))})` : ""}</p>
             <p class="cw-table-subline">before ${escapeHtml(event.beforeSha)} / after ${escapeHtml(event.afterSha)} / processed_at ${escapeHtml(formatDateTime(event.processedAt))}</p>
             <p class="cw-table-subline">added ${event.filesAdded.length} / modified ${event.filesModified.length} / removed ${event.filesRemoved.length} / deleted ${event.isDeleted === null ? "unknown" : event.isDeleted ? "true" : "false"}${event.isForced ? " / force push" : ""}</p>

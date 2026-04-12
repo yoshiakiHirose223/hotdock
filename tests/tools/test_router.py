@@ -2,8 +2,10 @@ import hashlib
 import hmac
 import json
 
+ZERO_GIT_SHA = "0000000000000000000000000000000000000000"
 
-def post_github_webhook(client, delivery_id, payload, *, secret="ghs_demo_hotdock"):
+
+def post_github_webhook(client, delivery_id, payload, *, event_type="push", secret="ghs_demo_hotdock"):
     payload_bytes = json.dumps(payload).encode("utf-8")
     signature = "sha256=" + hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
     return client.post(
@@ -11,7 +13,7 @@ def post_github_webhook(client, delivery_id, payload, *, secret="ghs_demo_hotdoc
         content=payload_bytes,
         headers={
             "X-GitHub-Delivery": delivery_id,
-            "X-GitHub-Event": "push",
+            "X-GitHub-Event": event_type,
             "X-Hub-Signature-256": signature,
             "Content-Type": "application/json",
         },
@@ -32,7 +34,7 @@ def test_conflict_watch_page(client):
 
     assert response.status_code == 200
     assert "Conflict Watch" in response.text
-    assert "/static/js/tools/conflict-watch/app.js?v=conflict-watch-20250410-22" in response.text
+    assert "/static/js/tools/conflict-watch/app.js?v=conflict-watch-20260412-mainline-merge" in response.text
     assert response.headers["cache-control"] == "no-store"
     assert 'data-page-mode="repositories"' in response.text
 
@@ -1289,6 +1291,464 @@ def test_conflict_watch_github_out_of_order_webhooks_are_still_recorded(client):
     assert branch_commits["reset-a"]["isActive"] is True
     assert branch_commits["reset-b"]["isActive"] is True
     assert branch_commits["reset-c"]["isActive"] is True
+
+
+def test_conflict_watch_pr_merge_marks_branch_merged_and_resolves_conflict(client):
+    feature_a_payload = {
+        "ref": "refs/heads/feature/a",
+        "before": ZERO_GIT_SHA,
+        "after": "feature-a-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/pr-route",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "feature-a-1",
+                "added": ["shared/pr-conflict.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    feature_b_payload = {
+        "ref": "refs/heads/feature/b",
+        "before": ZERO_GIT_SHA,
+        "after": "feature-b-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/pr-route",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "feature-b-1",
+                "added": ["shared/pr-conflict.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    pr_payload = {
+        "action": "closed",
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/pr-route",
+        },
+        "pull_request": {
+            "number": 42,
+            "merged": True,
+            "merged_at": "2026-04-12T12:00:00+00:00",
+            "merged_by": {"login": "octocat"},
+            "base": {
+                "ref": "main",
+                "sha": "main-merge-1",
+                "repo": {
+                    "name": "hotdock",
+                    "full_name": "merge-detect/pr-route",
+                },
+            },
+            "head": {
+                "ref": "feature/a",
+                "sha": "feature-a-1",
+                "repo": {
+                    "name": "hotdock",
+                    "full_name": "merge-detect/pr-route",
+                },
+            },
+        },
+        "sender": {"login": "octocat"},
+    }
+    main_push_payload = {
+        "ref": "refs/heads/main",
+        "before": "main-before-1",
+        "after": "main-after-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/pr-route",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "feature-a-1",
+                "added": [],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+        "head_commit": {
+            "id": "main-after-1",
+            "added": [],
+            "modified": [],
+            "removed": [],
+        },
+    }
+
+    assert post_github_webhook(client, "github-pr-feature-a-1", feature_a_payload).status_code == 202
+    assert post_github_webhook(client, "github-pr-feature-b-1", feature_b_payload).status_code == 202
+
+    pre_state = client.get("/tools/conflict-watch/api/state").json()
+    conflict = next(item for item in pre_state["conflicts"] if item["normalizedFilePath"] == "shared/pr-conflict.txt")
+    assert conflict["status"] in {"warning", "notice"}
+
+    response = post_github_webhook(client, "github-pr-merge-1", pr_payload, event_type="pull_request")
+    assert response.status_code == 202
+
+    duplicate = post_github_webhook(client, "github-pr-merge-1", pr_payload, event_type="pull_request")
+    assert duplicate.status_code == 202
+    assert "冪等性により再処理をスキップ" in duplicate.json()["message"]
+
+    assert post_github_webhook(client, "github-pr-main-push-1", main_push_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    feature_a_branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/a")
+    resolved_conflict = next(item for item in state["conflicts"] if item["normalizedFilePath"] == "shared/pr-conflict.txt")
+    pr_event = next(item for item in state["webhookEvents"] if item["deliveryId"] == "github-pr-merge-1")
+
+    assert feature_a_branch["status"] == "merged_to_main_or_master"
+    assert feature_a_branch["isMonitored"] is False
+    assert feature_a_branch["monitoringClosedReason"] == "merged_to_main_or_master"
+    assert feature_a_branch["mergedDetectedBy"] == "pull_request"
+    assert resolved_conflict["status"] == "resolved"
+    assert resolved_conflict["resolvedReason"] == "merged_to_main_or_master"
+    assert resolved_conflict["resolvedContext"]["mainlineBranch"] == "main"
+    assert resolved_conflict["resolvedContext"]["detectedBy"] == "pull_request"
+    assert pr_event["eventType"] == "pull_request"
+
+    feature_a_branch_after_main_push = next(branch for branch in state["branches"] if branch["branchName"] == "feature/a")
+    assert feature_a_branch_after_main_push["mergedDetectedBy"] == "pull_request"
+
+
+def test_conflict_watch_main_push_detects_merged_branch_by_commit_inclusion(client):
+    merged_branch_payload = {
+        "ref": "refs/heads/feature/merge-me",
+        "before": ZERO_GIT_SHA,
+        "after": "merge-me-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/push-route",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "merge-me-1",
+                "added": ["shared/push-conflict.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    other_branch_payload = {
+        "ref": "refs/heads/feature/other",
+        "before": ZERO_GIT_SHA,
+        "after": "other-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/push-route",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "other-1",
+                "added": ["shared/push-conflict.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    main_push_payload = {
+        "ref": "refs/heads/main",
+        "before": "main-before-1",
+        "after": "main-after-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/push-route",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "merge-me-1",
+                "added": [],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+        "head_commit": {
+            "id": "main-after-1",
+            "added": [],
+            "modified": [],
+            "removed": [],
+        },
+    }
+
+    assert post_github_webhook(client, "github-mainline-feature-1", merged_branch_payload).status_code == 202
+    assert post_github_webhook(client, "github-mainline-feature-2", other_branch_payload).status_code == 202
+    assert post_github_webhook(client, "github-mainline-push-1", main_push_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    merged_branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/merge-me")
+    resolved_conflict = next(item for item in state["conflicts"] if item["normalizedFilePath"] == "shared/push-conflict.txt")
+
+    assert merged_branch["status"] == "merged_to_main_or_master"
+    assert merged_branch["mergedDetectedBy"] == "push_contains_commit"
+    assert merged_branch["isMonitored"] is False
+    assert resolved_conflict["status"] == "resolved"
+    assert resolved_conflict["resolvedReason"] == "merged_to_main_or_master"
+    assert resolved_conflict["resolvedContext"]["mainlineBranch"] == "main"
+    assert resolved_conflict["resolvedContext"]["detectedBy"] == "push_contains_commit"
+
+
+def test_conflict_watch_master_pr_merge_marks_branch_merged(client):
+    feature_payload = {
+        "ref": "refs/heads/feature/master-target",
+        "before": ZERO_GIT_SHA,
+        "after": "master-feature-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/master-route",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "master-feature-1",
+                "added": ["shared/master-conflict.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    competitor_payload = {
+        "ref": "refs/heads/feature/master-other",
+        "before": ZERO_GIT_SHA,
+        "after": "master-other-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/master-route",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "master-other-1",
+                "added": ["shared/master-conflict.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    pr_payload = {
+        "action": "closed",
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/master-route",
+        },
+        "pull_request": {
+            "number": 5,
+            "merged": True,
+            "merged_at": "2026-04-12T12:30:00+00:00",
+            "merged_by": {"login": "octocat"},
+            "base": {
+                "ref": "master",
+                "sha": "master-merge-1",
+                "repo": {
+                    "name": "hotdock",
+                    "full_name": "merge-detect/master-route",
+                },
+            },
+            "head": {
+                "ref": "feature/master-target",
+                "sha": "master-feature-1",
+                "repo": {
+                    "name": "hotdock",
+                    "full_name": "merge-detect/master-route",
+                },
+            },
+        },
+        "sender": {"login": "octocat"},
+    }
+
+    assert post_github_webhook(client, "github-master-feature-1", feature_payload).status_code == 202
+    assert post_github_webhook(client, "github-master-feature-2", competitor_payload).status_code == 202
+    assert post_github_webhook(client, "github-master-pr-merge-1", pr_payload, event_type="pull_request").status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    merged_branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/master-target")
+    resolved_conflict = next(item for item in state["conflicts"] if item["normalizedFilePath"] == "shared/master-conflict.txt")
+
+    assert merged_branch["status"] == "merged_to_main_or_master"
+    assert merged_branch["mergedDetectedBy"] == "pull_request"
+    assert resolved_conflict["resolvedContext"]["mainlineBranch"] == "master"
+
+
+def test_conflict_watch_non_mainline_pr_merge_does_not_mark_branch_merged(client):
+    feature_payload = {
+        "ref": "refs/heads/feature/not-mainline",
+        "before": ZERO_GIT_SHA,
+        "after": "not-mainline-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/non-mainline",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "not-mainline-1",
+                "added": ["shared/non-mainline.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    pr_payload = {
+        "action": "closed",
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/non-mainline",
+        },
+        "pull_request": {
+            "number": 7,
+            "merged": True,
+            "merged_at": "2026-04-12T13:00:00+00:00",
+            "base": {
+                "ref": "develop",
+                "sha": "develop-1",
+                "repo": {
+                    "name": "hotdock",
+                    "full_name": "merge-detect/non-mainline",
+                },
+            },
+            "head": {
+                "ref": "feature/not-mainline",
+                "sha": "not-mainline-1",
+                "repo": {
+                    "name": "hotdock",
+                    "full_name": "merge-detect/non-mainline",
+                },
+            },
+        },
+    }
+
+    assert post_github_webhook(client, "github-non-mainline-feature-1", feature_payload).status_code == 202
+    response = post_github_webhook(client, "github-non-mainline-pr-1", pr_payload, event_type="pull_request")
+
+    assert response.status_code == 202
+    assert "Ignored non-merged GitHub pull_request event" in response.json()["message"]
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/not-mainline")
+
+    assert branch["status"] != "merged_to_main_or_master"
+    assert all(item["deliveryId"] != "github-non-mainline-pr-1" for item in state["webhookEvents"])
+
+
+def test_conflict_watch_delete_only_does_not_mark_branch_merged(client):
+    feature_payload = {
+        "ref": "refs/heads/feature/delete-only",
+        "before": ZERO_GIT_SHA,
+        "after": "delete-only-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/delete-only",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "delete-only-1",
+                "added": ["shared/delete-only.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    other_payload = {
+        "ref": "refs/heads/feature/delete-only-other",
+        "before": ZERO_GIT_SHA,
+        "after": "delete-only-other-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/delete-only",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "delete-only-other-1",
+                "added": ["shared/delete-only.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    delete_payload = {
+        "ref": "refs/heads/feature/delete-only",
+        "before": "delete-only-1",
+        "after": ZERO_GIT_SHA,
+        "deleted": True,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/delete-only",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [],
+    }
+
+    assert post_github_webhook(client, "github-delete-only-feature-1", feature_payload).status_code == 202
+    assert post_github_webhook(client, "github-delete-only-feature-2", other_payload).status_code == 202
+    assert post_github_webhook(client, "github-delete-only-feature-3", delete_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    assert all(branch["branchName"] != "feature/delete-only" for branch in state["branches"])
+    resolved_conflict = next(item for item in state["conflicts"] if item["normalizedFilePath"] == "shared/delete-only.txt")
+
+    assert resolved_conflict["status"] == "resolved"
+    assert resolved_conflict["resolvedReason"] == "webhook_branch_deleted"
+    assert resolved_conflict["resolvedReason"] != "merged_to_main_or_master"
 
 
 def test_conflict_watch_github_unknown_after_force_push_records_observed_files(client):
