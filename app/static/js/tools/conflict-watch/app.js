@@ -1,6 +1,6 @@
-import { QUICK_WEBHOOK_PRESETS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20250410-22";
-import { buildViewModel } from "./domain.js?v=conflict-watch-20250410-22";
-import { renderConflictWatch } from "./view.js?v=conflict-watch-20250410-22";
+import { QUICK_WEBHOOK_PRESETS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20260412-rename-ui";
+import { buildViewModel } from "./domain.js?v=conflict-watch-20260412-rename-ui";
+import { renderConflictWatch } from "./view.js?v=conflict-watch-20260412-rename-ui";
 
 const root = document.querySelector("[data-conflict-watch-app]");
 const API_BASE = "/tools/conflict-watch/api";

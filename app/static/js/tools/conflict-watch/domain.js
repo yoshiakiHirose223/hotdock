@@ -3,7 +3,7 @@ import {
   CHANGE_TYPE_LABELS,
   CONFLICT_STATUS_LABELS,
   DEFAULT_SETTINGS,
-} from "./constants.js?v=conflict-watch-20250410-22";
+} from "./constants.js?v=conflict-watch-20260412-rename-ui";
 
 function deepClone(value) {
   if (typeof structuredClone === "function") {
@@ -38,6 +38,106 @@ function createConflictKey(repositoryId, normalizedFilePath) {
 
 function createBranchFileKey(branchId, normalizedFilePath) {
   return `${branchId}::${normalizedFilePath}`;
+}
+
+function createRenamePairKey(oldPath, newPath) {
+  const normalizedOldPath = normalizePath(oldPath);
+  const normalizedNewPath = normalizePath(newPath);
+  if (!normalizedOldPath || !normalizedNewPath) {
+    return "";
+  }
+  return `${normalizedOldPath}=>${normalizedNewPath}`;
+}
+
+function buildRenameDisplayMeta(currentPath, changeType, previousPath) {
+  const normalizedCurrentPath = normalizePath(currentPath);
+  const normalizedPreviousPath = normalizePath(previousPath);
+  if (changeType === "renamed" && normalizedCurrentPath && normalizedPreviousPath) {
+    return {
+      displayChangeType: "renamed",
+      renameOldPath: normalizedPreviousPath,
+      renameNewPath: normalizedCurrentPath,
+      isRenameDisplay: true,
+      isRenamePrimary: true,
+    };
+  }
+  if (changeType === "removed" && normalizedCurrentPath && normalizedPreviousPath) {
+    return {
+      displayChangeType: "rename_source",
+      renameOldPath: normalizedCurrentPath,
+      renameNewPath: normalizedPreviousPath,
+      isRenameDisplay: true,
+      isRenamePrimary: false,
+    };
+  }
+  return {
+    displayChangeType: changeType ?? null,
+    renameOldPath: null,
+    renameNewPath: null,
+    isRenameDisplay: false,
+    isRenamePrimary: false,
+  };
+}
+
+function buildDisplayedObservedFiles(branchFiles) {
+  const renameTargetByPairKey = new Map();
+  branchFiles.forEach((branchFile) => {
+    const renameDisplay = buildRenameDisplayMeta(
+      branchFile.normalizedFilePath,
+      branchFile.changeType,
+      branchFile.previousPath,
+    );
+    if (renameDisplay.isRenamePrimary) {
+      renameTargetByPairKey.set(
+        createRenamePairKey(renameDisplay.renameOldPath, renameDisplay.renameNewPath),
+        branchFile,
+      );
+    }
+  });
+
+  const suppressedRenameSourceByPairKey = new Map();
+  branchFiles.forEach((branchFile) => {
+    const renameDisplay = buildRenameDisplayMeta(
+      branchFile.normalizedFilePath,
+      branchFile.changeType,
+      branchFile.previousPath,
+    );
+    if (renameDisplay.displayChangeType !== "rename_source") {
+      return;
+    }
+    const pairKey = createRenamePairKey(renameDisplay.renameOldPath, renameDisplay.renameNewPath);
+    if (!pairKey || !renameTargetByPairKey.has(pairKey)) {
+      return;
+    }
+    if (branchFile.isInConflict || branchFile.isBranchFileIgnored) {
+      return;
+    }
+    suppressedRenameSourceByPairKey.set(pairKey, branchFile.normalizedFilePath);
+  });
+
+  return branchFiles.flatMap((branchFile) => {
+    const renameDisplay = buildRenameDisplayMeta(
+      branchFile.normalizedFilePath,
+      branchFile.changeType,
+      branchFile.previousPath,
+    );
+    const pairKey = renameDisplay.isRenameDisplay
+      ? createRenamePairKey(renameDisplay.renameOldPath, renameDisplay.renameNewPath)
+      : "";
+    if (
+      renameDisplay.displayChangeType === "rename_source"
+      && suppressedRenameSourceByPairKey.get(pairKey) === branchFile.normalizedFilePath
+    ) {
+      return [];
+    }
+    return [{
+      ...branchFile,
+      ...renameDisplay,
+      suppressedRenameSourcePath: renameDisplay.isRenamePrimary
+        ? suppressedRenameSourceByPairKey.get(pairKey) ?? null
+        : null,
+    }];
+  });
 }
 
 function compareBranchUpdatedAt(left, right, order) {
@@ -77,7 +177,11 @@ function filterDisplayedBranches(branches, ui) {
         return true;
       }
       const branchMatched = branch.branchName.toLowerCase().includes(query);
-      const fileMatched = branch.observedFiles.some((branchFile) => branchFile.normalizedFilePath.toLowerCase().includes(query));
+      const fileMatched = branch.observedFiles.some((branchFile) => (
+        branchFile.normalizedFilePath.toLowerCase().includes(query)
+        || String(branchFile.renameOldPath ?? "").toLowerCase().includes(query)
+        || String(branchFile.renameNewPath ?? "").toLowerCase().includes(query)
+      ));
       if (searchMode === "branch") {
         return branchMatched;
       }
@@ -719,14 +823,14 @@ export function buildViewModel(rawState) {
   const allBranches = [...state.branches]
     .filter((branch) => branch.repositoryId === repositoryId && !branch.isDeleted)
     .map((branch) => {
-      const observedFiles = (branchObservedFiles.get(branch.id) ?? [])
+      const observedFiles = buildDisplayedObservedFiles(branchObservedFiles.get(branch.id) ?? [])
         .slice()
         .sort((left, right) => left.normalizedFilePath.localeCompare(right.normalizedFilePath));
       const hasConflict = observedFiles.some((branchFile) => branchFile.isInConflict);
       return {
         ...branch,
-        observedFileCount: branchFileCounts.get(branch.id)?.visible ?? 0,
-        ignoredFileCount: branchFileCounts.get(branch.id)?.ignored ?? 0,
+        observedFileCount: observedFiles.length,
+        ignoredFileCount: observedFiles.filter((branchFile) => branchFile.isBranchFileIgnored).length,
         observedFiles,
         healthStatus: hasConflict ? "abnormal" : "normal",
         healthLabel: hasConflict ? "競合" : "正常",
@@ -762,18 +866,20 @@ export function buildViewModel(rawState) {
   const selectedBranch = branches.find((branch) => branch.id === state.ui.selectedBranchId) ?? branches[0] ?? null;
 
   const selectedBranchFiles = selectedBranch
-    ? state.branchFiles
-      .filter((branchFile) => branchFile.branchId === selectedBranch.id)
-      .sort((left, right) => left.normalizedFilePath.localeCompare(right.normalizedFilePath))
-      .map((branchFile) => ({
-        ...branchFile,
-        ignored: isIgnoredFile(branchFile.normalizedFilePath, state.ignoreRules),
-        isBranchFileIgnored: Boolean(
-          branchFileIgnoreByKey.get(createBranchFileKey(branchFile.branchId, branchFile.normalizedFilePath)),
-        ),
-        branchFileIgnoreMemo:
-          branchFileIgnoreByKey.get(createBranchFileKey(branchFile.branchId, branchFile.normalizedFilePath))?.memo ?? "",
-      }))
+    ? buildDisplayedObservedFiles(
+      state.branchFiles
+        .filter((branchFile) => branchFile.branchId === selectedBranch.id)
+        .sort((left, right) => left.normalizedFilePath.localeCompare(right.normalizedFilePath))
+        .map((branchFile) => ({
+          ...branchFile,
+          ignored: isIgnoredFile(branchFile.normalizedFilePath, state.ignoreRules),
+          isBranchFileIgnored: Boolean(
+            branchFileIgnoreByKey.get(createBranchFileKey(branchFile.branchId, branchFile.normalizedFilePath)),
+          ),
+          branchFileIgnoreMemo:
+            branchFileIgnoreByKey.get(createBranchFileKey(branchFile.branchId, branchFile.normalizedFilePath))?.memo ?? "",
+        })),
+    )
     : [];
 
   const selectedBranchEvents = selectedBranch
@@ -800,6 +906,11 @@ export function buildViewModel(rawState) {
           lastPushAt: branch.lastPushAt ?? null,
           changeType: branchEntry?.changeType ?? null,
           previousPath: branchEntry?.previousPath ?? null,
+          ...buildRenameDisplayMeta(
+            conflict.normalizedFilePath,
+            branchEntry?.changeType ?? null,
+            branchEntry?.previousPath ?? null,
+          ),
           isNavigable: true,
         };
       }).filter(Boolean);
@@ -812,6 +923,11 @@ export function buildViewModel(rawState) {
           lastPushAt: branch?.lastPushAt ?? entry.lastPushAt ?? entry.lastSeenAt ?? null,
           changeType: entry.changeType ?? null,
           previousPath: entry.previousPath ?? null,
+          ...buildRenameDisplayMeta(
+            conflict.normalizedFilePath,
+            entry.changeType ?? null,
+            entry.previousPath ?? null,
+          ),
           isNavigable: Boolean(branch),
           isDeletedSnapshot: !branch,
         };

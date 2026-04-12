@@ -1,4 +1,4 @@
-import { PROVIDERS, QUICK_WEBHOOK_PRESETS } from "./constants.js?v=conflict-watch-20250410-22";
+import { PROVIDERS, QUICK_WEBHOOK_PRESETS } from "./constants.js?v=conflict-watch-20260412-rename-ui";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -55,10 +55,141 @@ function renderBranchFileStatus(changeType) {
     modified: "変更",
     removed: "削除",
     added: "追加",
-    renamed: "リネーム",
+    renamed: "名前変更",
+    rename_source: "旧パス",
     copied: "コピー",
   };
   return labels[changeType] ?? changeType ?? "-";
+}
+
+function renderRenameSummary(oldPath, newPath, label = "名前変更") {
+  return `
+    <div class="cw-rename-summary">
+      <span class="cw-rename-summary-label">${escapeHtml(label)}</span>
+      <span class="cw-rename-summary-flow">
+        <span class="cw-rename-summary-path is-old">${escapeHtml(oldPath)}</span>
+        <span class="cw-rename-summary-arrow" aria-hidden="true">→</span>
+        <span class="cw-rename-summary-path is-new">${escapeHtml(newPath)}</span>
+      </span>
+    </div>
+  `;
+}
+
+function renderBranchFileNameCell(branch, branchFile) {
+  const primaryPath = branchFile.displayChangeType === "renamed"
+    ? (branchFile.renameNewPath ?? branchFile.normalizedFilePath)
+    : branchFile.normalizedFilePath;
+  const nameClass = branchFile.displayChangeType === "rename_source"
+    ? "cw-branch-file-name cw-branch-file-name-secondary"
+    : "cw-branch-file-name";
+  const titleHtml = branchFile.isInConflict ? `
+    <button
+      type="button"
+      class="cw-inline-link cw-branch-file-link"
+      data-action="jump-to-conflict"
+      data-conflict-key="${escapeHtml(branchFile.activeConflictKey)}"
+    >
+      ${escapeHtml(primaryPath)}
+    </button>
+  ` : `
+    <span
+      class="${nameClass}"
+      ${branchFile.isBranchFileIgnored && branchFile.branchFileIgnoreMemo
+        ? `title="${escapeHtml(branchFile.branchFileIgnoreMemo)}"`
+        : ""}
+    >
+      ${escapeHtml(primaryPath)}
+    </span>
+  `;
+  let detailHtml = "";
+  if (branchFile.displayChangeType === "renamed" && branchFile.renameOldPath && branchFile.renameNewPath) {
+    detailHtml = renderRenameSummary(branchFile.renameOldPath, branchFile.renameNewPath, "名前変更");
+  } else if (branchFile.displayChangeType === "rename_source" && branchFile.renameOldPath && branchFile.renameNewPath) {
+    detailHtml = renderRenameSummary(branchFile.renameOldPath, branchFile.renameNewPath, "名前変更の旧パス");
+  } else if (branchFile.previousPath) {
+    detailHtml = `<div class="cw-table-subline">旧: ${escapeHtml(branchFile.previousPath)}</div>`;
+  }
+  return `
+    <div class="cw-branch-file-title-row">
+      ${titleHtml}
+      ${branchFile.isBranchFileIgnored && branchFile.branchFileIgnoreMemo ? `
+        <span
+          class="cw-branch-file-ignore-memo"
+          title="${escapeHtml(branchFile.branchFileIgnoreMemo)}"
+        >
+          ${escapeHtml(branchFile.branchFileIgnoreMemo)}
+        </span>
+      ` : ""}
+    </div>
+    ${detailHtml}
+  `;
+}
+
+function renderBranchFileIgnoreAction(branch, options) {
+  const {
+    mode,
+    filePath,
+    label,
+    ignoreId = "",
+    ignoreMemo = "",
+  } = options;
+  return `
+    <button
+      type="button"
+      class="ghost-button cw-compact-button cw-branch-file-ignore-button${mode === "create-secondary" ? " is-secondary" : ""}"
+      data-action="open-branch-file-ignore-modal"
+      data-ignore-mode="${mode === "remove" ? "remove" : "create"}"
+      ${ignoreId ? `data-ignore-id="${ignoreId}"` : ""}
+      data-branch-id="${branch.id}"
+      data-branch-name="${escapeHtml(branch.branchName)}"
+      data-file-path="${escapeHtml(filePath)}"
+      ${ignoreMemo ? `data-ignore-memo="${escapeHtml(ignoreMemo)}"` : ""}
+    >
+      ${escapeHtml(label)}
+    </button>
+  `;
+}
+
+function renderBranchFileIgnoreCell(branch, branchFile) {
+  const primaryAction = branchFile.isBranchFileIgnored
+    ? renderBranchFileIgnoreAction(branch, {
+      mode: "remove",
+      filePath: branchFile.normalizedFilePath,
+      label: "ignore 済み",
+      ignoreId: branchFile.branchFileIgnoreId ?? "",
+      ignoreMemo: branchFile.branchFileIgnoreMemo || "",
+    })
+    : renderBranchFileIgnoreAction(branch, {
+      mode: "create",
+      filePath: branchFile.normalizedFilePath,
+      label: "ignore",
+    });
+  const secondaryAction = branchFile.suppressedRenameSourcePath
+    ? renderBranchFileIgnoreAction(branch, {
+      mode: "create-secondary",
+      filePath: branchFile.suppressedRenameSourcePath,
+      label: "旧パスを ignore",
+    })
+    : "";
+  return `
+    <div class="cw-branch-file-ignore-stack">
+      ${primaryAction}
+      ${secondaryAction}
+    </div>
+  `;
+}
+
+function renderConflictBranchDetail(conflictPath, branch) {
+  if (branch.displayChangeType === "renamed" && branch.renameOldPath && branch.renameNewPath) {
+    return renderRenameSummary(branch.renameOldPath, branch.renameNewPath, "名前変更");
+  }
+  if (branch.displayChangeType === "rename_source" && branch.renameOldPath && branch.renameNewPath) {
+    return renderRenameSummary(branch.renameOldPath, branch.renameNewPath, "名前変更の旧パス");
+  }
+  if (branch.previousPath) {
+    return `<div class="cw-table-subline">旧: ${escapeHtml(branch.previousPath)}</div>`;
+  }
+  return "";
 }
 
 function renderResolvedReason(reason, context = null) {
@@ -517,67 +648,10 @@ function renderBranchTable(viewModel) {
                           ${branch.observedFiles.length ? branch.observedFiles.map((branchFile) => `
                             <tr class="cw-branch-file-row${branchFile.isInConflict ? " is-conflicting" : ""}${branchFile.isBranchFileIgnored ? " is-ignored" : ""}">
                               <td>
-                                <div class="cw-branch-file-title-row">
-                                  ${branchFile.isInConflict ? `
-                                    <button
-                                      type="button"
-                                      class="cw-inline-link cw-branch-file-link"
-                                      data-action="jump-to-conflict"
-                                      data-conflict-key="${escapeHtml(branchFile.activeConflictKey)}"
-                                    >
-                                      ${escapeHtml(branchFile.normalizedFilePath)}
-                                    </button>
-                                  ` : `
-                                    <span
-                                      class="cw-branch-file-name"
-                                      ${branchFile.isBranchFileIgnored && branchFile.branchFileIgnoreMemo
-                                        ? `title="${escapeHtml(branchFile.branchFileIgnoreMemo)}"`
-                                        : ""}
-                                    >
-                                      ${escapeHtml(branchFile.normalizedFilePath)}
-                                    </span>
-                                  `}
-                                  ${branchFile.isBranchFileIgnored && branchFile.branchFileIgnoreMemo ? `
-                                    <span
-                                      class="cw-branch-file-ignore-memo"
-                                      title="${escapeHtml(branchFile.branchFileIgnoreMemo)}"
-                                    >
-                                      ${escapeHtml(branchFile.branchFileIgnoreMemo)}
-                                    </span>
-                                  ` : ""}
-                                </div>
-                                ${branchFile.previousPath ? `<div class="cw-table-subline">旧: ${escapeHtml(branchFile.previousPath)}</div>` : ""}
+                                ${renderBranchFileNameCell(branch, branchFile)}
                               </td>
-                              <td>${escapeHtml(renderBranchFileStatus(branchFile.changeType))}</td>
-                              <td>
-                                ${branchFile.isBranchFileIgnored ? `
-                                  <button
-                                    type="button"
-                                    class="ghost-button cw-compact-button cw-branch-file-ignore-button"
-                                    data-action="open-branch-file-ignore-modal"
-                                    data-ignore-mode="remove"
-                                    data-ignore-id="${branchFile.branchFileIgnoreId ?? ""}"
-                                    data-branch-id="${branch.id}"
-                                    data-branch-name="${escapeHtml(branch.branchName)}"
-                                    data-file-path="${escapeHtml(branchFile.normalizedFilePath)}"
-                                    data-ignore-memo="${escapeHtml(branchFile.branchFileIgnoreMemo || "")}"
-                                  >
-                                    ignore 済み
-                                  </button>
-                                ` : `
-                                  <button
-                                    type="button"
-                                    class="ghost-button cw-compact-button cw-branch-file-ignore-button"
-                                    data-action="open-branch-file-ignore-modal"
-                                    data-ignore-mode="create"
-                                    data-branch-id="${branch.id}"
-                                    data-branch-name="${escapeHtml(branch.branchName)}"
-                                    data-file-path="${escapeHtml(branchFile.normalizedFilePath)}"
-                                  >
-                                    ignore
-                                  </button>
-                                `}
-                              </td>
+                              <td>${escapeHtml(renderBranchFileStatus(branchFile.displayChangeType ?? branchFile.changeType))}</td>
+                              <td>${renderBranchFileIgnoreCell(branch, branchFile)}</td>
                             </tr>
                           `).join("") : `
                             <tr>
@@ -694,9 +768,9 @@ function renderConflictTable(viewModel) {
                                   <span class="cw-row-title">${escapeHtml(branch.branchName)}</span>
                                 `}
                                 ${branch.isDeletedSnapshot ? `<div class="cw-table-subline">現在は一覧から削除済み</div>` : ""}
-                                ${branch.previousPath ? `<div class="cw-table-subline">旧: ${escapeHtml(branch.previousPath)}</div>` : ""}
+                                ${renderConflictBranchDetail(conflict.normalizedFilePath, branch)}
                               </div>
-                              <div class="cw-branch-files-grid-meta">${escapeHtml(renderBranchFileStatus(branch.changeType))}</div>
+                              <div class="cw-branch-files-grid-meta">${escapeHtml(renderBranchFileStatus(branch.displayChangeType ?? branch.changeType))}</div>
                               <div class="cw-branch-files-grid-date">${escapeHtml(formatFullDateTime(branch.lastPushAt))}</div>
                             </div>
                           `).join("")}

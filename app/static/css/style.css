@@ -2509,11 +2509,63 @@ body.cw-overlay-open {
   font-weight: 700;
 }
 
+.cw-branch-file-name-secondary {
+  color: #475569;
+  font-weight: 600;
+}
+
 .cw-branch-file-title-row {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.cw-rename-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 4px;
+}
+
+.cw-rename-summary-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(14, 116, 144, 0.12);
+  color: #155e75;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.cw-rename-summary-flow {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: #334155;
+  font-size: 0.83rem;
+}
+
+.cw-rename-summary-path {
+  word-break: break-word;
+}
+
+.cw-rename-summary-path.is-old {
+  color: #64748b;
+}
+
+.cw-rename-summary-path.is-new {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.cw-rename-summary-arrow {
+  color: #0f766e;
+  font-weight: 700;
 }
 
 .cw-branch-file-ignore-memo {
@@ -2553,6 +2605,19 @@ body.cw-overlay-open {
   background: #dbeafe;
   border-color: rgba(59, 130, 246, 0.24);
   color: #1d4ed8;
+}
+
+.cw-branch-file-ignore-button.is-secondary {
+  background: transparent;
+  border-color: rgba(148, 163, 184, 0.28);
+  color: #475569;
+}
+
+.cw-branch-file-ignore-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
 }
 
 .cw-modal-copy {
