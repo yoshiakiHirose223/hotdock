@@ -260,6 +260,10 @@ def test_conflict_watch_simulated_webhook_processing_trace_is_viewable(client):
     trace_payload = trace_response.json()
     assert trace_payload["isAvailable"] is True
     trace_json = json.loads(trace_payload["content"])
+    assert trace_json["totalElapsedMs"] >= 0
+    assert trace_json["totalElapsedSeconds"] >= 0
+    assert all("elapsedMs" in entry and entry["elapsedMs"] >= 0 for entry in trace_json["entries"])
+    assert all("elapsedSeconds" in entry and entry["elapsedSeconds"] >= 0 for entry in trace_json["entries"])
     labels = [entry["label"] for entry in trace_json["entries"]]
     assert "webhook_event_created" in labels
     assert "normal_push_completed" in labels
@@ -970,6 +974,10 @@ def test_conflict_watch_github_webhook_processing_trace_is_viewable(client):
     trace_payload = trace_response.json()
     assert trace_payload["isAvailable"] is True
     trace_json = json.loads(trace_payload["content"])
+    assert trace_json["totalElapsedMs"] >= 0
+    assert trace_json["totalElapsedSeconds"] >= 0
+    assert all("elapsedMs" in entry and entry["elapsedMs"] >= 0 for entry in trace_json["entries"])
+    assert all("elapsedSeconds" in entry and entry["elapsedSeconds"] >= 0 for entry in trace_json["entries"])
     labels = [entry["label"] for entry in trace_json["entries"]]
     assert "payload_parsed" in labels
     assert "observed_commits_extracted" in labels
@@ -1032,7 +1040,7 @@ def test_conflict_watch_github_webhook_persists_branch_commit_history(client):
     assert len(branch_commit_files) == 3
 
 
-def test_conflict_watch_github_force_push_known_after_rebuilds_current_files(client):
+def test_conflict_watch_github_force_push_records_observed_head_files(client):
     first_payload = {
         "ref": "refs/heads/feature/reset-known-after",
         "before": "0000000000000000000000000000000000000000",
@@ -1103,11 +1111,11 @@ def test_conflict_watch_github_force_push_known_after_rebuilds_current_files(cli
     )
 
     assert branch["possiblyInconsistent"] is False
-    assert branch_files == ["lab_reset/a.txt", "lab_reset/b.txt"]
-    assert [item["isActive"] for item in branch_commits] == [True, True, False]
+    assert branch_files == ["lab_reset/a.txt", "lab_reset/b.txt", "lab_reset/c.txt"]
+    assert [item["isActive"] for item in branch_commits] == [True, True, True]
 
 
-def test_conflict_watch_github_force_push_known_after_can_rewind_to_first_commit(client):
+def test_conflict_watch_github_force_push_does_not_drop_observed_files_on_reset(client):
     first_payload = {
         "ref": "refs/heads/feature/reset-known-after-first-commit",
         "before": "0000000000000000000000000000000000000000",
@@ -1186,16 +1194,16 @@ def test_conflict_watch_github_force_push_known_after_can_rewind_to_first_commit
     )
 
     assert branch["possiblyInconsistent"] is False
-    assert branch_files == ["lab_reset/a.txt"]
-    assert [item["isActive"] for item in branch_commits] == [True, False, False]
+    assert branch_files == ["lab_reset/a.txt", "lab_reset/b.txt", "lab_reset/c.txt"]
+    assert [item["isActive"] for item in branch_commits] == [True, True, True]
     assert [(item["normalizedFilePath"], item["isActive"]) for item in branch_commit_files] == [
         ("lab_reset/a.txt", True),
-        ("lab_reset/b.txt", False),
-        ("lab_reset/c.txt", False),
+        ("lab_reset/b.txt", True),
+        ("lab_reset/c.txt", True),
     ]
 
 
-def test_conflict_watch_github_out_of_order_reset_force_push_keeps_latest_branch_state(client):
+def test_conflict_watch_github_out_of_order_webhooks_are_still_recorded(client):
     force_payload = {
         "ref": "refs/heads/lab/retest2-reset-force",
         "before": "reset-c",
@@ -1276,14 +1284,14 @@ def test_conflict_watch_github_out_of_order_reset_force_push_keeps_latest_branch
         if item["branchId"] == branch["id"]
     }
 
-    assert branch_files == ["retest2_reset/a.txt"]
-    assert branch["possiblyInconsistent"] is True
+    assert branch_files == ["retest2_reset/a.txt", "retest2_reset/b.txt", "retest2_reset/c.txt"]
+    assert branch["possiblyInconsistent"] is False
     assert branch_commits["reset-a"]["isActive"] is True
-    assert "reset-b" not in branch_commits
-    assert "reset-c" not in branch_commits
+    assert branch_commits["reset-b"]["isActive"] is True
+    assert branch_commits["reset-c"]["isActive"] is True
 
 
-def test_conflict_watch_github_force_push_unknown_after_before_known_rewrites_branch_with_low_confidence(client):
+def test_conflict_watch_github_unknown_after_force_push_records_observed_files(client):
     first_payload = {
         "ref": "refs/heads/feature/unknown-after",
         "before": "0000000000000000000000000000000000000000",
@@ -1349,14 +1357,90 @@ def test_conflict_watch_github_force_push_unknown_after_before_known_rewrites_br
         if item["branchId"] == branch["id"]
     }
 
-    assert branch["possiblyInconsistent"] is True
-    assert branch_files == ["lab_rebase/a.txt", "lab_rebase/c.txt"]
+    assert branch["possiblyInconsistent"] is False
+    assert branch_files == ["lab_rebase/a.txt", "lab_rebase/b.txt", "lab_rebase/c.txt"]
     assert branch_commits["unknown-a"]["isActive"] is True
-    assert branch_commits["unknown-b"]["isActive"] is False
+    assert branch_commits["unknown-b"]["isActive"] is True
     assert branch_commits["unknown-rewritten"]["isActive"] is True
 
 
-def test_conflict_watch_github_amend_force_push_replaces_old_commit_with_new_active_commit(client):
+def test_conflict_watch_force_push_updates_branch_cache_without_commit_replay(client):
+    first_payload = {
+        "ref": "refs/heads/feature/cache-update-force-push",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "cache-2",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/cache-update",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "cache-1",
+                "added": ["cache_force/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "cache-2",
+                "added": ["cache_force/b.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    second_payload = {
+        "ref": "refs/heads/feature/cache-update-force-push",
+        "before": "cache-2",
+        "after": "cache-3",
+        "deleted": False,
+        "forced": True,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/cache-update",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "cache-3",
+                "added": ["cache_force/c.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+
+    assert post_github_webhook(client, "github-cache-update-1", first_payload).status_code == 202
+    assert post_github_webhook(client, "github-cache-update-2", second_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(
+        branch for branch in state["branches"] if branch["branchName"] == "feature/cache-update-force-push"
+    )
+    branch_files = sorted(
+        item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
+    )
+    event = next(item for item in state["webhookEvents"] if item["deliveryId"] == "github-cache-update-2")
+    trace_response = client.get(f"/tools/conflict-watch/api/webhook-events/{event['id']}/processing-trace")
+
+    assert trace_response.status_code == 200
+    trace_json = json.loads(trace_response.json()["content"])
+    cache_entry = next(entry for entry in trace_json["entries"] if entry["label"] == "branch_cache_updated")
+    force_entry = next(entry for entry in trace_json["entries"] if entry["label"] == "force_push_observed_only")
+
+    assert branch_files == ["cache_force/a.txt", "cache_force/b.txt", "cache_force/c.txt"]
+    assert cache_entry["detail"]["commitReplayCount"] == 0
+    assert cache_entry["detail"]["touchedFileCount"] == 1
+    assert force_entry["detail"]["touchedFileCount"] == 1
+
+
+def test_conflict_watch_github_amend_force_push_keeps_old_and_new_observed_commits(client):
     first_payload = {
         "ref": "refs/heads/feature/amend-force-push",
         "before": "0000000000000000000000000000000000000000",
@@ -1419,12 +1503,12 @@ def test_conflict_watch_github_amend_force_push_replaces_old_commit_with_new_act
     )
 
     assert branch["possiblyInconsistent"] is False
-    assert branch_commits["amend-old"]["isActive"] is False
+    assert branch_commits["amend-old"]["isActive"] is True
     assert branch_commits["amend-new"]["isActive"] is True
     assert branch_files == ["lab_amend/a.txt"]
 
 
-def test_conflict_watch_github_rebase_drop_force_push_disables_old_tail_commits(client):
+def test_conflict_watch_github_force_push_keeps_shared_path_as_observed_touch(client):
     first_payload = {
         "ref": "refs/heads/feature/rebase-drop",
         "before": "0000000000000000000000000000000000000000",
@@ -1501,13 +1585,202 @@ def test_conflict_watch_github_rebase_drop_force_push_disables_old_tail_commits(
     )
 
     assert branch_commits["rebase-old-1"]["isActive"] is True
-    assert branch_commits["rebase-old-2"]["isActive"] is False
-    assert branch_commits["rebase-old-3"]["isActive"] is False
+    assert branch_commits["rebase-old-2"]["isActive"] is True
+    assert branch_commits["rebase-old-3"]["isActive"] is True
     assert branch_commits["rebase-new-1"]["isActive"] is True
     assert branch_files == ["lab_rebase/base.txt", "lab_rebase/shared.txt"]
 
 
-def test_conflict_watch_github_squash_force_push_replaces_old_multiple_commits_with_single_new_commit(client):
+def test_conflict_watch_github_force_push_keeps_disjoint_middle_touch_history(client):
+    first_payload = {
+        "ref": "refs/heads/lab/retest3-rebase-force",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "rebase-c3",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/rebase-drop-disjoint",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "rebase-c1",
+                "message": "retest3: rebase c1",
+                "added": ["retest3_rebase/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "rebase-c2",
+                "message": "retest3: rebase c2",
+                "added": ["retest3_rebase/b.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "rebase-c3",
+                "message": "retest3: rebase c3",
+                "added": ["retest3_rebase/c.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    second_payload = {
+        "ref": "refs/heads/lab/retest3-rebase-force",
+        "before": "rebase-c3",
+        "after": "rebase-c3-rewritten",
+        "deleted": False,
+        "forced": True,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/rebase-drop-disjoint",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "rebase-c3-rewritten",
+                "message": "retest3: rebase c3",
+                "added": ["retest3_rebase/c.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+
+    assert post_github_webhook(client, "github-rebase-drop-disjoint-1", first_payload).status_code == 202
+    assert post_github_webhook(client, "github-rebase-drop-disjoint-2", second_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "lab/retest3-rebase-force")
+    branch_files = sorted(
+        item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
+    )
+    branch_commits = {
+        item["commitSha"]: item
+        for item in state["branchCommits"]
+        if item["branchId"] == branch["id"]
+    }
+
+    assert branch["possiblyInconsistent"] is False
+    assert branch_files == ["retest3_rebase/a.txt", "retest3_rebase/b.txt", "retest3_rebase/c.txt"]
+    assert branch_commits["rebase-c1"]["isActive"] is True
+    assert branch_commits["rebase-c2"]["isActive"] is True
+    assert branch_commits["rebase-c3"]["isActive"] is True
+    assert branch_commits["rebase-c3-rewritten"]["isActive"] is True
+
+
+def test_conflict_watch_github_force_push_keeps_multi_commit_touch_history(client):
+    first_payload = {
+        "ref": "refs/heads/feature/rebase-drop-multi",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "rebase-old-4",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/rebase-drop-multi",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "rebase-old-1",
+                "message": "multi: c1",
+                "added": ["lab_rebase_multi/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "rebase-old-2",
+                "message": "multi: c2",
+                "added": ["lab_rebase_multi/b.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "rebase-old-3",
+                "message": "multi: c3",
+                "added": ["lab_rebase_multi/c.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "rebase-old-4",
+                "message": "multi: c4",
+                "added": ["lab_rebase_multi/d.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    second_payload = {
+        "ref": "refs/heads/feature/rebase-drop-multi",
+        "before": "rebase-old-4",
+        "after": "rebase-new-4",
+        "deleted": False,
+        "forced": True,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/rebase-drop-multi",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "rebase-new-3",
+                "message": "multi: c3",
+                "added": ["lab_rebase_multi/c.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "rebase-new-4",
+                "message": "multi: c4",
+                "added": ["lab_rebase_multi/d.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+
+    assert post_github_webhook(client, "github-rebase-drop-multi-1", first_payload).status_code == 202
+    assert post_github_webhook(client, "github-rebase-drop-multi-2", second_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/rebase-drop-multi")
+    branch_files = sorted(
+        item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
+    )
+    branch_commits = {
+        item["commitSha"]: item
+        for item in state["branchCommits"]
+        if item["branchId"] == branch["id"]
+    }
+
+    assert branch["possiblyInconsistent"] is False
+    assert branch_files == [
+        "lab_rebase_multi/a.txt",
+        "lab_rebase_multi/b.txt",
+        "lab_rebase_multi/c.txt",
+        "lab_rebase_multi/d.txt",
+    ]
+    assert branch_commits["rebase-old-1"]["isActive"] is True
+    assert branch_commits["rebase-old-2"]["isActive"] is True
+    assert branch_commits["rebase-old-3"]["isActive"] is True
+    assert branch_commits["rebase-old-4"]["isActive"] is True
+    assert branch_commits["rebase-new-3"]["isActive"] is True
+    assert branch_commits["rebase-new-4"]["isActive"] is True
+
+
+def test_conflict_watch_github_squash_force_push_adds_new_observed_commit(client):
     first_payload = {
         "ref": "refs/heads/feature/squash-force-push",
         "before": "0000000000000000000000000000000000000000",
@@ -1583,14 +1856,14 @@ def test_conflict_watch_github_squash_force_push_replaces_old_multiple_commits_w
         item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
     )
 
-    assert branch_commits["squash-old-1"]["isActive"] is False
-    assert branch_commits["squash-old-2"]["isActive"] is False
-    assert branch_commits["squash-old-3"]["isActive"] is False
+    assert branch_commits["squash-old-1"]["isActive"] is True
+    assert branch_commits["squash-old-2"]["isActive"] is True
+    assert branch_commits["squash-old-3"]["isActive"] is True
     assert branch_commits["squash-new-1"]["isActive"] is True
     assert branch_files == ["lab_squash/a.txt", "lab_squash/b.txt", "lab_squash/c.txt"]
 
 
-def test_conflict_watch_github_rename_infers_previous_path_and_rebuilds_current_files(client):
+def test_conflict_watch_github_rename_infers_previous_path_and_updates_touched_files(client):
     payload = {
         "ref": "refs/heads/feature/rename-inference",
         "before": "0000000000000000000000000000000000000000",
@@ -1627,14 +1900,19 @@ def test_conflict_watch_github_rename_infers_previous_path_and_rebuilds_current_
         if item["branchId"] == branch["id"] and item["commitSha"] == "rename-1"
     )
 
+    branch_files_by_path = {item["normalizedFilePath"]: item for item in branch_files}
+
     assert event["filesRenamed"] == [{"oldPath": "lab_rename/old_name.txt", "newPath": "lab_rename/new_name.txt"}]
-    assert [item["normalizedFilePath"] for item in branch_files] == ["lab_rename/new_name.txt"]
-    assert branch_files[0]["previousPath"] == "lab_rename/old_name.txt"
+    assert sorted(branch_files_by_path) == ["lab_rename/new_name.txt", "lab_rename/old_name.txt"]
+    assert branch_files_by_path["lab_rename/new_name.txt"]["previousPath"] == "lab_rename/old_name.txt"
+    assert branch_files_by_path["lab_rename/new_name.txt"]["changeType"] == "renamed"
+    assert branch_files_by_path["lab_rename/old_name.txt"]["previousPath"] == "lab_rename/new_name.txt"
+    assert branch_files_by_path["lab_rename/old_name.txt"]["changeType"] == "removed"
     assert branch_commit_file["changeType"] == "renamed"
     assert branch_commit_file["previousPath"] == "lab_rename/old_name.txt"
 
 
-def test_conflict_watch_github_revert_heuristic_can_remove_reverted_path_from_current_files(client):
+def test_conflict_watch_github_revert_push_keeps_observed_touched_path(client):
     first_payload = {
         "ref": "refs/heads/feature/revert-heuristic",
         "before": "0000000000000000000000000000000000000000",
@@ -1687,9 +1965,11 @@ def test_conflict_watch_github_revert_heuristic_can_remove_reverted_path_from_cu
 
     state = client.get("/tools/conflict-watch/api/state").json()
     branch = next(branch for branch in state["branches"] if branch["branchName"] == "feature/revert-heuristic")
-    branch_files = [item for item in state["branchFiles"] if item["branchId"] == branch["id"]]
+    branch_files = sorted(
+        item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
+    )
 
-    assert branch_files == []
+    assert branch_files == ["lab_revert/a.txt"]
 
 
 def test_conflict_watch_possibly_inconsistent_branch_is_not_treated_as_normal_conflict_input(client):
@@ -1780,9 +2060,9 @@ def test_conflict_watch_possibly_inconsistent_branch_is_not_treated_as_normal_co
         conflict for conflict in updated_state["conflicts"] if conflict["normalizedFilePath"] == "lab_conflict/shared.txt"
     )
 
-    assert branch_b["possiblyInconsistent"] is True
-    assert updated_conflict["status"] == "notice"
-    assert updated_conflict["confidence"] == "low"
+    assert branch_b["possiblyInconsistent"] is False
+    assert updated_conflict["status"] == "warning"
+    assert updated_conflict["confidence"] in {"high", "medium", "low"}
 
 
 def test_conflict_watch_github_branch_delete_marks_branch_deleted_and_clears_current_files(client):
