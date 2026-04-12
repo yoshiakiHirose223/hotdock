@@ -947,7 +947,174 @@ def test_conflict_watch_github_force_push_known_after_rebuilds_current_files(cli
     assert [item["isActive"] for item in branch_commits] == [True, True, False]
 
 
-def test_conflict_watch_github_force_push_unknown_after_marks_branch_inconsistent_without_breaking_current_files(client):
+def test_conflict_watch_github_force_push_known_after_can_rewind_to_first_commit(client):
+    first_payload = {
+        "ref": "refs/heads/feature/reset-known-after-first-commit",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "reset-c",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/known-after-first",
+            "pushed_at": 1735690000,
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "reset-a",
+                "added": ["lab_reset/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "reset-b",
+                "added": ["lab_reset/b.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "reset-c",
+                "added": ["lab_reset/c.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+    }
+    second_payload = {
+        "ref": "refs/heads/feature/reset-known-after-first-commit",
+        "before": "reset-c",
+        "after": "reset-a",
+        "deleted": False,
+        "forced": True,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/known-after-first",
+            "pushed_at": 1735690002,
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [],
+        "head_commit": {
+            "id": "reset-a",
+            "added": ["lab_reset/a.txt"],
+            "modified": [],
+            "removed": [],
+        },
+    }
+
+    assert post_github_webhook(client, "github-force-known-first-1", first_payload).status_code == 202
+    assert post_github_webhook(client, "github-force-known-first-2", second_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(
+        branch for branch in state["branches"] if branch["branchName"] == "feature/reset-known-after-first-commit"
+    )
+    branch_files = sorted(
+        item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
+    )
+    branch_commits = sorted(
+        [item for item in state["branchCommits"] if item["branchId"] == branch["id"]],
+        key=lambda item: item["sequenceNo"],
+    )
+
+    assert branch["possiblyInconsistent"] is False
+    assert branch_files == ["lab_reset/a.txt"]
+    assert [item["isActive"] for item in branch_commits] == [True, False, False]
+
+
+def test_conflict_watch_github_out_of_order_reset_force_push_keeps_latest_branch_state(client):
+    force_payload = {
+        "ref": "refs/heads/lab/retest2-reset-force",
+        "before": "reset-c",
+        "after": "reset-a",
+        "deleted": False,
+        "forced": True,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/out-of-order-reset",
+            "pushed_at": 1735690002,
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [],
+        "head_commit": {
+            "id": "reset-a",
+            "timestamp": "2025-01-01T00:00:02+00:00",
+            "added": ["retest2_reset/a.txt"],
+            "modified": [],
+            "removed": [],
+        },
+    }
+    initial_payload = {
+        "ref": "refs/heads/lab/retest2-reset-force",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "reset-c",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "force-push/out-of-order-reset",
+            "pushed_at": 1735690000,
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "reset-a",
+                "added": ["retest2_reset/a.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "reset-b",
+                "added": ["retest2_reset/b.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "reset-c",
+                "added": ["retest2_reset/c.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+        "head_commit": {
+            "id": "reset-c",
+            "timestamp": "2025-01-01T00:00:00+00:00",
+            "added": ["retest2_reset/c.txt"],
+            "modified": [],
+            "removed": [],
+        },
+    }
+
+    assert post_github_webhook(client, "github-force-order-reset-2", force_payload).status_code == 202
+    assert post_github_webhook(client, "github-force-order-reset-1", initial_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    branch = next(branch for branch in state["branches"] if branch["branchName"] == "lab/retest2-reset-force")
+    branch_files = sorted(
+        item["normalizedFilePath"] for item in state["branchFiles"] if item["branchId"] == branch["id"]
+    )
+    branch_commits = {
+        item["commitSha"]: item
+        for item in state["branchCommits"]
+        if item["branchId"] == branch["id"]
+    }
+
+    assert branch_files == ["retest2_reset/a.txt"]
+    assert branch["possiblyInconsistent"] is True
+    assert branch_commits["reset-a"]["isActive"] is True
+    assert "reset-b" not in branch_commits
+    assert "reset-c" not in branch_commits
+
+
+def test_conflict_watch_github_force_push_unknown_after_before_known_rewrites_branch_with_low_confidence(client):
     first_payload = {
         "ref": "refs/heads/feature/unknown-after",
         "before": "0000000000000000000000000000000000000000",
@@ -1014,8 +1181,10 @@ def test_conflict_watch_github_force_push_unknown_after_marks_branch_inconsisten
     }
 
     assert branch["possiblyInconsistent"] is True
-    assert branch_files == ["lab_rebase/a.txt", "lab_rebase/b.txt"]
-    assert branch_commits["unknown-rewritten"]["isActive"] is False
+    assert branch_files == ["lab_rebase/a.txt", "lab_rebase/c.txt"]
+    assert branch_commits["unknown-a"]["isActive"] is True
+    assert branch_commits["unknown-b"]["isActive"] is False
+    assert branch_commits["unknown-rewritten"]["isActive"] is True
 
 
 def test_conflict_watch_github_amend_force_push_replaces_old_commit_with_new_active_commit(client):

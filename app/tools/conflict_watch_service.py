@@ -57,6 +57,8 @@ BRANCH_STATUS_ORDER = {
     "branch_excluded": 1,
 }
 
+ZERO_GIT_SHA = "0000000000000000000000000000000000000000"
+
 
 @dataclass(slots=True)
 class ServiceMessage:
@@ -93,6 +95,29 @@ class ConflictWatchService:
         if value is None:
             return None
         return value.isoformat()
+
+    def _coerce_datetime(self, value: Any) -> datetime | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+        if isinstance(value, (int, float)):
+            try:
+                return datetime.fromtimestamp(float(value), tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                return None
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromtimestamp(float(text), tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            pass
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
     def normalize_path(self, file_path: str | None) -> str:
         if file_path is None:
@@ -517,6 +542,19 @@ class ConflictWatchService:
                     files_renamed.append(item)
         return files_added, files_modified, files_removed, files_renamed
 
+    def _extract_github_pushed_at(self, payload: dict[str, Any]) -> datetime | None:
+        repository = payload.get("repository")
+        if isinstance(repository, dict):
+            pushed_at = self._coerce_datetime(repository.get("pushed_at"))
+            if pushed_at is not None:
+                return pushed_at
+        head_commit = payload.get("head_commit")
+        if isinstance(head_commit, dict):
+            commit_timestamp = self._coerce_datetime(head_commit.get("timestamp"))
+            if commit_timestamp is not None:
+                return commit_timestamp
+        return None
+
     def _next_branch_sequence_no(self, db: Session, branch: ConflictWatchBranch) -> int:
         current_max = db.scalar(
             select(func.max(ConflictWatchBranchCommit.sequence_no)).where(
@@ -922,6 +960,31 @@ class ConflictWatchService:
         if active_only:
             query = query.where(ConflictWatchBranchCommit.is_active.is_(True))
         return db.scalar(query)
+
+    def _get_active_branch_head_commit(
+        self,
+        db: Session,
+        branch: ConflictWatchBranch,
+    ) -> ConflictWatchBranchCommit | None:
+        return db.scalar(
+            select(ConflictWatchBranchCommit)
+            .where(
+                ConflictWatchBranchCommit.repository_id == branch.repository_id,
+                ConflictWatchBranchCommit.branch_id == branch.id,
+                ConflictWatchBranchCommit.is_active.is_(True),
+            )
+            .order_by(ConflictWatchBranchCommit.sequence_no.desc())
+            .limit(1)
+        )
+
+    def _is_stale_branch_event(
+        self,
+        branch: ConflictWatchBranch,
+        event: ConflictWatchWebhookEvent,
+    ) -> bool:
+        if branch.last_push_at is None or event.pushed_at is None:
+            return False
+        return event.pushed_at < branch.last_push_at
 
     def _estimate_before_rewrite_start_sequence(
         self,
@@ -2148,6 +2211,8 @@ class ConflictWatchService:
         now = self.now()
         branch = self._get_or_create_branch(db, repository, event.branch_name, now=now)
         observed_at = event.pushed_at or now
+        if self._is_stale_branch_event(branch, event):
+            return True
         branch.last_push_at = event.pushed_at or now
         branch.last_seen_at = now
         branch.latest_after_sha = event.after_sha
@@ -2232,14 +2297,17 @@ class ConflictWatchService:
                 return True
 
             branch.possibly_inconsistent = True
+            has_active_head = self._get_active_branch_head_commit(db, branch) is not None
             if observed_commits:
                 self._append_observed_commits(
                     db,
                     branch,
                     event,
                     observed_commits,
-                    is_active=False,
+                    is_active=not has_active_head,
                 )
+                if not has_active_head:
+                    self._rebuild_branch_current_files(db, branch)
             return True
 
         if observed_commits:
@@ -2574,7 +2642,7 @@ class ConflictWatchService:
             )
         repository = self._ensure_repository(db, "github", repository_external_id, repository_name)
         raw_payload_ref = self._store_raw_payload("github", delivery_id, payload_bytes)
-        pushed_at = self.now()
+        pushed_at = self._extract_github_pushed_at(payload) or self.now()
         files_added, files_modified, files_removed, files_renamed = self._extract_github_event_file_sets(payload)
         event = self._create_webhook_event(
             db,
