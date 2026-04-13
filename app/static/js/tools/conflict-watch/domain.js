@@ -728,6 +728,15 @@ function applyEventToBranches(state, event) {
   if (!repository) {
     return false;
   }
+  if (event.branchName === "main" || event.branchName === "master") {
+    const existingBranch = state.branches.find((item) => (
+      item.repositoryId === repository.id && item.branchName === event.branchName
+    ));
+    if (existingBranch) {
+      removeBranchFromState(state, existingBranch.id);
+    }
+    return true;
+  }
 
   const branch = ensureBranch(state, repository.id, event.branchName, state.now);
   const previousMonitoringClosedReason = branch.monitoringClosedReason;

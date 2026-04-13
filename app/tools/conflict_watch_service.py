@@ -839,6 +839,27 @@ class ConflictWatchService:
             )
         db.flush()
 
+    def _clear_mainline_branch_tracking(
+        self,
+        db: Session,
+        repository: ConflictWatchRepository,
+        branch_name: str,
+        *,
+        trace: dict[str, Any] | None = None,
+    ) -> bool:
+        branch = self._get_branch_by_name(db, repository.id, branch_name)
+        if branch is None:
+            return False
+        self._remove_branch(db, branch)
+        self._trace_step(
+            trace,
+            "mainline_branch_tracking_cleared",
+            repositoryId=repository.id,
+            repositoryName=repository.repository_name,
+            branchName=branch_name,
+        )
+        return True
+
     def _get_branch_by_name(
         self,
         db: Session,
@@ -2476,6 +2497,24 @@ class ConflictWatchService:
         repository = db.scalar(select(ConflictWatchRepository).where(ConflictWatchRepository.id == event.repository_id))
         if not repository:
             return False
+        if self._is_mainline_branch_name(event.branch_name):
+            removed_existing_branch = self._clear_mainline_branch_tracking(
+                db,
+                repository,
+                event.branch_name,
+                trace=trace,
+            )
+            self._trace_step(
+                trace,
+                "mainline_branch_observed_without_tracking",
+                repositoryId=repository.id,
+                repositoryName=repository.repository_name,
+                branchName=event.branch_name,
+                removedExistingBranch=removed_existing_branch,
+                isDeleted=event.is_deleted,
+                isForced=event.is_forced,
+            )
+            return True
         now = self.now()
         branch = self._get_or_create_branch(db, repository, event.branch_name, now=now)
         observed_at = event.pushed_at or now

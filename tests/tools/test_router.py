@@ -1517,10 +1517,52 @@ def test_conflict_watch_main_push_detects_merged_branch_by_commit_inclusion(clie
     assert merged_branch["status"] == "merged_to_main_or_master"
     assert merged_branch["mergedDetectedBy"] == "push_contains_commit"
     assert merged_branch["isMonitored"] is False
+    assert all(branch["branchName"] != "main" for branch in state["branches"])
     assert resolved_conflict["status"] == "resolved"
     assert resolved_conflict["resolvedReason"] == "merged_to_main_or_master"
     assert resolved_conflict["resolvedContext"]["mainlineBranch"] == "main"
     assert resolved_conflict["resolvedContext"]["detectedBy"] == "push_contains_commit"
+
+
+def test_conflict_watch_mainline_push_does_not_persist_default_branch_history(client):
+    main_push_payload = {
+        "ref": "refs/heads/main",
+        "before": ZERO_GIT_SHA,
+        "after": "main-track-1",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "hotdock",
+            "full_name": "merge-detect/mainline-no-history",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "main-track-1",
+                "added": ["mainline/preserved.txt"],
+                "modified": [],
+                "removed": [],
+            },
+        ],
+        "head_commit": {
+            "id": "main-track-1",
+            "added": ["mainline/preserved.txt"],
+            "modified": [],
+            "removed": [],
+        },
+    }
+
+    assert post_github_webhook(client, "github-mainline-no-history-1", main_push_payload).status_code == 202
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    event = next(item for item in state["webhookEvents"] if item["deliveryId"] == "github-mainline-no-history-1")
+
+    assert all(branch["branchName"] != "main" for branch in state["branches"])
+    assert state["branchCommits"] == []
+    assert state["branchFiles"] == []
+    assert event["branchName"] == "main"
 
 
 def test_conflict_watch_master_pr_merge_marks_branch_merged(client):
