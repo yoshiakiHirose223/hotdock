@@ -34,7 +34,7 @@ def test_conflict_watch_page(client):
 
     assert response.status_code == 200
     assert "Conflict Watch" in response.text
-    assert "/static/js/tools/conflict-watch/app.js?v=conflict-watch-20260412-mainline-merge" in response.text
+    assert "/static/js/tools/conflict-watch/app.js?v=conflict-watch-20260412-repository-secrets" in response.text
     assert response.headers["cache-control"] == "no-store"
     assert 'data-page-mode="repositories"' in response.text
 
@@ -126,6 +126,97 @@ def test_conflict_watch_update_settings_persists_slack_webhook(client):
     payload = response.json()
     assert payload["state"]["settings"]["slackWebhookUrl"] == "https://hooks.slack.com/services/test/example"
     assert payload["state"]["settings"]["processingTraceEnabled"] is False
+
+
+def test_conflict_watch_repository_webhook_secrets_are_saved_per_repository(client):
+    repository_one = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "repo-one",
+            "externalRepoId": "owner/repo-one",
+        },
+    ).json()["state"]["repositories"][0]
+    repository_two = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "repo-two",
+            "externalRepoId": "owner/repo-two",
+        },
+    ).json()["state"]["repositories"][-1]
+
+    response_one = client.patch(
+        f"/tools/conflict-watch/api/repositories/{repository_one['id']}/webhook-secrets",
+        json={
+            "githubWebhookSecret": "repo-one-secret",
+            "backlogWebhookSecret": "",
+        },
+    )
+    response_two = client.patch(
+        f"/tools/conflict-watch/api/repositories/{repository_two['id']}/webhook-secrets",
+        json={
+            "githubWebhookSecret": "repo-two-secret",
+            "backlogWebhookSecret": "",
+        },
+    )
+
+    assert response_one.status_code == 200
+    assert response_two.status_code == 200
+
+    state = client.get("/tools/conflict-watch/api/state").json()
+    repositories_by_external_id = {
+        repository["externalRepoId"]: repository
+        for repository in state["repositories"]
+    }
+    assert repositories_by_external_id["owner/repo-one"]["githubWebhookSecret"] == "repo-one-secret"
+    assert repositories_by_external_id["owner/repo-two"]["githubWebhookSecret"] == "repo-two-secret"
+
+
+def test_conflict_watch_global_settings_do_not_overwrite_repository_webhook_secret(client):
+    repository = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "repo-one",
+            "externalRepoId": "owner/repo-one",
+        },
+    ).json()["state"]["repositories"][0]
+
+    secret_response = client.patch(
+        f"/tools/conflict-watch/api/repositories/{repository['id']}/webhook-secrets",
+        json={
+            "githubWebhookSecret": "repo-one-secret",
+            "backlogWebhookSecret": "",
+        },
+    )
+    assert secret_response.status_code == 200
+
+    settings_response = client.patch(
+        "/tools/conflict-watch/api/settings",
+        json={
+            "staleDays": 21,
+            "longUnresolvedDays": 9,
+            "rawPayloadRetentionDays": 15,
+            "processingTraceEnabled": False,
+            "forcePushNoteEnabled": True,
+            "suppressNoticeNotifications": False,
+            "notificationDestination": "#alerts",
+            "slackWebhookUrl": "",
+            "githubWebhookEndpoint": "/tools/conflict-watch/webhooks/github",
+            "backlogWebhookEndpoint": "/tools/conflict-watch/webhooks/backlog",
+            "githubWebhookSecret": "global-secret",
+            "backlogWebhookSecret": "backlog_demo_secret",
+        },
+    )
+
+    assert settings_response.status_code == 200
+    repository_state = next(
+        item
+        for item in settings_response.json()["state"]["repositories"]
+        if item["id"] == repository["id"]
+    )
+    assert repository_state["githubWebhookSecret"] == "repo-one-secret"
 
 
 def test_conflict_watch_simulated_webhook_creates_branch(client):
@@ -880,6 +971,60 @@ def test_conflict_watch_github_webhook_signature_validation(client):
     )
     assert duplicate.status_code == 202
     assert "冪等性により再処理をスキップ" in duplicate.json()["message"]
+
+
+def test_conflict_watch_github_webhook_uses_repository_specific_secret(client):
+    repository = client.post(
+        "/tools/conflict-watch/api/repositories",
+        json={
+            "providerType": "github",
+            "repositoryName": "repo-specific-secret",
+            "externalRepoId": "owner/repo-specific-secret",
+        },
+    ).json()["state"]["repositories"][0]
+
+    update_response = client.patch(
+        f"/tools/conflict-watch/api/repositories/{repository['id']}/webhook-secrets",
+        json={
+            "githubWebhookSecret": "repo-specific-secret",
+            "backlogWebhookSecret": "",
+        },
+    )
+    assert update_response.status_code == 200
+
+    payload = {
+        "ref": "refs/heads/feature/repo-secret",
+        "before": "before-sha",
+        "after": "after-sha",
+        "deleted": False,
+        "forced": False,
+        "repository": {
+            "name": "repo-specific-secret",
+            "full_name": "owner/repo-specific-secret",
+        },
+        "pusher": {
+            "name": "tester",
+        },
+        "commits": [
+            {
+                "id": "commit-sha-1",
+                "added": [],
+                "modified": ["app/conflicts/service.py"],
+                "removed": [],
+            }
+        ],
+    }
+
+    response = post_github_webhook(
+        client,
+        "github-delivery-repo-secret-1",
+        payload,
+        secret="repo-specific-secret",
+    )
+
+    assert response.status_code == 202
+    state = client.get("/tools/conflict-watch/api/state").json()
+    assert any(branch["branchName"] == "feature/repo-secret" for branch in state["branches"])
 
 
 def test_conflict_watch_github_webhook_raw_payload_preserves_original_json(client):

@@ -17,6 +17,7 @@ from app.tools.conflict_watch_schemas import (
     ConflictWatchWebhookAccepted,
     IgnoreRuleCreateRequest,
     RepositoryCreateRequest,
+    RepositoryWebhookSecretsUpdateRequest,
     SettingsUpdateRequest,
     SimulatedWebhookRequest,
     WebhookEventProcessingTraceResponse,
@@ -149,6 +150,23 @@ async def conflict_watch_toggle_repository_active(
     db: Session = Depends(get_db),
 ):
     result = conflict_watch_service.toggle_repository_active(db, repository_id)
+    return build_conflict_watch_response(db, result.message, result.tone)
+
+
+@router.patch("/conflict-watch/api/repositories/{repository_id}/webhook-secrets", response_model=ConflictWatchApiResponse)
+async def conflict_watch_update_repository_webhook_secrets(
+    repository_id: int,
+    payload: RepositoryWebhookSecretsUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    result = conflict_watch_service.update_repository_webhook_secrets(
+        db,
+        repository_id,
+        {
+            "githubWebhookSecret": payload.githubWebhookSecret,
+            "backlogWebhookSecret": payload.backlogWebhookSecret,
+        },
+    )
     return build_conflict_watch_response(db, result.message, result.tone)
 
 

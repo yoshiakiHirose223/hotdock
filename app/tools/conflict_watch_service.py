@@ -1508,6 +1508,8 @@ class ConflictWatchService:
             "externalRepoId": repository.external_repo_id,
             "repositoryName": repository.repository_name,
             "isActive": repository.is_active,
+            "githubWebhookSecret": repository.github_webhook_secret or "",
+            "backlogWebhookSecret": repository.backlog_webhook_secret or "",
             "createdAt": self._iso(repository.created_at),
             "updatedAt": self._iso(repository.updated_at),
         }
@@ -1872,6 +1874,23 @@ class ConflictWatchService:
         db.commit()
         state = "有効" if repository.is_active else "無効"
         return ServiceMessage(f"{repository.repository_name} を {state} にしました。")
+
+    def update_repository_webhook_secrets(
+        self,
+        db: Session,
+        repository_id: int,
+        payload: dict[str, Any],
+    ) -> ServiceMessage:
+        repository = self._get_repository(db, repository_id)
+        repository.github_webhook_secret = (
+            str(payload.get("githubWebhookSecret", repository.github_webhook_secret or "")).strip() or None
+        )
+        repository.backlog_webhook_secret = (
+            str(payload.get("backlogWebhookSecret", repository.backlog_webhook_secret or "")).strip() or None
+        )
+        repository.updated_at = self.now()
+        db.commit()
+        return ServiceMessage(f"{repository.repository_name} の webhook secret を更新しました。")
 
     def update_settings(self, db: Session, payload: dict[str, Any]) -> ServiceMessage:
         settings_row = self._get_or_create_settings(db)
@@ -2882,6 +2901,31 @@ class ConflictWatchService:
             return False
         return hmac.compare_digest(secret, provided_secret)
 
+    def _effective_repository_webhook_secret(
+        self,
+        db: Session,
+        *,
+        provider_type: str,
+        repository_external_id: str,
+        fallback_secret: str,
+    ) -> tuple[str, str, int | None]:
+        normalized_repo_id = str(repository_external_id or "").strip()
+        if normalized_repo_id:
+            repository = db.scalar(
+                select(ConflictWatchRepository).where(
+                    ConflictWatchRepository.provider_type == provider_type,
+                    ConflictWatchRepository.external_repo_id == normalized_repo_id,
+                )
+            )
+            if repository is not None:
+                if provider_type == "github":
+                    repository_secret = str(repository.github_webhook_secret or "").strip()
+                else:
+                    repository_secret = str(repository.backlog_webhook_secret or "").strip()
+                if repository_secret:
+                    return repository_secret, "repository", repository.id
+        return str(fallback_secret or ""), "default", None
+
     def _collect_github_files(self, commits: list[dict[str, Any]], key: str) -> list[str]:
         files: list[str] = []
         for commit in commits:
@@ -3210,7 +3254,20 @@ class ConflictWatchService:
             headCommitId=head_commit_id,
         )
 
-        if not self._validate_github_signature(settings_row.github_webhook_secret, payload_bytes, signature_header):
+        effective_secret, secret_scope, secret_repository_id = self._effective_repository_webhook_secret(
+            db,
+            provider_type="github",
+            repository_external_id=repository_external_id,
+            fallback_secret=settings_row.github_webhook_secret,
+        )
+        self._trace_step(
+            trace,
+            "signature_secret_resolved",
+            providerType="github",
+            secretScope=secret_scope,
+            repositoryId=secret_repository_id,
+        )
+        if not self._validate_github_signature(effective_secret, payload_bytes, signature_header):
             self._record_security_log(
                 db,
                 "github",
@@ -3371,7 +3428,20 @@ class ConflictWatchService:
             deleted=payload.get("deleted"),
         )
 
-        if not self._validate_backlog_secret(settings_row.backlog_webhook_secret, provided_secret):
+        effective_secret, secret_scope, secret_repository_id = self._effective_repository_webhook_secret(
+            db,
+            provider_type="backlog",
+            repository_external_id=repository_external_id,
+            fallback_secret=settings_row.backlog_webhook_secret,
+        )
+        self._trace_step(
+            trace,
+            "secret_scope_resolved",
+            providerType="backlog",
+            secretScope=secret_scope,
+            repositoryId=secret_repository_id,
+        )
+        if not self._validate_backlog_secret(effective_secret, provided_secret):
             self._record_security_log(
                 db,
                 "backlog",

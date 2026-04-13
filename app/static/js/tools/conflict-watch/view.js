@@ -1,4 +1,4 @@
-import { BRANCH_STATUS_LABELS, PROVIDERS, QUICK_WEBHOOK_PRESETS } from "./constants.js?v=conflict-watch-20260412-mainline-merge";
+import { BRANCH_STATUS_LABELS, PROVIDERS, QUICK_WEBHOOK_PRESETS } from "./constants.js?v=conflict-watch-20260412-repository-secrets";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -1003,6 +1003,7 @@ function renderSecurityLogs(viewModel) {
 }
 
 function renderSettings(viewModel) {
+  const selectedRepository = viewModel.selectedRepository ?? null;
   return `
     <section class="cw-card">
       <div class="cw-card-header">
@@ -1048,14 +1049,14 @@ function renderSettings(viewModel) {
       </div>
 
       <div class="cw-subsection">
-        <h3>provider 設定 / secret</h3>
+        <h3>provider 設定 / default secret</h3>
         <div class="cw-form-grid">
           <div>
             <label>GitHub webhook endpoint</label>
             <input type="text" value="${escapeHtml(viewModel.settings.githubWebhookEndpoint)}" data-setting="githubWebhookEndpoint">
           </div>
           <div>
-            <label>GitHub webhook secret</label>
+            <label>Default GitHub webhook secret (fallback)</label>
             <input type="text" value="${escapeHtml(viewModel.settings.githubWebhookSecret)}" data-setting="githubWebhookSecret">
           </div>
           <div>
@@ -1063,10 +1064,44 @@ function renderSettings(viewModel) {
             <input type="text" value="${escapeHtml(viewModel.settings.backlogWebhookEndpoint)}" data-setting="backlogWebhookEndpoint">
           </div>
           <div>
-            <label>Backlog webhook secret</label>
+            <label>Default Backlog webhook secret (fallback)</label>
             <input type="text" value="${escapeHtml(viewModel.settings.backlogWebhookSecret)}" data-setting="backlogWebhookSecret">
           </div>
         </div>
+      </div>
+
+      <div class="cw-subsection">
+        <h3>選択中 repository の webhook secret</h3>
+        ${selectedRepository ? `
+          <p class="cw-table-subline">
+            ${escapeHtml(selectedRepository.repositoryName)} / ${escapeHtml(selectedRepository.externalRepoId)}
+          </p>
+          <div class="cw-form-grid">
+            <div>
+              <label>GitHub webhook secret</label>
+              <input
+                type="text"
+                value="${escapeHtml(selectedRepository.githubWebhookSecret ?? "")}"
+                data-repository-setting="githubWebhookSecret"
+                placeholder="repository ごとの GitHub secret"
+              >
+            </div>
+            <div>
+              <label>Backlog webhook secret</label>
+              <input
+                type="text"
+                value="${escapeHtml(selectedRepository.backlogWebhookSecret ?? "")}"
+                data-repository-setting="backlogWebhookSecret"
+                placeholder="repository ごとの Backlog secret"
+              >
+            </div>
+          </div>
+          <div class="action-row">
+            <button type="button" class="secondary" data-action="apply-repository-webhook-secrets">選択中 repository に保存</button>
+          </div>
+        ` : `
+          <p class="cw-table-subline">repository を選択すると、ここで個別の webhook secret を設定できます。</p>
+        `}
       </div>
 
       <div class="action-row">

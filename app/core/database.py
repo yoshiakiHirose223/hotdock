@@ -88,6 +88,14 @@ def ensure_legacy_blog_schema() -> None:
             if "merged_detected_by" not in branch_columns:
                 connection.execute(text("ALTER TABLE cw_branches ADD COLUMN merged_detected_by VARCHAR(50)"))
 
+    if "cw_repositories" in inspector.get_table_names():
+        repository_columns = {column["name"]: column for column in inspector.get_columns("cw_repositories")}
+        with engine.begin() as connection:
+            if "github_webhook_secret" not in repository_columns:
+                connection.execute(text("ALTER TABLE cw_repositories ADD COLUMN github_webhook_secret VARCHAR(255)"))
+            if "backlog_webhook_secret" not in repository_columns:
+                connection.execute(text("ALTER TABLE cw_repositories ADD COLUMN backlog_webhook_secret VARCHAR(255)"))
+
     ensure_conflict_watch_commit_history_schema()
 
 

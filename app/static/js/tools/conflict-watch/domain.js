@@ -3,7 +3,7 @@ import {
   CHANGE_TYPE_LABELS,
   CONFLICT_STATUS_LABELS,
   DEFAULT_SETTINGS,
-} from "./constants.js?v=conflict-watch-20260412-mainline-merge";
+} from "./constants.js?v=conflict-watch-20260412-repository-secrets";
 
 function deepClone(value) {
   if (typeof structuredClone === "function") {
@@ -668,6 +668,11 @@ function syncUiSelection(state) {
 function reconcileState(rawState, options = {}) {
   const state = rawState;
   state.settings = { ...DEFAULT_SETTINGS, ...state.settings };
+  state.repositories = (state.repositories ?? []).map((repository) => ({
+    githubWebhookSecret: "",
+    backlogWebhookSecret: "",
+    ...repository,
+  }));
   applyWebhookRetentionPolicy(state);
   reconcileBranches(state);
   reconcileConflicts(state, options);

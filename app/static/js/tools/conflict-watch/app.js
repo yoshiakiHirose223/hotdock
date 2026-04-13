@@ -1,6 +1,6 @@
-import { QUICK_WEBHOOK_PRESETS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20260412-mainline-merge";
-import { buildViewModel } from "./domain.js?v=conflict-watch-20260412-mainline-merge";
-import { renderConflictWatch } from "./view.js?v=conflict-watch-20260412-mainline-merge";
+import { QUICK_WEBHOOK_PRESETS, WEBHOOK_FORM_DEFAULTS } from "./constants.js?v=conflict-watch-20260412-repository-secrets";
+import { buildViewModel } from "./domain.js?v=conflict-watch-20260412-repository-secrets";
+import { renderConflictWatch } from "./view.js?v=conflict-watch-20260412-repository-secrets";
 
 const root = document.querySelector("[data-conflict-watch-app]");
 const API_BASE = "/tools/conflict-watch/api";
@@ -235,6 +235,17 @@ function updateSettingField(key, value) {
     ...snapshot.settings,
     [key]: value,
   };
+}
+
+function updateRepositorySettingField(key, value) {
+  if (!snapshot || uiState.selectedRepositoryId === null) {
+    return;
+  }
+  snapshot.repositories = (snapshot.repositories ?? []).map((repository) => (
+    repository.id === uiState.selectedRepositoryId
+      ? { ...repository, [key]: value }
+      : repository
+  ));
 }
 
 function closeSideDrawer() {
@@ -497,6 +508,13 @@ root.addEventListener("change", (event) => {
         : target.value;
     updateSettingField(key, value);
     render();
+    return;
+  }
+
+  if (target.matches("[data-repository-setting]")) {
+    const key = target.getAttribute("data-repository-setting");
+    updateRepositorySettingField(key, target.value);
+    render();
   }
 });
 
@@ -601,6 +619,25 @@ root.addEventListener("click", async (event) => {
     await requestJson(`${API_BASE}/settings`, {
       method: "PATCH",
       body: JSON.stringify(snapshot.settings),
+    });
+    return;
+  }
+
+  if (action === "apply-repository-webhook-secrets") {
+    const repositoryId = getSelectedRepositoryId();
+    const repository = snapshot?.repositories?.find((item) => item.id === repositoryId);
+    if (!repositoryId || !repository) {
+      uiState.feedbackMessage = "repository を選択してから webhook secret を設定してください。";
+      uiState.feedbackTone = "warning";
+      render();
+      return;
+    }
+    await requestJson(`${API_BASE}/repositories/${repositoryId}/webhook-secrets`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        githubWebhookSecret: repository.githubWebhookSecret ?? "",
+        backlogWebhookSecret: repository.backlogWebhookSecret ?? "",
+      }),
     });
     return;
   }

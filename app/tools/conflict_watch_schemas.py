@@ -17,6 +17,11 @@ class RepositoryCreateRequest(BaseModel):
     externalRepoId: str
 
 
+class RepositoryWebhookSecretsUpdateRequest(BaseModel):
+    githubWebhookSecret: str = ""
+    backlogWebhookSecret: str = ""
+
+
 class SettingsUpdateRequest(BaseModel):
     staleDays: int
     longUnresolvedDays: int
