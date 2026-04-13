@@ -16,11 +16,6 @@ class Settings(BaseSettings):
         description="Secret key used by future authentication features.",
     )
     proxy_trusted_hosts: str = "*"
-    blog_admin_username: str = "yoshiaki0223"
-    blog_admin_password_hash: str = (
-        "9047061c525874f0e3158f1648cba7ed:"
-        "439b1780e7ca54bdfc6a3deb487ea4690c955dd9b880e93b70d94381c13c7e62"
-    )
     database_url: str | None = None
     postgres_user: str | None = None
     postgres_password: str | None = None
@@ -46,32 +41,12 @@ class Settings(BaseSettings):
         return self.base_dir / "storage"
 
     @property
-    def blog_posts_dir(self) -> Path:
-        return self.storage_dir / "blog" / "posts"
-
-    @property
-    def blog_images_dir(self) -> Path:
-        return self.storage_dir / "blog" / "images"
-
-    @property
     def shared_templates_dir(self) -> Path:
         return self.base_dir / "app" / "templates"
 
     @property
     def site_templates_dir(self) -> Path:
         return self.base_dir / "app" / "site" / "templates"
-
-    @property
-    def blog_templates_dir(self) -> Path:
-        return self.base_dir / "app" / "blog" / "templates"
-
-    @property
-    def tools_templates_dir(self) -> Path:
-        return self.base_dir / "app" / "tools" / "templates"
-
-    @property
-    def exam_templates_dir(self) -> Path:
-        return self.base_dir / "app" / "exam" / "templates"
 
     @property
     def static_dir(self) -> Path:

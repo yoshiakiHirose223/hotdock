@@ -1,7 +1,7 @@
 import time
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -38,29 +38,11 @@ def wait_for_database() -> None:
             if attempt == settings.database_connect_retries:
                 break
             time.sleep(settings.database_connect_retry_interval)
-
     if last_error is not None:
         raise last_error
 
 
 def init_db() -> None:
-    from app.blog import models as blog_models  # noqa: F401
-    from app.exam import models as exam_models  # noqa: F401
-
     if not settings.resolved_database_url.startswith("sqlite"):
         wait_for_database()
     Base.metadata.create_all(bind=engine)
-    ensure_legacy_blog_schema()
-
-
-def ensure_legacy_blog_schema() -> None:
-    inspector = inspect(engine)
-    if "blog_posts" not in inspector.get_table_names():
-        return
-
-    columns = {column["name"]: column for column in inspector.get_columns("blog_posts")}
-    with engine.begin() as connection:
-        if "summary" not in columns:
-            connection.execute(text("ALTER TABLE blog_posts ADD COLUMN summary VARCHAR(50) NOT NULL DEFAULT ''"))
-        else:
-            connection.execute(text("UPDATE blog_posts SET summary = '' WHERE summary IS NULL"))

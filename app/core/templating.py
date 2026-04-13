@@ -10,14 +10,7 @@ def create_templates() -> Jinja2Templates:
     templates.env.loader = ChoiceLoader(
         [
             FileSystemLoader(str(settings.shared_templates_dir)),
-            PrefixLoader(
-                {
-                    "site": FileSystemLoader(str(settings.site_templates_dir)),
-                    "blog": FileSystemLoader(str(settings.blog_templates_dir)),
-                    "tools": FileSystemLoader(str(settings.tools_templates_dir)),
-                    "exam": FileSystemLoader(str(settings.exam_templates_dir)),
-                }
-            ),
+            PrefixLoader({"site": FileSystemLoader(str(settings.site_templates_dir))}),
         ]
     )
     return templates
