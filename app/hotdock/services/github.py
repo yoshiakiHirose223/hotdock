@@ -379,11 +379,19 @@ def sync_installation_event(db: Session, payload: dict[str, Any]) -> GithubInsta
 
 def sync_installation_repositories_event(db: Session, payload: dict[str, Any]) -> None:
     installation_payload = payload.get("installation") or {}
+    installation_id = installation_payload.get("id")
+    if installation_id is None:
+        return
     installation = db.scalar(
-        select(GithubInstallation).where(GithubInstallation.installation_id == installation_payload.get("id"))
+        select(GithubInstallation).where(GithubInstallation.installation_id == installation_id)
     )
     if installation is None:
-        return
+        installation = GithubInstallation(
+            installation_id=installation_id,
+            installation_status="pending",
+        )
+        db.add(installation)
+        db.flush()
     workspace_id = installation.claimed_workspace_id
     for repository_payload in payload.get("repositories_added") or []:
         record = db.scalar(
@@ -419,6 +427,8 @@ def sync_installation_repositories_event(db: Session, payload: dict[str, Any]) -
             record.status = "removed"
             record.removed_at = utcnow()
     db.commit()
+    if installation.claimed_workspace_id is not None:
+        sync_claimed_installation_repositories(db, installation)
 
 
 def sync_claimed_installation_repositories(db: Session, installation: GithubInstallation) -> None:

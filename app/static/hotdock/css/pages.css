@@ -75,15 +75,17 @@
 }
 
 .auth-main {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: grid;
+    align-content: center;
+    justify-items: center;
+    gap: 1rem;
     min-height: calc(100vh - 160px);
     padding: 2rem 0 4rem;
 }
 
 .auth-flash-wrap {
-    margin-top: 1rem;
+    width: min(calc(100% - 2rem), 1120px);
+    margin: 0 auto;
 }
 
 .auth-panel,

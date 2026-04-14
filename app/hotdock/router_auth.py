@@ -19,6 +19,7 @@ from app.hotdock.services.auth import (
     build_login_redirect,
     create_login_session,
     default_workspace_for_user,
+    ensure_csrf_cookie,
     get_flash,
     get_or_create_anon_csrf,
     pop_after_login,
@@ -67,11 +68,13 @@ router = APIRouter()
 
 def render_auth(template_name: str, context: dict[str, Any]):
     request = context["request"]
-    return request.app.state.templates.TemplateResponse(
+    response = request.app.state.templates.TemplateResponse(
         request=request,
         name=template_name,
         context=context,
     )
+    ensure_csrf_cookie(response, context.get("csrf_token"))
+    return response
 
 
 def auth_page_context(
@@ -108,6 +111,9 @@ def auth_page_context(
 
 
 def _verify_anonymous_csrf(request: Request, token: str) -> None:
+    cookie_token = request.cookies.get(settings.csrf_cookie_name)
+    if token and cookie_token and hmac.compare_digest(token, cookie_token):
+        return
     expected = get_or_create_anon_csrf(request)
     if not token or not hmac.compare_digest(token, expected):
         raise ValueError("Invalid CSRF token")

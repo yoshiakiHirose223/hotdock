@@ -1,6 +1,41 @@
 {% extends "hotdock/layouts/app_base.html" %}
 
 {% block content %}
+<section class="app-grid two-up">
+    <article class="panel">
+        <p class="panel-title">Current Account</p>
+        <h2>{{ current_user.display_name if current_user else "Guest" }}</h2>
+        {% if current_user %}
+        <ul class="stack-list">
+            <li>
+                <strong>{{ current_user.email }}</strong>
+                <span>ログイン中のアカウント</span>
+            </li>
+            <li>
+                <strong>{{ workspace.name }}</strong>
+                <span>{{ current_membership.role }} 権限の workspace</span>
+            </li>
+        </ul>
+        {% else %}
+        <div class="empty-inline">現在のセッション情報を取得できませんでした。</div>
+        {% endif %}
+    </article>
+    <article class="panel">
+        <p class="panel-title">Sync status</p>
+        <h2>反映タイミング</h2>
+        <ul class="stack-list">
+            <li>
+                <strong>Repositories</strong>
+                <span>installation_repositories webhook が届くと反映されます。</span>
+            </li>
+            <li>
+                <strong>Branches / Conflicts</strong>
+                <span>claim 後に対象 repository へ push が入ると更新されます。</span>
+            </li>
+        </ul>
+    </article>
+</section>
+
 <section class="app-grid four-up">
     {% for card in dashboard.summary_cards %}
     <article class="panel stat-panel">

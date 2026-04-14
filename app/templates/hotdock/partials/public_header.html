@@ -8,8 +8,13 @@
                 {% endfor %}
             </nav>
             <div class="nav-actions">
+                {% if current_user %}
+                <span class="nav-user-label">{{ current_user.display_name }}</span>
+                <a class="button button-ghost" href="{{ dashboard_href }}">ダッシュボード</a>
+                {% else %}
                 <a class="button button-ghost" href="/login">ログイン</a>
                 <a class="button button-primary" href="/signup">SaaS 版で始める</a>
+                {% endif %}
             </div>
         </div>
     </div>

@@ -15,6 +15,9 @@
             </div>
             <a class="button button-primary" href="/integrations/github/install/start?workspace={{ workspace.slug }}">GitHub App をインストール</a>
         </div>
+        <div class="inline-alert">
+            installation claim の完了後、repository 一覧は GitHub からの installation_repositories webhook を受信すると反映されます。branch と conflict は claim 後に対象 repository へ push が入ると更新されます。
+        </div>
         <h3>Installations</h3>
         {% if installations %}
         <ul class="stack-list">

@@ -28,6 +28,12 @@
     flex-wrap: wrap;
 }
 
+.nav-user-label {
+    color: var(--text-soft);
+    font-size: 0.92rem;
+    font-weight: 600;
+}
+
 .primary-nav a,
 .auth-shell-links a,
 .footer-group a {
@@ -146,6 +152,11 @@
 .app-header-chip {
     background: var(--accent-soft);
     color: var(--accent-strong);
+}
+
+.app-header-chip-muted {
+    background: rgba(17, 24, 39, 0.06);
+    color: var(--text-soft);
 }
 
 .status-badge.is-available {

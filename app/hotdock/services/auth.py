@@ -61,6 +61,11 @@ def get_or_create_anon_csrf(request: Request) -> str:
     return token
 
 
+def ensure_csrf_cookie(response: Response, csrf_token: str | None) -> None:
+    if csrf_token:
+        response.set_cookie(settings.csrf_cookie_name, csrf_token, **_csrf_cookie_kwargs())
+
+
 def get_flash(request: Request) -> dict[str, str] | None:
     flash = request.session.pop(FLASH_SESSION_KEY, None)
     if isinstance(flash, dict):

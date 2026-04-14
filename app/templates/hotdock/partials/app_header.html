@@ -13,6 +13,10 @@
     <div class="app-header-meta">
         {% if current_user %}
         <span class="app-header-chip">{{ current_user.display_name }}</span>
+        <span class="app-header-chip app-header-chip-muted">{{ current_user.email }}</span>
+        {% endif %}
+        {% if current_membership %}
+        <span class="app-header-chip">{{ current_membership.role }}</span>
         {% endif %}
         <span class="app-header-chip">SSR</span>
         <span class="app-header-chip">FastAPI</span>
