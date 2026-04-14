@@ -40,7 +40,7 @@
     {% else %}
     <div class="empty-state">
         <h3>repository はまだありません</h3>
-        <p>GitHub App installation の claim 完了後、installation_repositories webhook が届くとここに表示されます。branch 情報は対象 repository に push が入ると反映されます。</p>
+        <p>GitHub App installation の claim 完了後、同期を実行すると repository と branch 一覧を取得します。branch の touched files や conflict は、その後の push webhook で更新されます。</p>
         {% if current_membership and current_membership.role in ["owner", "admin"] %}
         <form class="empty-state-actions" method="post" action="/workspaces/{{ workspace.slug }}/repositories/sync">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

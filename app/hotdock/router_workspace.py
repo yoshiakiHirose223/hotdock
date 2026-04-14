@@ -191,7 +191,7 @@ async def workspace_repositories_sync(
         set_flash(
             request,
             "success",
-            f"{result['repositories_synced']} 件の repository を反映しました。",
+            f"{result['repositories_synced']} 件の repository と {result['branches_synced']} 件の branch を反映しました。",
         )
     elif result["skipped_installations"] > 0:
         set_flash(

@@ -114,6 +114,24 @@ class GithubOAuthClient:
         payload = response.json()
         return payload.get("repositories", [])
 
+    async def fetch_repository_branches(self, access_token: str, repository_full_name: str) -> list[dict[str, Any]]:
+        if settings.github_mock_oauth_enabled and access_token.startswith("mock-access-"):
+            return [
+                {"name": "main", "commit": {"sha": f"mock-{repository_full_name.replace('/', '-')}-main"}},
+                {"name": "develop", "commit": {"sha": f"mock-{repository_full_name.replace('/', '-')}-develop"}},
+            ]
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{settings.github_api_base_url}/repos/{repository_full_name}/branches",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {access_token}",
+                },
+                params={"per_page": 100},
+            )
+        response.raise_for_status()
+        return response.json()
+
 
 def create_pending_github_claim(
     db: Session,
@@ -545,6 +563,58 @@ def _upsert_installation_repositories_from_api(
     return synced_count
 
 
+def _upsert_repository_branches_from_api(
+    db: Session,
+    *,
+    workspace_id: str,
+    repository: Repository,
+    branches_payload: list[dict[str, Any]],
+) -> int:
+    seen_branch_names: set[str] = set()
+    synced_count = 0
+
+    for branch_payload in branches_payload:
+        branch_name = branch_payload.get("name")
+        if not branch_name:
+            continue
+        seen_branch_names.add(branch_name)
+        branch = db.scalar(
+            select(Branch).where(
+                Branch.repository_id == repository.id,
+                Branch.name == branch_name,
+            )
+        )
+        commit = branch_payload.get("commit") or {}
+        if branch is None:
+            branch = Branch(
+                workspace_id=workspace_id,
+                repository_id=repository.id,
+                name=branch_name,
+                last_commit_sha=commit.get("sha"),
+                touched_files_count=0,
+                conflict_files_count=0,
+                branch_status="normal",
+                is_active=True,
+            )
+            db.add(branch)
+        else:
+            branch.last_commit_sha = commit.get("sha") or branch.last_commit_sha
+            branch.is_active = True
+            if branch.conflict_files_count == 0:
+                branch.branch_status = "normal"
+        synced_count += 1
+
+    existing_branches = db.scalars(
+        select(Branch).where(Branch.repository_id == repository.id)
+    ).all()
+    for branch in existing_branches:
+        if branch.name not in seen_branch_names:
+            branch.is_active = False
+
+    db.commit()
+    return synced_count
+
+
 def _github_link_for_repository_sync(
     db: Session,
     *,
@@ -588,6 +658,7 @@ async def manual_sync_workspace_installation_repositories(
     oauth_client = GithubOAuthClient()
     installations_synced = 0
     repositories_synced = 0
+    branches_synced = 0
     skipped_installations = 0
 
     for installation in installations:
@@ -597,24 +668,45 @@ async def manual_sync_workspace_installation_repositories(
                 GithubInstallationRepository.status == "active",
             )
         ).all()
-        if cached_installation_repositories:
-            sync_claimed_installation_repositories(db, installation)
-            installations_synced += 1
-            repositories_synced += len(cached_installation_repositories)
-            continue
-
         github_link = _github_link_for_repository_sync(
             db,
             installation=installation,
             preferred_user_id=actor.id,
         )
-        if github_link is None or not github_link.access_token_encrypted:
+        access_token = github_link.access_token_encrypted if github_link is not None else None
+
+        if cached_installation_repositories:
+            sync_claimed_installation_repositories(db, installation)
+            installations_synced += 1
+            repositories_synced += len(cached_installation_repositories)
+            if access_token:
+                workspace_repositories = db.scalars(
+                    select(Repository).where(
+                        Repository.workspace_id == workspace.id,
+                        Repository.github_installation_id == installation.id,
+                        Repository.deleted_at.is_(None),
+                    )
+                ).all()
+                for repository in workspace_repositories:
+                    try:
+                        branches_payload = await oauth_client.fetch_repository_branches(access_token, repository.full_name)
+                    except httpx.HTTPError:
+                        continue
+                    branches_synced += _upsert_repository_branches_from_api(
+                        db,
+                        workspace_id=workspace.id,
+                        repository=repository,
+                        branches_payload=branches_payload,
+                    )
+            continue
+
+        if not access_token:
             skipped_installations += 1
             continue
 
         try:
             repositories_payload = await oauth_client.fetch_installation_repositories(
-                github_link.access_token_encrypted,
+                access_token,
                 installation.installation_id,
             )
         except httpx.HTTPError:
@@ -626,6 +718,24 @@ async def manual_sync_workspace_installation_repositories(
             installation=installation,
             repositories_payload=repositories_payload,
         )
+        workspace_repositories = db.scalars(
+            select(Repository).where(
+                Repository.workspace_id == workspace.id,
+                Repository.github_installation_id == installation.id,
+                Repository.deleted_at.is_(None),
+            )
+        ).all()
+        for repository in workspace_repositories:
+            try:
+                branches_payload = await oauth_client.fetch_repository_branches(access_token, repository.full_name)
+            except httpx.HTTPError:
+                continue
+            branches_synced += _upsert_repository_branches_from_api(
+                db,
+                workspace_id=workspace.id,
+                repository=repository,
+                branches_payload=branches_payload,
+            )
         installations_synced += 1
 
     record_audit_log(
@@ -640,6 +750,7 @@ async def manual_sync_workspace_installation_repositories(
         metadata={
             "installations_synced": installations_synced,
             "repositories_synced": repositories_synced,
+            "branches_synced": branches_synced,
             "skipped_installations": skipped_installations,
         },
     )
@@ -647,6 +758,7 @@ async def manual_sync_workspace_installation_repositories(
     return {
         "installations_synced": installations_synced,
         "repositories_synced": repositories_synced,
+        "branches_synced": branches_synced,
         "skipped_installations": skipped_installations,
     }
 
