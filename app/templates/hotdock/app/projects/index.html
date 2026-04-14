@@ -1,0 +1,48 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="panel-title">Projects</p>
+            <h2>監視対象プロジェクト</h2>
+        </div>
+        <button class="button button-primary" type="button">新規追加</button>
+    </div>
+    {% if projects %}
+    <div class="table-wrap">
+        <table class="app-table project-table">
+            <thead>
+                <tr>
+                    <th>Project</th>
+                    <th>Status</th>
+                    <th>Repository</th>
+                    <th>Owner</th>
+                    <th class="action-col"> </th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for project in projects %}
+                <tr class="clickable-row" data-row-link="{{ project.branches_url }}">
+                    <td>
+                        <a class="table-link" href="{{ project.branches_url }}">{{ project.name }}</a>
+                    </td>
+                    <td><span class="status-badge {{ project.status_style }}">{{ project.status }}</span></td>
+                    <td>{{ project.repo }}</td>
+                    <td>{{ project.owner }}</td>
+                    <td class="action-col">
+                        <a class="table-link-arrow" href="{{ project.branches_url }}" aria-label="{{ project.name }} の branch 一覧を見る">View</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h3>まだ project は登録されていません</h3>
+        <p>監視対象の repository を追加すると、ここから各 Project 詳細へ入れるようになります。</p>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

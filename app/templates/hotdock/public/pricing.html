@@ -1,0 +1,61 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="section page-hero">
+    <div class="container narrow">
+        <p class="eyebrow">Pricing</p>
+        <h1>{{ page_heading }}</h1>
+        <p>仮プランですが、現実的な導入相談につなげやすい粒度で整理しています。GitHub App Lite は未提供のため案内のみです。</p>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container pricing-preview-grid">
+        {% for plan in pricing_plans %}
+        <article class="pricing-card">
+            <span class="status-badge">{{ plan.badge }}</span>
+            <h2>{{ plan.name }}</h2>
+            <p class="price">{{ plan.price }}</p>
+            <p class="muted">{{ plan.audience }}</p>
+            <p>{{ plan.description }}</p>
+            <a class="button button-secondary" href="{{ plan.cta.href }}">{{ plan.cta.label }}</a>
+        </article>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="section section-muted">
+    <div class="container">
+        <div class="table-wrap">
+            <table class="compare-table">
+                <thead>
+                    <tr>
+                        <th>比較項目</th>
+                        {% for plan in pricing_plans %}
+                        <th>{{ plan.name }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in pricing_comparison %}
+                    <tr>
+                        <th>{{ row.label }}</th>
+                        {% for value in row["values"] %}
+                        <td>{{ value }}</td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="note-list">
+            {% for note in pricing_notes %}
+            <p>{{ note }}</p>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+{% set cta = global_cta %}
+{% include "hotdock/partials/cta_block.html" %}
+{% endblock %}

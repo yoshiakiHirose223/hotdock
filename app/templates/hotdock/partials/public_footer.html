@@ -1,0 +1,24 @@
+<footer class="public-footer">
+    <div class="container footer-grid">
+        <div class="footer-brand">
+            <a class="brand-mark" href="/">{{ footer_meta.brand }}</a>
+            <p>{{ footer_meta.tagline }}</p>
+        </div>
+        {% for group in footer_groups %}
+        <div class="footer-group">
+            <p class="footer-group-title">{{ group.title }}</p>
+            {% for link in group.links %}
+            <a href="{{ link.href }}">{{ link.label }}</a>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    </div>
+    <div class="container footer-bottom">
+        <span>&copy; Hotdock</span>
+        <div class="footer-legal">
+            {% for link in footer_meta.legal_links %}
+            <a href="{{ link.href }}">{{ link.label }}</a>
+            {% endfor %}
+        </div>
+    </div>
+</footer>

@@ -1,0 +1,32 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="section page-hero">
+    <div class="container narrow">
+        <p class="eyebrow">Integrations</p>
+        <h1>{{ page_heading }}</h1>
+        <p>git 連携、GitHub App、メール、Slack、Chatwork を軸に、将来のホスト追加まで見据えた連携一覧です。</p>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="card-grid three-col">
+            {% for item in integrations %}
+            <article class="card integration-card">
+                <div class="card-head">
+                    <h2>{{ item.name }}</h2>
+                    <span class="status-badge {{ status_styles[item.status] }}">{{ item.status }}</span>
+                </div>
+                <p class="card-label">{{ item.category }}</p>
+                <p>{{ item.description }}</p>
+                <p class="muted">{{ item.notes }}</p>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+{% set cta = global_cta %}
+{% include "hotdock/partials/cta_block.html" %}
+{% endblock %}

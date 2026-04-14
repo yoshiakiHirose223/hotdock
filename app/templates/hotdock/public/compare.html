@@ -1,0 +1,53 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="section page-hero">
+    <div class="container narrow">
+        <p class="eyebrow">Compare</p>
+        <h1>{{ page_heading }}</h1>
+        <p>GitHub App と SaaS は対立する選択肢ではなく、入口の違いです。着地点は共通ダッシュボードであることを軸に比較します。</p>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="table-wrap">
+            <table class="compare-table">
+                <thead>
+                    <tr>
+                        {% for column in compare_columns %}
+                        <th>{{ column }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in compare_rows %}
+                    <tr>
+                        <th>{{ row.label }}</th>
+                        <td>{{ row.github_app }}</td>
+                        <td>{{ row.saas }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<section class="section section-muted">
+    <div class="container card-grid two-col">
+        {% for path in start_paths %}
+        <article class="card path-card">
+            <div class="card-head">
+                <h2>{{ path.name }}</h2>
+                <span class="status-badge">{{ path.status }}</span>
+            </div>
+            <p>{{ path.description }}</p>
+        </article>
+        {% endfor %}
+    </div>
+</section>
+
+{% set cta = global_cta %}
+{% include "hotdock/partials/cta_block.html" %}
+{% endblock %}

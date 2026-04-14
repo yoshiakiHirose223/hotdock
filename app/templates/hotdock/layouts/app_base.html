@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page_title }}</title>
+    <meta name="description" content="{{ page_description }}">
+    <link rel="stylesheet" href="/static/hotdock/css/tokens.css">
+    <link rel="stylesheet" href="/static/hotdock/css/base.css">
+    <link rel="stylesheet" href="/static/hotdock/css/layout.css">
+    <link rel="stylesheet" href="/static/hotdock/css/components.css">
+    <link rel="stylesheet" href="/static/hotdock/css/app.css">
+</head>
+<body class="{{ body_class }}">
+    <div class="app-shell">
+        {% include "hotdock/partials/app_sidebar.html" %}
+        <div class="app-shell-main">
+            {% include "hotdock/partials/app_header.html" %}
+            <main class="app-content">
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+    <script src="/static/hotdock/js/app.js" defer></script>
+</body>
+</html>

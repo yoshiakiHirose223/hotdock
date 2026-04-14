@@ -1,0 +1,20 @@
+<div class="faq-groups" data-faq-root>
+    {% for category in faq_categories %}
+    <section class="faq-group">
+        <h3>{{ category.title }}</h3>
+        <div class="faq-list">
+            {% for item in category["items"] %}
+            <article class="faq-item" data-faq-item>
+                <button class="faq-question" type="button" data-faq-button aria-expanded="false">
+                    <span>{{ item.question }}</span>
+                    <span class="faq-icon">+</span>
+                </button>
+                <div class="faq-answer" data-faq-panel hidden>
+                    <p>{{ item.answer }}</p>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+    {% endfor %}
+</div>

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page_title }}</title>
+    <meta name="description" content="{{ page_description }}">
+    <meta property="og:title" content="{{ meta_og_title }}">
+    <meta property="og:description" content="{{ meta_og_description }}">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="{{ site_name }}">
+    <link rel="stylesheet" href="/static/hotdock/css/tokens.css">
+    <link rel="stylesheet" href="/static/hotdock/css/base.css">
+    <link rel="stylesheet" href="/static/hotdock/css/layout.css">
+    <link rel="stylesheet" href="/static/hotdock/css/components.css">
+    <link rel="stylesheet" href="/static/hotdock/css/pages.css">
+</head>
+<body class="{{ body_class }}">
+    {% include "hotdock/partials/public_header.html" %}
+    <main class="public-main">
+        {% block content %}{% endblock %}
+    </main>
+    {% include "hotdock/partials/public_footer.html" %}
+    <script src="/static/hotdock/js/faq.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,174 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="hero-section section">
+    <div class="container hero-grid">
+        <div>
+            <p class="eyebrow">{{ home.hero_eyebrow }}</p>
+            <h1 class="hero-title">{{ home.hero_title }}</h1>
+            <p class="hero-copy">{{ home.hero_description }}</p>
+            <div class="button-row">
+                {% for action in home.hero_actions %}
+                <a class="button {% if action.variant == 'primary' %}button-primary{% elif action.variant == 'secondary' %}button-secondary{% else %}button-ghost{% endif %}" href="{{ action.href }}">{{ action.label }}</a>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="hero-panel">
+            <p class="eyebrow">入口が2つ、着地点は1つ</p>
+            <ul class="summary-list">
+                {% for item in home.entry_summary %}
+                <li>{{ item }}</li>
+                {% endfor %}
+            </ul>
+            <div class="hero-micro-grid">
+                <div class="metric-card">
+                    <span>GitHub App</span>
+                    <strong>導入予定</strong>
+                </div>
+                <div class="metric-card">
+                    <span>SaaS</span>
+                    <strong>登録して開始</strong>
+                </div>
+                <div class="metric-card metric-card-wide">
+                    <span>共通の着地点</span>
+                    <strong>/app ダッシュボード</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        {% set section_eyebrow = "Why now" %}
+        {% set section_title = "衝突候補は、見つけるタイミングが遅いほど重くなる。" %}
+        {% set section_copy = "Hotdock は、レビュー後ではなく作業中の段階で衝突の兆候を共有しやすくします。" %}
+        {% include "hotdock/partials/section_title.html" %}
+        <div class="card-grid three-col">
+            {% for problem in problems %}
+            <article class="card">
+                <h3>{{ problem.title }}</h3>
+                <p>{{ problem.description }}</p>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="section section-muted">
+    <div class="container">
+        {% set section_eyebrow = "How Hotdock helps" %}
+        {% set section_title = "Hotdock が整える 3 つのこと" %}
+        {% set section_copy = "競合候補の可視化、状態変化通知、共通ダッシュボードへの集約を軸に整理しています。" %}
+        {% include "hotdock/partials/section_title.html" %}
+        <div class="card-grid three-col">
+            {% for solution in solutions %}
+            <article class="card accent-card">
+                <h3>{{ solution.title }}</h3>
+                <p>{{ solution.description }}</p>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        {% set section_eyebrow = "Start paths" %}
+        {% set section_title = "GitHub App からでも、SaaS からでも始められる設計" %}
+        {% set section_copy = "違いは入口だけです。運用画面は共通になる前提でページ全体の文言をそろえています。" %}
+        {% include "hotdock/partials/section_title.html" %}
+        <div class="card-grid two-col">
+            {% for path in start_paths %}
+            <article class="card path-card">
+                <div class="card-head">
+                    <h3>{{ path.name }}</h3>
+                    <span class="status-badge">{{ path.status }}</span>
+                </div>
+                <p>{{ path.description }}</p>
+                <ul class="summary-list">
+                    {% for point in path.points %}
+                    <li>{{ point }}</li>
+                    {% endfor %}
+                </ul>
+                <div class="button-row">
+                    <a class="button button-primary" href="{{ path.primary_cta.href }}">{{ path.primary_cta.label }}</a>
+                    <a class="button button-ghost" href="{{ path.secondary_cta.href }}">{{ path.secondary_cta.label }}</a>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="section section-muted">
+    <div class="container">
+        {% set section_eyebrow = "Key features" %}
+        {% set section_title = "主要機能" %}
+        {% set section_copy = "開発者向けの具体性を残しつつ、非技術者にも読みやすい説明にしています。" %}
+        {% include "hotdock/partials/section_title.html" %}
+        <div class="card-grid three-col">
+            {% for feature in feature_highlights %}
+            <article class="card">
+                <h3>{{ feature.title }}</h3>
+                <p class="card-label">できること</p>
+                <p>{{ feature.what }}</p>
+                <p class="card-label">うれしいこと</p>
+                <p>{{ feature.benefit }}</p>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        {% set section_eyebrow = "Flow" %}
+        {% set section_title = "導入ステップ" %}
+        {% set section_copy = "どの入口を選んでも、最終的には監視対象、通知、共通ダッシュボードの設定へ進みます。" %}
+        {% include "hotdock/partials/section_title.html" %}
+        <div class="steps-grid">
+            {% for step in home.steps %}
+            <article class="step-card">
+                <span class="step-no">{{ step.step }}</span>
+                <h3>{{ step.title }}</h3>
+                <p>{{ step.description }}</p>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="section section-muted">
+    <div class="container">
+        {% set section_eyebrow = "Pricing" %}
+        {% set section_title = "料金の考え方" %}
+        {% set section_copy = "仮プランですが、将来の請求機能接続を意識して整理しています。" %}
+        {% include "hotdock/partials/section_title.html" %}
+        <div class="pricing-preview-grid">
+            {% for plan in pricing_plans %}
+            <article class="pricing-card">
+                <span class="status-badge">{{ plan.badge }}</span>
+                <h3>{{ plan.name }}</h3>
+                <p class="price">{{ plan.price }}</p>
+                <p>{{ plan.description }}</p>
+                <a class="button button-secondary" href="{{ plan.cta.href }}">{{ plan.cta.label }}</a>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        {% set section_eyebrow = "FAQ" %}
+        {% set section_title = "よくある質問" %}
+        {% set section_copy = "GitHub App と SaaS の関係、git 連携の意味、未提供機能の扱いをここで揃えています。" %}
+        {% include "hotdock/partials/section_title.html" %}
+        {% include "hotdock/partials/faq_accordion.html" %}
+    </div>
+</section>
+
+{% set cta = global_cta %}
+{% include "hotdock/partials/cta_block.html" %}
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="section page-hero">
+    <div class="container narrow">
+        <p class="eyebrow">Features</p>
+        <h1>{{ page_heading }}</h1>
+        <p>競合候補検知、状態変化通知、履歴整理、通知手段管理、チーム運用を、あとから拡張しやすい形でまとめています。</p>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="card-grid two-col">
+            {% for feature in features %}
+            <article class="card feature-card">
+                <h2>{{ feature.title }}</h2>
+                <div class="split-copy">
+                    <div>
+                        <p class="card-label">何ができるか</p>
+                        <p>{{ feature.what }}</p>
+                    </div>
+                    <div>
+                        <p class="card-label">何がうれしいか</p>
+                        <p>{{ feature.benefit }}</p>
+                    </div>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+{% set cta = global_cta %}
+{% include "hotdock/partials/cta_block.html" %}
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="app-grid two-up">
+    <article class="panel panel-hero">
+        <p class="eyebrow">Overview</p>
+        <h2>共通ダッシュボードの骨組み</h2>
+        <p>{{ overview.welcome }}</p>
+    </article>
+    <article class="panel">
+        <p class="panel-title">初期チェック</p>
+        <ul class="summary-list">
+            {% for item in overview.checklist %}
+            <li>{{ item }}</li>
+            {% endfor %}
+        </ul>
+    </article>
+</section>
+
+<section class="app-grid four-up">
+    {% for card in summary_cards %}
+    <article class="panel stat-panel">
+        <p class="panel-title">{{ card.label }}</p>
+        <strong>{{ card.value }}</strong>
+        <span>{{ card.meta }}</span>
+    </article>
+    {% endfor %}
+</section>
+{% endblock %}

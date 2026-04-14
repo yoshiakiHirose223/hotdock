@@ -1,0 +1,47 @@
+{% extends "hotdock/app/projects/detail_base.html" %}
+
+{% block project_content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="panel-title">Conflicts</p>
+            <h2>競合あり branch</h2>
+        </div>
+        <a class="text-link" href="{{ project.urls.branches }}">Branches で詳細を見る</a>
+    </div>
+    {% if project_conflicts %}
+    <div class="conflict-branch-list">
+        {% for branch in project_conflicts %}
+        <article class="conflict-branch-card">
+            <div class="card-head">
+                <div>
+                    <h3>{{ branch.name }}</h3>
+                    <p>{{ branch.last_push_at_display }}</p>
+                </div>
+                <span class="status-badge {{ branch.status_style }}">{{ branch.conflict_files_count }} conflicts</span>
+            </div>
+            <div class="branch-files-grid">
+                {% for file in branch.files if file.is_conflict %}
+                <article class="branch-file-item is-conflict">
+                    <div class="branch-file-main">
+                        <strong>{{ file.path }}</strong>
+                        <div class="branch-file-meta">
+                            <span class="mini-badge {{ file.change_type_style }}">{{ file.change_type }}</span>
+                            <span class="mini-badge is-conflict">Conflict</span>
+                        </div>
+                    </div>
+                    <span class="branch-file-time">{{ file.observed_at_display }}</span>
+                </article>
+                {% endfor %}
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h3>競合ありの branch はありません</h3>
+        <p>競合候補が見つかるまでは、このタブは空のままです。</p>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

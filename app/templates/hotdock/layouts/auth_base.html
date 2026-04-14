@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page_title }}</title>
+    <meta name="description" content="{{ page_description }}">
+    <meta property="og:title" content="{{ meta_og_title }}">
+    <meta property="og:description" content="{{ meta_og_description }}">
+    <link rel="stylesheet" href="/static/hotdock/css/tokens.css">
+    <link rel="stylesheet" href="/static/hotdock/css/base.css">
+    <link rel="stylesheet" href="/static/hotdock/css/layout.css">
+    <link rel="stylesheet" href="/static/hotdock/css/components.css">
+    <link rel="stylesheet" href="/static/hotdock/css/pages.css">
+</head>
+<body class="{{ body_class }}">
+    <header class="auth-shell-header">
+        <div class="container shell-bar">
+            <a class="brand-mark" href="/">Hotdock</a>
+            <nav class="auth-shell-links" aria-label="Auth">
+                {% for item in auth_links %}
+                <a href="{{ item.href }}">{{ item.label }}</a>
+                {% endfor %}
+            </nav>
+        </div>
+    </header>
+    <main class="auth-main">
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="auth-shell-footer">
+        <div class="container shell-bar">
+            <span>Hotdock preview</span>
+            <a href="/contact">問い合わせ</a>
+        </div>
+    </footer>
+</body>
+</html>

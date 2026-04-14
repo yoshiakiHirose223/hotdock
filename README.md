@@ -1,6 +1,6 @@
-# HotDock
+# Hotdock
 
-FastAPI を使った SSR ベースのモノリス構成です。`blog`, `tools`, `exam` を 1 つのアプリで動かしつつ、内部は機能単位で分離しています。
+FastAPI + Jinja2 による SSR 中心の Hotdock 専用サイトです。マーケティングサイト、認証導線、共通 `/app` ダッシュボード骨組みを 1 つのアプリで提供しつつ、`router / templates / static / data` を責務分離しています。
 
 ## セットアップ
 
@@ -48,12 +48,11 @@ curl http://hotdock.jp/.well-known/acme-challenge/healthcheck
 
 ## ディレクトリ方針
 
-- `app/site`: トップページとサイト共通導線
+- `app/hotdock`: Hotdock 用ルーター、データ、サービス
+- `app/templates/hotdock`: `public / auth / app` で分けたテンプレート
+- `app/static/hotdock`: CSS と軽量 JS
 - `app/core`: 設定、DB、共通依存
-- `app/blog`: Markdown 記事表示
-- `app/tools`: CSV 変換ツール
-- `app/exam`: 問題表示と解答処理の土台
-- `storage`: 記事やアップロードなどの永続データ置き場
+- `storage`: 将来の永続データ置き場
 - `certbot`: 証明書発行と更新用スクリプト
 - `nginx/conf`: Nginx 設定
 - `nginx/entrypoint`: Nginx の起動時設定切り替え
@@ -61,18 +60,24 @@ curl http://hotdock.jp/.well-known/acme-challenge/healthcheck
 ## 主な URL
 
 - `/`: トップページ
-- `/blog`: 記事一覧
-- `/blog/{slug}`: 記事詳細
-- `/tools`: ツール一覧
-- `/tools/csv-to-json`: CSV to JSON
-- `/tools/csv-column-swap`: CSV カラム入れ替え
-- `/exam`: 問題集トップ
-- `/exam/questions/{id}`: 問題詳細
+- `/features`: 機能一覧
+- `/integrations`: 連携一覧
+- `/integrations/github-app`: GitHub App 導入予定ページ
+- `/how-it-works`: 仕組み説明
+- `/pricing`: 料金
+- `/security`: セキュリティ方針
+- `/faq`: FAQ
+- `/docs`: Docs 入口
+- `/contact`: 問い合わせ
+- `/compare`: GitHub App と SaaS の比較
+- `/login`: ログイン
+- `/signup`: 新規登録
+- `/install/github`: GitHub App 公開予定案内
+- `/app/*`: 共通ダッシュボード骨組み
 
 ## 今の実装範囲
 
-- Blog 一覧と詳細
-- CSV to JSON
-- CSV Column Swap
-- Exam 問題一覧と解答確認
-- SQLAlchemy ベースの exam モデル土台
+- マーケティングサイト一式
+- 認証導線ページ一式
+- `/app` 配下のダッシュボード骨組み
+- 料金、FAQ、連携一覧、比較表、ダッシュボードモックデータのデータ駆動描画

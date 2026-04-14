@@ -1,0 +1,15 @@
+<section class="sidebar-section">
+    <p class="sidebar-section-title">Bookmarks</p>
+    {% if sidebar_bookmarks["items"] %}
+    <div class="sidebar-bookmarks">
+        {% for bookmark in sidebar_bookmarks["items"] %}
+        <a class="sidebar-bookmark-link {% if bookmark.is_active %}is-active{% endif %}" href="{{ bookmark.href }}">{{ bookmark.name }}</a>
+        {% endfor %}
+    </div>
+    {% if sidebar_bookmarks["remaining_count"] > 0 %}
+    <p class="sidebar-more">+{{ sidebar_bookmarks["remaining_count"] }} more</p>
+    {% endif %}
+    {% else %}
+    <p class="sidebar-empty">No bookmarks</p>
+    {% endif %}
+</section>

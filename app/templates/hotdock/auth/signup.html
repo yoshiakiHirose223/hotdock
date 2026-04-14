@@ -1,0 +1,44 @@
+{% extends "hotdock/layouts/auth_base.html" %}
+
+{% block content %}
+<section class="auth-panel auth-panel-wide">
+    <div class="auth-copy">
+        <p class="eyebrow">{{ eyebrow }}</p>
+        <h1>{{ page_heading }}</h1>
+        <p>{{ support_copy }}</p>
+        <ul class="summary-list">
+            <li>登録後に git 連携設定へ進みます。</li>
+            <li>通知先設定はメール、Slack、Chatwork を想定しています。</li>
+            <li>利用開始後は共通の /app ダッシュボードで管理します。</li>
+        </ul>
+    </div>
+    <form class="auth-card">
+        <div class="form-row">
+            <label for="signup-name">名前</label>
+            <input id="signup-name" type="text" placeholder="例: 山田 太郎">
+        </div>
+        <div class="form-row">
+            <label for="signup-email">メールアドレス</label>
+            <input id="signup-email" type="email" placeholder="team@example.com">
+        </div>
+        <div class="form-row">
+            <label for="signup-password">パスワード</label>
+            <input id="signup-password" type="password" placeholder="12文字以上を推奨">
+        </div>
+        <div class="form-row">
+            <label for="signup-org">組織名</label>
+            <input id="signup-org" type="text" placeholder="Hotdock Inc.">
+        </div>
+        <div class="form-row">
+            <label for="signup-scale">利用予定規模</label>
+            <select id="signup-scale">
+                <option>1-5 人</option>
+                <option>6-20 人</option>
+                <option>21-50 人</option>
+                <option>51 人以上</option>
+            </select>
+        </div>
+        <button class="button button-primary" type="button">登録して設定を始める</button>
+    </form>
+</section>
+{% endblock %}

@@ -1,0 +1,379 @@
+.public-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    border-bottom: 1px solid rgba(214, 224, 234, 0.9);
+    backdrop-filter: blur(18px);
+    background: rgba(255, 255, 255, 0.86);
+}
+
+.brand-mark {
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+}
+
+.nav-shell,
+.shell-bar {
+    min-height: 80px;
+}
+
+.primary-nav,
+.nav-actions,
+.auth-shell-links,
+.footer-legal {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.primary-nav a,
+.auth-shell-links a,
+.footer-group a {
+    color: var(--text-soft);
+}
+
+.primary-nav a.is-active {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 0.8rem 1.1rem;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    font-weight: 600;
+    transition: 160ms ease;
+}
+
+.button:hover {
+    transform: translateY(-1px);
+}
+
+.button-primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+}
+
+.button-secondary {
+    border-color: rgba(23, 114, 208, 0.2);
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+}
+
+.button-ghost {
+    background: transparent;
+    color: var(--text);
+}
+
+.card,
+.pricing-card,
+.hero-panel,
+.auth-card,
+.panel,
+.cta-block {
+    background: var(--surface);
+    border: 1px solid rgba(214, 224, 234, 0.9);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow);
+}
+
+.card,
+.pricing-card,
+.auth-card,
+.panel {
+    padding: 1.5rem;
+}
+
+.hero-panel,
+.cta-block {
+    padding: 1.8rem;
+}
+
+.accent-card,
+.panel-hero {
+    background: linear-gradient(180deg, #ffffff 0%, #eef6ff 100%);
+}
+
+.card h2,
+.card h3,
+.pricing-card h2,
+.pricing-card h3,
+.panel h2 {
+    margin-bottom: 0.8rem;
+    font-size: 1.2rem;
+    letter-spacing: -0.03em;
+}
+
+.card p,
+.pricing-card p,
+.panel p,
+.hero-panel p,
+.cta-block p,
+.auth-card p,
+.auth-copy p {
+    color: var(--text-soft);
+    line-height: 1.75;
+}
+
+.card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.8rem;
+}
+
+.status-badge,
+.sidebar-badge,
+.app-header-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.status-badge,
+.sidebar-badge,
+.app-header-chip {
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+}
+
+.status-badge.is-available {
+    background: rgba(29, 127, 95, 0.12);
+    color: var(--success);
+}
+
+.status-badge.is-planned {
+    background: rgba(23, 114, 208, 0.12);
+    color: var(--accent-strong);
+}
+
+.status-badge.is-soon {
+    background: rgba(168, 103, 18, 0.12);
+    color: var(--warning);
+}
+
+.summary-list,
+.ordered-list,
+.stack-list {
+    display: grid;
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+
+.summary-list li,
+.ordered-list li,
+.stack-list li {
+    color: var(--text-soft);
+    line-height: 1.7;
+}
+
+.card-label,
+.panel-title {
+    margin-bottom: 0.5rem;
+    color: var(--accent-strong);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.split-copy {
+    display: grid;
+    gap: 1rem;
+}
+
+.step-card {
+    padding: 1.4rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.75);
+}
+
+.step-card h3 {
+    margin-bottom: 0.7rem;
+}
+
+.step-no {
+    display: inline-block;
+    margin-bottom: 1rem;
+    color: var(--accent-strong);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+}
+
+.price {
+    margin-bottom: 0.8rem;
+    color: var(--text) !important;
+    font-size: 1.7rem;
+    font-weight: 700;
+}
+
+.faq-groups {
+    display: grid;
+    gap: 1.5rem;
+}
+
+.faq-group h3 {
+    margin-bottom: 1rem;
+}
+
+.faq-list {
+    display: grid;
+    gap: 0.8rem;
+}
+
+.faq-item {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.85);
+}
+
+.faq-question {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.1rem;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    color: var(--text);
+}
+
+.faq-answer {
+    padding: 0 1.1rem 1rem;
+}
+
+.faq-icon {
+    color: var(--accent);
+    font-size: 1.2rem;
+    font-weight: 700;
+}
+
+.cta-block {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
+}
+
+.footer-grid {
+    display: grid;
+    grid-template-columns: 1.3fr repeat(3, 1fr);
+    gap: 1.5rem;
+    padding: 4rem 0 2rem;
+}
+
+.footer-group {
+    display: grid;
+    gap: 0.8rem;
+}
+
+.footer-group-title {
+    color: var(--text);
+    font-weight: 700;
+}
+
+.footer-bottom {
+    padding: 1.4rem 0 3rem;
+    border-top: 1px solid rgba(214, 224, 234, 0.7);
+}
+
+.inline-alert {
+    margin-top: 1.3rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid rgba(23, 114, 208, 0.2);
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    line-height: 1.7;
+}
+
+.form-row {
+    display: grid;
+    gap: 0.45rem;
+}
+
+.form-row + .form-row {
+    margin-top: 1rem;
+}
+
+.form-row label {
+    font-weight: 600;
+}
+
+.form-row input,
+.form-row select,
+.form-row textarea {
+    width: 100%;
+    padding: 0.95rem 1rem;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: #fff;
+    color: var(--text);
+}
+
+.compare-table,
+.app-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.compare-table th,
+.compare-table td,
+.app-table th,
+.app-table td {
+    padding: 1rem;
+    border-bottom: 1px solid rgba(214, 224, 234, 0.8);
+    text-align: left;
+    vertical-align: top;
+    line-height: 1.6;
+}
+
+.compare-table thead th,
+.app-table thead th {
+    background: var(--surface-muted);
+}
+
+.note-list {
+    display: grid;
+    gap: 0.7rem;
+    margin-top: 1rem;
+}
+
+.auth-card,
+.auth-copy {
+    max-width: 560px;
+}
+
+.contact-form {
+    display: grid;
+    gap: 0.5rem;
+}
+
+@media (max-width: 980px) {
+    .cta-block,
+    .footer-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .cta-block {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

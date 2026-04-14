@@ -1,0 +1,13 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="app-grid two-up">
+    {% for item in integration_status %}
+    <article class="panel">
+        <p class="panel-title">{{ item.name }}</p>
+        <h2>{{ item.status }}</h2>
+        <p>{{ item.detail }}</p>
+    </article>
+    {% endfor %}
+</section>
+{% endblock %}

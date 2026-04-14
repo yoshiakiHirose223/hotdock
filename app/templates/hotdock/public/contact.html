@@ -1,0 +1,58 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="section page-hero">
+    <div class="container narrow">
+        <p class="eyebrow">Contact</p>
+        <h1>{{ page_heading }}</h1>
+        <p>導入相談、技術的質問、料金相談、連携相談、不具合報告を受け付ける想定の問い合わせページです。</p>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container contact-grid">
+        <article class="card">
+            <p class="card-label">運営情報</p>
+            <h2>{{ contact_info.operator }}</h2>
+            <p>{{ contact_info.description }}</p>
+            <p><strong>Mail:</strong> {{ contact_info.email }}</p>
+            <p><strong>返信目安:</strong> {{ contact_info.response_time }}</p>
+            <p><strong>受付時間:</strong> {{ contact_info.hours }}</p>
+        </article>
+        <form class="card contact-form">
+            <div class="form-row">
+                <label for="contact-name">お名前</label>
+                <input id="contact-name" type="text" placeholder="例: 山田 太郎">
+            </div>
+            <div class="form-row">
+                <label for="contact-email">メールアドレス</label>
+                <input id="contact-email" type="email" placeholder="team@example.com">
+            </div>
+            <div class="form-row">
+                <label for="contact-subject">用件種別</label>
+                <select id="contact-subject">
+                    {% for subject in contact_subjects %}
+                    <option>{{ subject.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-row">
+                <label for="contact-message">内容</label>
+                <textarea id="contact-message" rows="6" placeholder="現状の課題や相談内容を記入してください。"></textarea>
+            </div>
+            <button class="button button-primary" type="button">問い合わせを送信</button>
+        </form>
+    </div>
+</section>
+
+<section class="section section-muted">
+    <div class="container card-grid three-col">
+        {% for subject in contact_subjects %}
+        <article class="card">
+            <h2>{{ subject.label }}</h2>
+            <p>{{ subject.description }}</p>
+        </article>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

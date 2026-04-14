@@ -1,0 +1,26 @@
+{% extends "hotdock/layouts/auth_base.html" %}
+
+{% block content %}
+<section class="auth-panel auth-panel-wide">
+    <div class="auth-copy">
+        <p class="eyebrow">{{ eyebrow }}</p>
+        <h1>{{ page_heading }}</h1>
+        <p>{{ support_copy }}</p>
+        <div class="inline-alert">
+            GitHub App はまだ未提供です。公開後に利用開始できるように見せる UI にはしていません。
+        </div>
+    </div>
+    <article class="auth-card">
+        <h2>公開後の想定フロー</h2>
+        <ol class="ordered-list">
+            <li>GitHub App の案内ページで権限と対象範囲を確認する</li>
+            <li>インストール後に通知先と監視対象を調整する</li>
+            <li>共通 /app ダッシュボードで競合候補を確認する</li>
+        </ol>
+        <div class="button-row">
+            <a class="button button-primary" href="/contact">公開前に相談する</a>
+            <a class="button button-ghost" href="/integrations/github-app">詳細ページを見る</a>
+        </div>
+    </article>
+</section>
+{% endblock %}

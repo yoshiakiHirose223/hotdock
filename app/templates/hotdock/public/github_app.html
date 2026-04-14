@@ -1,0 +1,51 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="section page-hero">
+    <div class="container narrow">
+        <p class="eyebrow">GitHub App</p>
+        <h1>{{ github_app_page.hero_title }}</h1>
+        <p>{{ github_app_page.hero_copy }}</p>
+        <div class="inline-alert">
+            <strong>現在の状態:</strong> GitHub App は未提供です。実在するインストール URL はまだありません。
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="card-grid three-col">
+            {% for principle in github_app_page.principles %}
+            <article class="card">
+                <h2>{{ principle.title }}</h2>
+                <p>{{ principle.description }}</p>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="section section-muted">
+    <div class="container two-panel-grid">
+        <article class="card">
+            <h2>想定フロー</h2>
+            <ol class="ordered-list">
+                {% for step in github_app_page.expected_flow %}
+                <li>{{ step }}</li>
+                {% endfor %}
+            </ol>
+        </article>
+        <article class="card">
+            <h2>権限思想</h2>
+            <ul class="summary-list">
+                {% for item in github_app_page.permissions %}
+                <li>{{ item }}</li>
+                {% endfor %}
+            </ul>
+        </article>
+    </div>
+</section>
+
+{% set cta = global_cta %}
+{% include "hotdock/partials/cta_block.html" %}
+{% endblock %}

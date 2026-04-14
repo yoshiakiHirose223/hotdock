@@ -1,0 +1,23 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="app-grid three-up">
+    <article class="panel">
+        <p class="panel-title">Plan</p>
+        <h2>{{ billing_overview.plan }}</h2>
+    </article>
+    <article class="panel">
+        <p class="panel-title">Usage</p>
+        <h2>{{ billing_overview.usage }}</h2>
+    </article>
+    <article class="panel">
+        <p class="panel-title">Renewal</p>
+        <h2>{{ billing_overview.renewal }}</h2>
+    </article>
+</section>
+
+<section class="panel">
+    <p class="panel-title">Placeholder</p>
+    <p>{{ billing_overview.placeholder }}</p>
+</section>
+{% endblock %}

@@ -1,0 +1,37 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="panel-title">Conflicts</p>
+            <h2>競合候補一覧</h2>
+        </div>
+        <span class="app-header-chip">Mock data</span>
+    </div>
+    <div class="table-wrap">
+        <table class="app-table">
+            <thead>
+                <tr>
+                    <th>Project</th>
+                    <th>Status</th>
+                    <th>Related branches</th>
+                    <th>Files</th>
+                    <th>Updated</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in recent_conflicts %}
+                <tr>
+                    <td>{{ item.project }}</td>
+                    <td>{{ item.status }}</td>
+                    <td>{{ item.branches }}</td>
+                    <td>{{ item.files }}</td>
+                    <td>{{ item.updated_at }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

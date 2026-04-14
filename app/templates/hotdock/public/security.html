@@ -1,0 +1,39 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="section page-hero">
+    <div class="container narrow">
+        <p class="eyebrow">Security</p>
+        <h1>{{ page_heading }}</h1>
+        <p>認証、権限、データ取り扱い、通知先情報、git 連携の説明方針を、将来の詳細ページ追加にも耐える形で整理しています。</p>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="card-grid two-col">
+            {% for item in security_sections %}
+            <article class="card">
+                <h2>{{ item.title }}</h2>
+                <p>{{ item.description }}</p>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="section section-muted">
+    <div class="container narrow">
+        <article class="card">
+            <p class="card-label">問い合わせ先</p>
+            <h2>{{ contact_info.operator }}</h2>
+            <p>{{ contact_info.description }}</p>
+            <p><strong>Email:</strong> {{ contact_info.email }}</p>
+            <p><strong>返信目安:</strong> {{ contact_info.response_time }}</p>
+        </article>
+    </div>
+</section>
+
+{% set cta = global_cta %}
+{% include "hotdock/partials/cta_block.html" %}
+{% endblock %}

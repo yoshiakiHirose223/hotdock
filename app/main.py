@@ -8,7 +8,9 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.core.templating import create_templates
-from app.site.router import router as site_router
+from app.hotdock.router_app import router as app_router
+from app.hotdock.router_auth import router as auth_router
+from app.hotdock.router_public import router as public_router
 
 settings = get_settings()
 templates = create_templates()
@@ -32,4 +34,6 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=settings.proxy_trusted_
 app.mount("/static", StaticFiles(directory=str(settings.static_dir)), name="static")
 app.state.templates = templates
 
-app.include_router(site_router)
+app.include_router(public_router)
+app.include_router(auth_router)
+app.include_router(app_router)

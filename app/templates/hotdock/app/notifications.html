@@ -1,0 +1,14 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="app-grid two-up">
+    {% for item in notification_channels %}
+    <article class="panel">
+        <p class="panel-title">{{ item.name }}</p>
+        <h2>{{ item.target }}</h2>
+        <p>{{ item.rule }}</p>
+        <span class="app-header-chip">{{ item.status }}</span>
+    </article>
+    {% endfor %}
+</section>
+{% endblock %}

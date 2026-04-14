@@ -1,0 +1,64 @@
+{% extends "hotdock/app/projects/detail_base.html" %}
+
+{% block project_content %}
+<section class="app-grid three-up">
+    <article class="panel stat-panel">
+        <p class="panel-title">Total Branches</p>
+        <strong>{{ total_branches }}</strong>
+        <span>push が観測された branch</span>
+    </article>
+    <article class="panel stat-panel">
+        <p class="panel-title">Updated in 24h</p>
+        <strong>{{ recent_updated_count }}</strong>
+        <span>直近 24 時間で更新</span>
+    </article>
+    <article class="panel stat-panel">
+        <p class="panel-title">With Conflicts</p>
+        <strong>{{ conflict_branch_count }}</strong>
+        <span>競合ありの branch</span>
+    </article>
+</section>
+
+<section class="panel branch-panel">
+    <div class="panel-head">
+        <div>
+            <p class="panel-title">Branches</p>
+            <h2>Branch 一覧</h2>
+        </div>
+    </div>
+    <form class="branch-filter-bar" method="get" action="{{ project.urls.branches }}">
+        <input type="hidden" name="submitted" value="1">
+        <div class="form-row branch-filter-search">
+            <label for="branch-search">検索</label>
+            <input id="branch-search" type="search" name="search" value="{{ filters.search }}" placeholder="branch 名で検索">
+        </div>
+        <div class="form-row branch-filter-sort">
+            <label for="branch-sort">並び順</label>
+            <select id="branch-sort" name="sort">
+                <option value="updated_desc" {% if filters.sort == "updated_desc" %}selected{% endif %}>更新が新しい順</option>
+                <option value="name" {% if filters.sort == "name" %}selected{% endif %}>ブランチ名順</option>
+                <option value="conflicts_desc" {% if filters.sort == "conflicts_desc" %}selected{% endif %}>競合数が多い順</option>
+            </select>
+        </div>
+        <div class="branch-filter-checks">
+            <label class="checkbox-row">
+                <input type="checkbox" name="conflict_only" value="1" {% if filters.conflict_only %}checked{% endif %}>
+                <span>競合ありのみ</span>
+            </label>
+            <label class="checkbox-row">
+                <input type="checkbox" name="active_only" value="1" {% if filters.active_only %}checked{% endif %}>
+                <span>アクティブのみ</span>
+            </label>
+            <label class="checkbox-row">
+                <input type="checkbox" name="push_only" value="1" {% if filters.push_only %}checked{% endif %}>
+                <span>push 済みのみ</span>
+            </label>
+        </div>
+        <div class="branch-filter-actions">
+            <button class="button button-secondary" type="submit">適用</button>
+            <a class="button button-ghost" href="{{ project.urls.branches }}">クリア</a>
+        </div>
+    </form>
+    {% include "hotdock/partials/branch_accordion.html" %}
+</section>
+{% endblock %}

@@ -1,0 +1,32 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="section page-hero">
+    <div class="container narrow">
+        <p class="eyebrow">Docs</p>
+        <h1>{{ page_heading }}</h1>
+        <p>本格的な docs 分離運用にもつなげやすい入口ページです。説明項目をカテゴリごとに整理しています。</p>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container docs-grid">
+        {% for section in doc_sections %}
+        <section class="card">
+            <h2>{{ section.title }}</h2>
+            <div class="docs-entry-list">
+                {% for entry in section.entries %}
+                <article class="docs-entry">
+                    <h3>{{ entry.title }}</h3>
+                    <p>{{ entry.description }}</p>
+                </article>
+                {% endfor %}
+            </div>
+        </section>
+        {% endfor %}
+    </div>
+</section>
+
+{% set cta = global_cta %}
+{% include "hotdock/partials/cta_block.html" %}
+{% endblock %}

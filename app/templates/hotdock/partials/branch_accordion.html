@@ -1,0 +1,75 @@
+{% if branch_summaries %}
+<div class="table-wrap">
+    <table class="app-table branch-table">
+        <thead>
+            <tr>
+                <th>Branch</th>
+                <th>Last Push</th>
+                <th>Files</th>
+                <th>Conflicts</th>
+                <th>Status</th>
+                <th class="toggle-col"> </th>
+            </tr>
+        </thead>
+        {% for branch in branch_summaries %}
+        <tbody class="branch-group {% if branch.conflict_files_count > 0 %}has-conflict{% endif %}">
+            <tr
+                class="branch-row"
+                data-accordion-row
+                data-accordion-target="{{ branch.details_id }}"
+                aria-expanded="false"
+            >
+                <td>
+                    <strong>{{ branch.name }}</strong>
+                </td>
+                <td>{{ branch.last_push_at_display }}</td>
+                <td>{{ branch.touched_files_count }}</td>
+                <td>{{ branch.conflict_files_count }}</td>
+                <td><span class="status-badge {{ branch.status_style }}">{{ branch.status }}</span></td>
+                <td class="toggle-col">
+                    <button
+                        class="branch-toggle"
+                        type="button"
+                        data-accordion-toggle
+                        data-accordion-target="{{ branch.details_id }}"
+                        aria-expanded="false"
+                        aria-controls="{{ branch.details_id }}"
+                    >
+                        <span class="branch-toggle-icon">▾</span>
+                    </button>
+                </td>
+            </tr>
+            <tr id="{{ branch.details_id }}" class="branch-details-row" hidden>
+                <td colspan="6">
+                    {% if branch.files %}
+                    <div class="branch-files-grid">
+                        {% for file in branch.files %}
+                        <article class="branch-file-item {% if file.is_conflict %}is-conflict{% endif %}">
+                            <div class="branch-file-main">
+                                <strong>{{ file.path }}</strong>
+                                <div class="branch-file-meta">
+                                    <span class="mini-badge {{ file.change_type_style }}">{{ file.change_type }}</span>
+                                    {% if file.is_conflict %}
+                                    <span class="mini-badge is-conflict">Conflict</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <span class="branch-file-time">{{ file.observed_at_display }}</span>
+                        </article>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="empty-inline">観測中の touched files はありません。</div>
+                    {% endif %}
+                </td>
+            </tr>
+        </tbody>
+        {% endfor %}
+    </table>
+</div>
+{% else %}
+<div class="empty-state">
+    <h3>まだ push が観測された branch はありません</h3>
+    <p>この Project で push が観測されると、Branches タブに一覧と touched files が表示されます。</p>
+</div>
+{% endif %}

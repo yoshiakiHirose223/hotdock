@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "HotDock"
+    app_name: str = "Hotdock"
     app_env: str = "development"
     debug: bool = True
     init_db_on_startup: bool = True
@@ -45,8 +45,8 @@ class Settings(BaseSettings):
         return self.base_dir / "app" / "templates"
 
     @property
-    def site_templates_dir(self) -> Path:
-        return self.base_dir / "app" / "site" / "templates"
+    def templates_dir(self) -> Path:
+        return self.base_dir / "app" / "templates"
 
     @property
     def static_dir(self) -> Path:

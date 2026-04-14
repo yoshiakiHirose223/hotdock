@@ -1,0 +1,27 @@
+{% extends "hotdock/app/projects/detail_base.html" %}
+
+{% block project_content %}
+<section class="app-grid two-up">
+    <article class="panel">
+        <p class="panel-title">Project settings</p>
+        <h2>接続と表示設定</h2>
+        <div class="form-stack">
+            {% for item in project_settings %}
+            <div class="form-row">
+                <label>{{ item.label }}</label>
+                <input type="text" value="{{ item.value }}">
+            </div>
+            {% endfor %}
+        </div>
+    </article>
+    <article class="panel">
+        <p class="panel-title">Bookmark shortcut</p>
+        <h2>左ナビの扱い</h2>
+        <ul class="summary-list">
+            <li>ブックマークはこの Project の Branches タブへのショートカットです。</li>
+            <li>Overview ではなく Branches に直接遷移します。</li>
+            <li>最大 5 件まで左ナビに表示し、それ以上は件数のみ補助表示します。</li>
+        </ul>
+    </article>
+</section>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="section page-hero">
+    <div class="container narrow">
+        <p class="eyebrow">FAQ</p>
+        <h1>{{ page_heading }}</h1>
+        <p>入口の違い、未提供機能の扱い、git 連携の意味、通知対応の範囲をここで統一しています。</p>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        {% include "hotdock/partials/faq_accordion.html" %}
+    </div>
+</section>
+
+{% set cta = global_cta %}
+{% include "hotdock/partials/cta_block.html" %}
+{% endblock %}

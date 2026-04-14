@@ -1,0 +1,16 @@
+<header class="public-header">
+    <div class="container">
+        <div class="nav-shell">
+            <a class="brand-mark" href="/">Hotdock</a>
+            <nav class="primary-nav" aria-label="Primary">
+                {% for item in navigation %}
+                <a class="{% if active_nav == item.key %}is-active{% endif %}" href="{{ item.href }}">{{ item.label }}</a>
+                {% endfor %}
+            </nav>
+            <div class="nav-actions">
+                <a class="button button-ghost" href="/login">ログイン</a>
+                <a class="button button-primary" href="/signup">SaaS 版で始める</a>
+            </div>
+        </div>
+    </div>
+</header>

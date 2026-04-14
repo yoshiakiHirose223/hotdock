@@ -1,0 +1,47 @@
+{% extends "hotdock/app/projects/detail_base.html" %}
+
+{% block project_content %}
+<section class="app-grid three-up">
+    {% for card in project_overview.summary_cards %}
+    <article class="panel stat-panel">
+        <p class="panel-title">{{ card.label }}</p>
+        <strong>{{ card.value }}</strong>
+        <span>{{ card.meta }}</span>
+    </article>
+    {% endfor %}
+</section>
+
+<section class="app-grid two-up">
+    <article class="panel">
+        <div class="panel-head">
+            <div>
+                <p class="panel-title">Recent branches</p>
+                <h2>最近の更新</h2>
+            </div>
+            <a class="text-link" href="{{ project.urls.branches }}">Branches を開く</a>
+        </div>
+        {% if project_overview.recent_branches %}
+        <ul class="stack-list">
+            {% for branch in project_overview.recent_branches %}
+            <li>
+                <strong>{{ branch.name }}</strong>
+                <span>{{ branch.last_push_at_display }}</span>
+                <p>Files {{ branch.touched_files_count }} / Conflicts {{ branch.conflict_files_count }}</p>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty-inline">表示できる branch はまだありません。</div>
+        {% endif %}
+    </article>
+    <article class="panel">
+        <p class="panel-title">Notes</p>
+        <h2>運用の前提</h2>
+        <ul class="summary-list">
+            {% for note in project_overview.notes %}
+            <li>{{ note }}</li>
+            {% endfor %}
+        </ul>
+    </article>
+</section>
+{% endblock %}

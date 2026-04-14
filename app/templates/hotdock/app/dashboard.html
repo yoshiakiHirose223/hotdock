@@ -1,0 +1,78 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="app-grid four-up">
+    {% for card in summary_cards %}
+    <article class="panel stat-panel">
+        <p class="panel-title">{{ card.label }}</p>
+        <strong>{{ card.value }}</strong>
+        <span>{{ card.meta }}</span>
+    </article>
+    {% endfor %}
+</section>
+
+<section class="app-grid two-up">
+    <article class="panel">
+        <div class="panel-head">
+            <h2>最近の競合候補</h2>
+            <a href="/app/conflicts">一覧を見る</a>
+        </div>
+        <div class="table-wrap">
+            <table class="app-table">
+                <thead>
+                    <tr>
+                        <th>Project</th>
+                        <th>Status</th>
+                        <th>Branches</th>
+                        <th>Files</th>
+                        <th>Updated</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in recent_conflicts %}
+                    <tr>
+                        <td>{{ item.project }}</td>
+                        <td>{{ item.status }}</td>
+                        <td>{{ item.branches }}</td>
+                        <td>{{ item.files }}</td>
+                        <td>{{ item.updated_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </article>
+    <div class="stack-grid">
+        <article class="panel">
+            <div class="panel-head">
+                <h2>通知状況</h2>
+                <a href="/app/notifications">設定</a>
+            </div>
+            <ul class="stack-list">
+                {% for item in notification_channels %}
+                <li>
+                    <strong>{{ item.name }}</strong>
+                    <span>{{ item.target }}</span>
+                    <p>{{ item.rule }}</p>
+                </li>
+                {% endfor %}
+            </ul>
+        </article>
+        <article class="panel">
+            <div class="panel-head">
+                <h2>連携状況</h2>
+                <a href="/app/integrations">確認</a>
+            </div>
+            <ul class="stack-list">
+                {% for item in integration_status %}
+                <li>
+                    <strong>{{ item.name }}</strong>
+                    <span>{{ item.status }}</span>
+                    <p>{{ item.detail }}</p>
+                </li>
+                {% endfor %}
+            </ul>
+        </article>
+    </div>
+</section>
+{% endblock %}

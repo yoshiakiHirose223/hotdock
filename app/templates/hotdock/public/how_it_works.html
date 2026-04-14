@@ -1,0 +1,40 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="section page-hero">
+    <div class="container narrow">
+        <p class="eyebrow">How it works</p>
+        <h1>{{ page_heading }}</h1>
+        <p>更新検知から競合候補抽出、状態変化通知、解消判定までを、運用説明に使いやすい形で整理しています。</p>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="timeline-diagram">
+            {% for topic in how_it_works.topics %}
+            <article class="timeline-step">
+                <span>{{ "%02d"|format(loop.index) }}</span>
+                <div>
+                    <h2>{{ topic.title }}</h2>
+                    <p>{{ topic.description }}</p>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="section section-muted">
+    <div class="container">
+        <article class="card diagram-card">
+            <p class="card-label">git 連携の意味</p>
+            <p>{{ how_it_works.git_link_definition }}</p>
+            <a class="button button-secondary" href="/docs">Docs 入口を見る</a>
+        </article>
+    </div>
+</section>
+
+{% set cta = global_cta %}
+{% include "hotdock/partials/cta_block.html" %}
+{% endblock %}

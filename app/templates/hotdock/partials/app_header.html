@@ -1,0 +1,17 @@
+<header class="app-header">
+    <button class="sidebar-toggle" type="button" data-app-sidebar-toggle>Menu</button>
+    <div>
+        {% if breadcrumbs %}
+        <nav class="breadcrumbs" aria-label="Breadcrumb">
+            {% for crumb in breadcrumbs %}
+            <a href="{{ crumb.href }}">{{ crumb.label }}</a>
+            {% endfor %}
+        </nav>
+        {% endif %}
+        <h1>{{ page_heading }}</h1>
+    </div>
+    <div class="app-header-meta">
+        <span class="app-header-chip">SSR</span>
+        <span class="app-header-chip">FastAPI</span>
+    </div>
+</header>
