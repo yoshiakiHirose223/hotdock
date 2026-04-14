@@ -444,6 +444,11 @@ body.page-app {
     padding: 1rem;
 }
 
+.page-workspace .app-content {
+    display: grid;
+    gap: 1.5rem;
+}
+
 @media (max-width: 980px) {
     .app-shell {
         grid-template-columns: 1fr;

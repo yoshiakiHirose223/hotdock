@@ -25,6 +25,11 @@
         </div>
     </header>
     <main class="auth-main">
+        {% if flash %}
+        <div class="container auth-flash-wrap">
+            <div class="flash-banner is-{{ flash.level }}">{{ flash.message }}</div>
+        </div>
+        {% endif %}
         {% block content %}{% endblock %}
     </main>
     <footer class="auth-shell-footer">

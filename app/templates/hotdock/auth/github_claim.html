@@ -1,0 +1,63 @@
+{% extends "hotdock/layouts/auth_base.html" %}
+
+{% block content %}
+<section class="auth-panel auth-panel-wide">
+    <div class="auth-copy">
+        <p class="eyebrow">GitHub Claim</p>
+        <h1>{{ page_heading }}</h1>
+        <p>{{ support_copy }}</p>
+        {% if installation %}
+        <ul class="summary-list">
+            <li>Installation ID: {{ installation.installation_id }}</li>
+            <li>Status: {{ installation.installation_status }}</li>
+            <li>GitHub Account: {{ installation.github_account_login or "pending" }}</li>
+        </ul>
+        {% endif %}
+        {% if pending_claim and pending_claim.status == "expired" %}
+        <div class="inline-alert">この claim は期限切れです。GitHub App の setup をやり直してください。</div>
+        {% endif %}
+    </div>
+    <div class="auth-card claim-card">
+        {% if not pending_claim %}
+        <p>claim 情報が見つかりませんでした。</p>
+        {% elif current_user is none %}
+        <p>この installation を workspace に紐付けるには Hotdock にログインする必要があります。</p>
+        <div class="button-row">
+            <a class="button button-primary" href="/login?next=/integrations/github/claim/{{ claim_token }}">ログイン</a>
+            <a class="button button-ghost" href="/register?next=/integrations/github/claim/{{ claim_token }}">新規登録</a>
+        </div>
+        {% elif pending_claim.status == "expired" %}
+        <p>期限切れのため、この claim は再利用できません。</p>
+        <a class="button button-secondary" href="/settings/integrations/github">GitHub 設定へ戻る</a>
+        {% elif pending_claim.status == "succeeded" %}
+        <p>この installation はすでに workspace に紐付いています。</p>
+        {% if workspace %}
+        <a class="button button-primary" href="/workspaces/{{ workspace.slug }}/dashboard">Workspace Dashboard を開く</a>
+        {% endif %}
+        {% else %}
+        <form method="post" action="/integrations/github/claim/{{ claim_token }}/workspace">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="form-row">
+                <label for="workspace-id">紐付け先 workspace</label>
+                <select id="workspace-id" name="workspace_id" required>
+                    {% for item in available_workspaces %}
+                    <option value="{{ item.workspace.id }}" {% if selected_workspace_id == item.workspace.id %}selected{% endif %}>
+                        {{ item.workspace.name }} ({{ item.membership.role }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button class="button button-primary" type="submit">Workspace を選んで GitHub 確認へ進む</button>
+        </form>
+        {% if not available_workspaces %}
+        <div class="inline-alert">
+            claim できる workspace がありません。owner または admin の workspace を作成してください。
+            <div class="button-row">
+                <a class="button button-secondary" href="/workspaces/new?next=/integrations/github/claim/{{ claim_token }}">Workspace を作成</a>
+            </div>
+        </div>
+        {% endif %}
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

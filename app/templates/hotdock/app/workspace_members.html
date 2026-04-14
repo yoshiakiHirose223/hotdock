@@ -1,0 +1,80 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="app-grid two-up">
+    <article class="panel">
+        <p class="panel-title">Members</p>
+        <h2>{{ workspace.name }}</h2>
+        <div class="table-wrap">
+            <table class="app-table">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Joined</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for member in members_data.members %}
+                    <tr>
+                        <td>{{ member.invited_email or member.user_id }}</td>
+                        <td>{{ member.role }}</td>
+                        <td>{{ member.status }}</td>
+                        <td>{{ member.joined_at or '-' }}</td>
+                        <td>
+                            {% if current_membership.role == "owner" and member.user_id != current_user.id and member.status == "active" %}
+                            <form method="post" action="/workspaces/{{ workspace.slug }}/members/{{ member.id }}/revoke">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <button class="button button-ghost" type="submit">Revoke</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </article>
+    <article class="panel">
+        <p class="panel-title">Invite</p>
+        <h2>新しい member を招待</h2>
+        {% if current_membership.role == "owner" %}
+        <form method="post" action="/workspaces/{{ workspace.slug }}/members/invite">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="form-row">
+                <label for="invite-email">Email</label>
+                <input id="invite-email" name="email" type="email" placeholder="member@example.com" required>
+            </div>
+            <div class="form-row">
+                <label for="invite-role">Role</label>
+                <select id="invite-role" name="role">
+                    <option value="admin">admin</option>
+                    <option value="member">member</option>
+                    <option value="viewer">viewer</option>
+                </select>
+            </div>
+            <button class="button button-primary" type="submit">招待リンクを発行</button>
+        </form>
+        {% else %}
+        <div class="empty-inline">招待できるのは owner のみです。</div>
+        {% endif %}
+
+        <h3>Pending invitations</h3>
+        {% if members_data.pending_invitations %}
+        <ul class="stack-list">
+            {% for invitation in members_data.pending_invitations %}
+            <li>
+                <strong>{{ invitation.email }}</strong>
+                <span>{{ invitation.role }}</span>
+                <p>Expires: {{ invitation.expires_at }}</p>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty-inline">pending invitation はありません。</div>
+        {% endif %}
+    </article>
+</section>
+{% endblock %}

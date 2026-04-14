@@ -17,6 +17,9 @@
         <div class="app-shell-main">
             {% include "hotdock/partials/app_header.html" %}
             <main class="app-content">
+                {% if flash %}
+                <div class="flash-banner is-{{ flash.level }}">{{ flash.message }}</div>
+                {% endif %}
                 {% block content %}{% endblock %}
             </main>
         </div>

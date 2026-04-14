@@ -82,6 +82,10 @@
     padding: 2rem 0 4rem;
 }
 
+.auth-flash-wrap {
+    margin-top: 1rem;
+}
+
 .auth-panel,
 .auth-panel-wide {
     width: min(calc(100% - 2rem), 1120px);
@@ -106,6 +110,11 @@
 
 .contact-grid {
     align-items: stretch;
+}
+
+.claim-card {
+    display: grid;
+    gap: 1rem;
 }
 
 @media (max-width: 980px) {

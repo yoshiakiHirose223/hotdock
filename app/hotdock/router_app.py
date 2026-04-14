@@ -15,6 +15,7 @@ from app.hotdock.data.dashboard_mock import (
     SETTINGS_SECTIONS,
     SUMMARY_CARDS,
 )
+from app.hotdock.services.auth import attach_auth_context, get_flash
 from app.hotdock.services.context import build_app_context
 from app.hotdock.services.projects import (
     add_project_bookmark,
@@ -57,6 +58,7 @@ def build_page_context(
     active_project_id: int | None = None,
     active_tab: str | None = None,
 ) -> dict[str, Any]:
+    auth = attach_auth_context(request, db)
     context = build_app_context(
         request,
         page_title=page_title,
@@ -71,6 +73,8 @@ def build_page_context(
         active_project_id=active_project_id,
         active_tab=active_tab,
     )
+    context["current_user"] = auth.user
+    context["flash"] = get_flash(request)
     return context
 
 

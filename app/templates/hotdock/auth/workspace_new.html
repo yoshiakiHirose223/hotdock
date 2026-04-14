@@ -1,0 +1,24 @@
+{% extends "hotdock/layouts/auth_base.html" %}
+
+{% block content %}
+<section class="auth-panel">
+    <div class="auth-copy">
+        <p class="eyebrow">Workspace</p>
+        <h1>{{ page_heading }}</h1>
+        <p>GitHub App installation は user ではなく workspace に紐付きます。claim を進める前に workspace を用意します。</p>
+    </div>
+    <form class="auth-card" method="post" action="/workspaces">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="{{ next_path }}">
+        <div class="form-row">
+            <label for="workspace-name">Workspace 名</label>
+            <input id="workspace-name" name="name" type="text" value="{{ form_data.name or '' }}" placeholder="Example Team" required>
+        </div>
+        <div class="form-row">
+            <label for="workspace-slug">Slug</label>
+            <input id="workspace-slug" name="slug" type="text" value="{{ form_data.slug or '' }}" placeholder="example-team">
+        </div>
+        <button class="button button-primary" type="submit">Workspace を作成</button>
+    </form>
+</section>
+{% endblock %}

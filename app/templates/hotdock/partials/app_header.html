@@ -11,6 +11,9 @@
         <h1>{{ page_heading }}</h1>
     </div>
     <div class="app-header-meta">
+        {% if current_user %}
+        <span class="app-header-chip">{{ current_user.display_name }}</span>
+        {% endif %}
         <span class="app-header-chip">SSR</span>
         <span class="app-header-chip">FastAPI</span>
     </div>

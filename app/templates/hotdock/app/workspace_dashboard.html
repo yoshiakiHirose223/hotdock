@@ -1,0 +1,50 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="app-grid four-up">
+    {% for card in dashboard.summary_cards %}
+    <article class="panel stat-panel">
+        <p class="panel-title">{{ card.label }}</p>
+        <strong>{{ card.value }}</strong>
+        <span>{{ card.meta }}</span>
+    </article>
+    {% endfor %}
+</section>
+
+<section class="app-grid two-up">
+    <article class="panel">
+        <p class="panel-title">Repositories</p>
+        <h2>最近の repository</h2>
+        {% if dashboard.recent_repositories %}
+        <ul class="stack-list">
+            {% for repository in dashboard.recent_repositories %}
+            <li>
+                <strong>{{ repository.display_name }}</strong>
+                <span>{{ repository.full_name }}</span>
+                <p>{{ repository.sync_status }}</p>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty-inline">repository はまだ同期されていません。</div>
+        {% endif %}
+    </article>
+    <article class="panel">
+        <p class="panel-title">Installations</p>
+        <h2>連携状況</h2>
+        {% if dashboard.installations %}
+        <ul class="stack-list">
+            {% for installation in dashboard.installations %}
+            <li>
+                <strong>{{ installation.github_account_login or ("installation-" ~ installation.installation_id) }}</strong>
+                <span>{{ installation.installation_status }}</span>
+                <p>ID: {{ installation.installation_id }}</p>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty-inline">GitHub App installation はまだありません。</div>
+        {% endif %}
+    </article>
+</section>
+{% endblock %}

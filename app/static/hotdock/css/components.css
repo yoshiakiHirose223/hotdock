@@ -301,6 +301,27 @@
     line-height: 1.7;
 }
 
+.flash-banner {
+    margin-bottom: 1rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid rgba(23, 114, 208, 0.18);
+    border-radius: 14px;
+    background: rgba(232, 242, 255, 0.78);
+    color: var(--accent-strong);
+}
+
+.flash-banner.is-error {
+    border-color: rgba(189, 70, 70, 0.2);
+    background: rgba(251, 241, 241, 0.92);
+    color: #9f4545;
+}
+
+.flash-banner.is-success {
+    border-color: rgba(29, 127, 95, 0.2);
+    background: rgba(236, 248, 241, 0.95);
+    color: var(--success);
+}
+
 .form-row {
     display: grid;
     gap: 0.45rem;

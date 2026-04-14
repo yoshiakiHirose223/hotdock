@@ -1,4 +1,5 @@
 from functools import lru_cache
+from base64 import b64decode
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -25,6 +26,22 @@ class Settings(BaseSettings):
     database_connect_retries: int = 30
     database_connect_retry_interval: float = 1.0
     site_url: str = "http://127.0.0.1:8000"
+    auth_cookie_name: str = "hotdock_session"
+    csrf_cookie_name: str = "hotdock_csrf"
+    auth_session_ttl_seconds: int = 60 * 60 * 24 * 7
+    invitation_ttl_hours: int = 72
+    pending_claim_ttl_hours: int = 72
+    github_app_slug: str | None = None
+    github_app_id: str | None = None
+    github_app_client_id: str | None = None
+    github_app_client_secret: str | None = None
+    github_app_private_key: str | None = None
+    github_app_install_url: str | None = None
+    github_app_setup_url: str | None = None
+    github_app_webhook_secret: str | None = None
+    github_api_base_url: str = "https://api.github.com"
+    github_oauth_base_url: str = "https://github.com"
+    github_mock_oauth_enabled: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -71,6 +88,18 @@ class Settings(BaseSettings):
                 f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
             )
         return f"sqlite:///{self.storage_dir / 'app.db'}"
+
+    @property
+    def github_private_key_pem(self) -> str | None:
+        if not self.github_app_private_key:
+            return None
+        raw = self.github_app_private_key.strip()
+        if "BEGIN" in raw:
+            return raw.replace("\\n", "\n")
+        try:
+            return b64decode(raw).decode("utf-8")
+        except Exception:
+            return raw.replace("\\n", "\n")
 
 
 @lru_cache

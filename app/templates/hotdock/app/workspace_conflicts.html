@@ -1,0 +1,43 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="panel-title">Conflicts</p>
+            <h2>{{ workspace.name }}</h2>
+        </div>
+    </div>
+    {% if conflicts %}
+    <div class="table-wrap">
+        <table class="app-table">
+            <thead>
+                <tr>
+                    <th>Repository</th>
+                    <th>Branch</th>
+                    <th>File</th>
+                    <th>Status</th>
+                    <th>Last Detected</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for conflict in conflicts %}
+                <tr>
+                    <td>{{ conflict.repository_name }}</td>
+                    <td>{{ conflict.branch_name }}</td>
+                    <td>{{ conflict.file_path }}</td>
+                    <td>{{ conflict.conflict_status }}</td>
+                    <td>{{ conflict.last_detected_at }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h3>競合候補はまだありません</h3>
+        <p>branch 同期が進むと競合候補がここに表示されます。</p>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

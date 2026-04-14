@@ -11,6 +11,7 @@ from app.core.templating import create_templates
 from app.hotdock.router_app import router as app_router
 from app.hotdock.router_auth import router as auth_router
 from app.hotdock.router_public import router as public_router
+from app.hotdock.router_workspace import router as workspace_router
 
 settings = get_settings()
 templates = create_templates()
@@ -37,3 +38,4 @@ app.state.templates = templates
 app.include_router(public_router)
 app.include_router(auth_router)
 app.include_router(app_router)
+app.include_router(workspace_router)

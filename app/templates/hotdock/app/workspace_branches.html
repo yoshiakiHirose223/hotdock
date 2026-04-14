@@ -1,0 +1,43 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="panel-title">Branches</p>
+            <h2>{{ workspace.name }}</h2>
+        </div>
+    </div>
+    {% if branches %}
+    <div class="table-wrap">
+        <table class="app-table">
+            <thead>
+                <tr>
+                    <th>Repository</th>
+                    <th>Branch</th>
+                    <th>Last Push</th>
+                    <th>Files</th>
+                    <th>Conflicts</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for branch in branches %}
+                <tr>
+                    <td>{{ branch.repository_name }}</td>
+                    <td>{{ branch.name }}</td>
+                    <td>{{ branch.last_push_at or '-' }}</td>
+                    <td>{{ branch.touched_files_count }}</td>
+                    <td>{{ branch.conflict_files_count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h3>branch はまだありません</h3>
+        <p>push webhook を受け取ると branch 状態が表示されます。</p>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

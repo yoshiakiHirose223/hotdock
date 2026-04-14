@@ -1,0 +1,41 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="panel-title">Repositories</p>
+            <h2>{{ workspace.name }}</h2>
+        </div>
+    </div>
+    {% if repositories %}
+    <div class="table-wrap">
+        <table class="app-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Full name</th>
+                    <th>Visibility</th>
+                    <th>Sync</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for repository in repositories %}
+                <tr>
+                    <td>{{ repository.display_name }}</td>
+                    <td>{{ repository.full_name }}</td>
+                    <td>{{ repository.visibility }}</td>
+                    <td>{{ repository.sync_status }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h3>repository はまだありません</h3>
+        <p>GitHub App installation と webhook 同期が完了すると、ここに一覧が表示されます。</p>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

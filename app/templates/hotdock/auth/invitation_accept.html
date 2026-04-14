@@ -1,0 +1,29 @@
+{% extends "hotdock/layouts/auth_base.html" %}
+
+{% block content %}
+<section class="auth-panel">
+    <div class="auth-copy">
+        <p class="eyebrow">Invitation</p>
+        <h1>{{ page_heading }}</h1>
+        <p>{{ invitation.email }} 宛の招待です。workspace 参加前にログインして本人確認を行います。</p>
+    </div>
+    <div class="auth-card">
+        <ul class="summary-list">
+            <li>Workspace: {{ workspace.name }}</li>
+            <li>Role: {{ invitation.role }}</li>
+            <li>Expires: {{ invitation.expires_at }}</li>
+        </ul>
+        {% if current_user is none %}
+        <div class="button-row">
+            <a class="button button-primary" href="/login?next=/invitations/{{ invitation_token }}">ログイン</a>
+            <a class="button button-ghost" href="/register?next=/invitations/{{ invitation_token }}">新規登録</a>
+        </div>
+        {% else %}
+        <form method="post" action="/invitations/{{ invitation_token }}/accept">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="button button-primary" type="submit">招待を受ける</button>
+        </form>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}
