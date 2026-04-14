@@ -137,6 +137,10 @@ body.page-app {
     padding: 1.5rem 2rem 2rem;
 }
 
+.empty-state-actions {
+    margin-top: 1.25rem;
+}
+
 .panel {
     border-radius: 20px;
 }

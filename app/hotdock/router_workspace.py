@@ -2,15 +2,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+import hmac
+
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette import status
 
 from app.core.database import get_db
-from app.hotdock.services.auth import attach_auth_context, build_login_redirect, default_workspace_for_user, get_flash
+from app.hotdock.services.auth import (
+    attach_auth_context,
+    build_login_redirect,
+    default_workspace_for_user,
+    get_flash,
+    set_flash,
+)
 from app.hotdock.services.context import build_app_context
+from app.hotdock.services.github import manual_sync_workspace_installation_repositories
 from app.hotdock.services.workspaces import (
     build_workspace_navigation,
     resolve_workspace_access,
@@ -136,6 +145,66 @@ async def workspace_repositories(workspace_slug: str, request: Request, db: Sess
     ).all()
     context["repositories"] = repositories
     return render_app("hotdock/app/workspace_repositories.html", context)
+
+
+@router.post("/workspaces/{workspace_slug}/repositories/sync", name="hotdock-workspace-repositories-sync")
+async def workspace_repositories_sync(
+    workspace_slug: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    csrf_token: str = Form(...),
+):
+    auth = attach_auth_context(request, db)
+    if auth.user is None:
+        return RedirectResponse(
+            url=build_login_redirect(f"/workspaces/{workspace_slug}/repositories"),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(
+            url=f"/workspaces/{workspace_slug}/repositories",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="admin")
+    try:
+        result = await manual_sync_workspace_installation_repositories(
+            db,
+            request,
+            workspace=access.workspace,
+            actor=auth.user,
+        )
+    except Exception as exc:
+        message = "repository 同期に失敗しました。"
+        if getattr(exc, "detail", None) == "No claimed installations":
+            message = "先に GitHub App installation を claim してください。"
+        else:
+            message = "GitHub 側の認証または installation 状態を確認してください。"
+        set_flash(request, "error", message)
+        return RedirectResponse(
+            url=f"/workspaces/{workspace_slug}/repositories",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    if result["repositories_synced"] > 0:
+        set_flash(
+            request,
+            "success",
+            f"{result['repositories_synced']} 件の repository を反映しました。",
+        )
+    elif result["skipped_installations"] > 0:
+        set_flash(
+            request,
+            "error",
+            "GitHub 認証済みユーザーのトークンが見つからず、repository を取得できませんでした。GitHub App claim を行ったアカウントで再ログインしてください。",
+        )
+    else:
+        set_flash(request, "error", "repository は取得できませんでした。GitHub 側の repository 権限と installation 状態を確認してください。")
+    return RedirectResponse(
+        url=f"/workspaces/{workspace_slug}/repositories",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @router.get("/workspaces/{workspace_slug}/branches", name="hotdock-workspace-branches")

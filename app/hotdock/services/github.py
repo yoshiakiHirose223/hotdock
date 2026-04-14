@@ -91,6 +91,29 @@ class GithubOAuthClient:
         payload = response.json()
         return payload.get("installations", [])
 
+    async def fetch_installation_repositories(self, access_token: str, installation_id: int) -> list[dict[str, Any]]:
+        if settings.github_mock_oauth_enabled and access_token.startswith("mock-access-"):
+            return [
+                {
+                    "id": installation_id * 10 + 1,
+                    "full_name": f"mock-org/repository-{installation_id}",
+                    "name": f"repository-{installation_id}",
+                    "private": True,
+                    "default_branch": "main",
+                }
+            ]
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{settings.github_api_base_url}/user/installations/{installation_id}/repositories",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {access_token}",
+                },
+            )
+        response.raise_for_status()
+        payload = response.json()
+        return payload.get("repositories", [])
+
 
 def create_pending_github_claim(
     db: Session,
@@ -464,6 +487,168 @@ def sync_claimed_installation_repositories(db: Session, installation: GithubInst
             repository.sync_status = "active"
             repository.last_synced_at = utcnow()
     db.commit()
+
+
+def _upsert_installation_repositories_from_api(
+    db: Session,
+    *,
+    installation: GithubInstallation,
+    repositories_payload: list[dict[str, Any]],
+) -> int:
+    seen_repository_ids: set[int] = set()
+    synced_count = 0
+    for repository_payload in repositories_payload:
+        github_repository_id = repository_payload.get("id")
+        if github_repository_id is None:
+            continue
+        seen_repository_ids.add(github_repository_id)
+        record = db.scalar(
+            select(GithubInstallationRepository).where(
+                GithubInstallationRepository.installation_ref_id == installation.id,
+                GithubInstallationRepository.github_repository_id == github_repository_id,
+            )
+        )
+        if record is None:
+            record = GithubInstallationRepository(
+                installation_ref_id=installation.id,
+                workspace_id=installation.claimed_workspace_id,
+                github_repository_id=github_repository_id,
+                full_name=repository_payload.get("full_name") or repository_payload.get("name") or str(github_repository_id),
+                name=repository_payload.get("name") or repository_payload.get("full_name") or str(github_repository_id),
+                private=repository_payload.get("private", True),
+                default_branch=repository_payload.get("default_branch"),
+                status="active",
+            )
+            db.add(record)
+        else:
+            record.workspace_id = installation.claimed_workspace_id
+            record.full_name = repository_payload.get("full_name") or record.full_name
+            record.name = repository_payload.get("name") or record.name
+            record.private = repository_payload.get("private", record.private)
+            record.default_branch = repository_payload.get("default_branch") or record.default_branch
+            record.status = "active"
+            record.removed_at = None
+        synced_count += 1
+
+    existing_records = db.scalars(
+        select(GithubInstallationRepository).where(
+            GithubInstallationRepository.installation_ref_id == installation.id,
+        )
+    ).all()
+    for record in existing_records:
+        if record.github_repository_id not in seen_repository_ids:
+            record.status = "removed"
+            record.removed_at = utcnow()
+
+    db.commit()
+    sync_claimed_installation_repositories(db, installation)
+    return synced_count
+
+
+def _github_link_for_repository_sync(
+    db: Session,
+    *,
+    installation: GithubInstallation,
+    preferred_user_id: str | None = None,
+) -> GithubUserLink | None:
+    candidate_user_ids: list[str] = []
+    if preferred_user_id:
+        candidate_user_ids.append(preferred_user_id)
+    if installation.claimed_by_user_id and installation.claimed_by_user_id not in candidate_user_ids:
+        candidate_user_ids.append(installation.claimed_by_user_id)
+
+    for user_id in candidate_user_ids:
+        link = db.scalar(
+            select(GithubUserLink).where(
+                GithubUserLink.user_id == user_id,
+                GithubUserLink.revoked_at.is_(None),
+            )
+        )
+        if link is not None and link.access_token_encrypted:
+            return link
+    return None
+
+
+async def manual_sync_workspace_installation_repositories(
+    db: Session,
+    request: Request,
+    *,
+    workspace: Workspace,
+    actor: User,
+) -> dict[str, int]:
+    installations = db.scalars(
+        select(GithubInstallation).where(
+            GithubInstallation.claimed_workspace_id == workspace.id,
+            GithubInstallation.installation_status.not_in(["uninstalled", "suspended"]),
+        )
+    ).all()
+    if not installations:
+        raise HTTPException(status_code=400, detail="No claimed installations")
+
+    oauth_client = GithubOAuthClient()
+    installations_synced = 0
+    repositories_synced = 0
+    skipped_installations = 0
+
+    for installation in installations:
+        cached_installation_repositories = db.scalars(
+            select(GithubInstallationRepository).where(
+                GithubInstallationRepository.installation_ref_id == installation.id,
+                GithubInstallationRepository.status == "active",
+            )
+        ).all()
+        if cached_installation_repositories:
+            sync_claimed_installation_repositories(db, installation)
+            installations_synced += 1
+            repositories_synced += len(cached_installation_repositories)
+            continue
+
+        github_link = _github_link_for_repository_sync(
+            db,
+            installation=installation,
+            preferred_user_id=actor.id,
+        )
+        if github_link is None or not github_link.access_token_encrypted:
+            skipped_installations += 1
+            continue
+
+        try:
+            repositories_payload = await oauth_client.fetch_installation_repositories(
+                github_link.access_token_encrypted,
+                installation.installation_id,
+            )
+        except httpx.HTTPError:
+            skipped_installations += 1
+            continue
+
+        repositories_synced += _upsert_installation_repositories_from_api(
+            db,
+            installation=installation,
+            repositories_payload=repositories_payload,
+        )
+        installations_synced += 1
+
+    record_audit_log(
+        db,
+        request,
+        actor_type="user",
+        actor_id=actor.id,
+        workspace_id=workspace.id,
+        target_type="workspace",
+        target_id=workspace.id,
+        action="workspace_repository_sync_requested",
+        metadata={
+            "installations_synced": installations_synced,
+            "repositories_synced": repositories_synced,
+            "skipped_installations": skipped_installations,
+        },
+    )
+    db.commit()
+    return {
+        "installations_synced": installations_synced,
+        "repositories_synced": repositories_synced,
+        "skipped_installations": skipped_installations,
+    }
 
 
 def record_push_event(db: Session, payload: dict[str, Any]) -> None:

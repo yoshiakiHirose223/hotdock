@@ -7,6 +7,12 @@
             <p class="panel-title">Repositories</p>
             <h2>{{ workspace.name }}</h2>
         </div>
+        {% if current_membership and current_membership.role in ["owner", "admin"] %}
+        <form method="post" action="/workspaces/{{ workspace.slug }}/repositories/sync">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="button button-secondary" type="submit">リポジトリを同期</button>
+        </form>
+        {% endif %}
     </div>
     {% if repositories %}
     <div class="table-wrap">
@@ -35,6 +41,12 @@
     <div class="empty-state">
         <h3>repository はまだありません</h3>
         <p>GitHub App installation の claim 完了後、installation_repositories webhook が届くとここに表示されます。branch 情報は対象 repository に push が入ると反映されます。</p>
+        {% if current_membership and current_membership.role in ["owner", "admin"] %}
+        <form class="empty-state-actions" method="post" action="/workspaces/{{ workspace.slug }}/repositories/sync">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="button button-primary" type="submit">リポジトリを今すぐ反映する</button>
+        </form>
+        {% endif %}
     </div>
     {% endif %}
 </section>
