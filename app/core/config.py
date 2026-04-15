@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     github_app_client_secret: str | None = None
     github_app_private_key: str | None = None
     github_app_install_url: str | None = None
+    # Deprecated: callback-only flow no longer depends on setup URL.
     github_app_setup_url: str | None = None
     github_app_webhook_secret: str | None = None
     github_api_base_url: str = "https://api.github.com"
@@ -100,6 +101,34 @@ class Settings(BaseSettings):
             return b64decode(raw).decode("utf-8")
         except Exception:
             return raw.replace("\\n", "\n")
+
+    def validate_runtime_security(self) -> None:
+        if self.app_env == "production" and self.secret_key == "replace-this-secret-key":
+            raise RuntimeError("SECRET_KEY must be configured in production")
+
+        github_related_values = [
+            self.github_app_slug,
+            self.github_app_id,
+            self.github_app_client_id,
+            self.github_app_client_secret,
+            self.github_app_private_key,
+            self.github_app_install_url,
+            self.github_app_webhook_secret,
+        ]
+        if self.app_env == "production" and any(github_related_values):
+            missing: list[str] = []
+            if not self.github_app_id:
+                missing.append("GITHUB_APP_ID")
+            if not self.github_app_client_id:
+                missing.append("GITHUB_APP_CLIENT_ID")
+            if not self.github_app_client_secret:
+                missing.append("GITHUB_APP_CLIENT_SECRET")
+            if not self.github_app_webhook_secret:
+                missing.append("GITHUB_APP_WEBHOOK_SECRET")
+            if not self.github_private_key_pem:
+                missing.append("GITHUB_APP_PRIVATE_KEY")
+            if missing:
+                raise RuntimeError(f"GitHub App settings are incomplete: {', '.join(missing)}")
 
 
 @lru_cache

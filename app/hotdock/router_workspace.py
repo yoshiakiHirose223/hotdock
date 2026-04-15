@@ -197,7 +197,7 @@ async def workspace_repositories_sync(
         set_flash(
             request,
             "error",
-            "GitHub 認証済みユーザーのトークンが見つからず、repository を取得できませんでした。GitHub App claim を行ったアカウントで再ログインしてください。",
+            "GitHub App credentials または installation 状態を確認できず、repository を取得できませんでした。GitHub App 設定と installation 状態を確認してください。",
         )
     else:
         set_flash(request, "error", "repository は取得できませんでした。GitHub 側の repository 権限と installation 状態を確認してください。")

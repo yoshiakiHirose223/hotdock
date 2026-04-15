@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,10 +36,14 @@ from app.hotdock.services.context import build_auth_context
 from app.hotdock.services.github import (
     GithubOAuthClient,
     complete_github_claim,
-    create_pending_github_claim,
+    create_callback_pending_claim,
+    finalize_github_claim,
     load_pending_claim_by_token,
+    mark_webhook_event_failed,
+    pending_claim_has_verified_github_identity,
     record_push_event,
     record_webhook_event,
+    resolve_callback_installation,
     select_claim_workspace,
     set_pending_oauth_state,
     sync_claimed_installation_repositories,
@@ -46,7 +52,7 @@ from app.hotdock.services.github import (
     verify_github_webhook_signature,
     verify_pending_oauth_state,
 )
-from app.hotdock.services.security import generate_token
+from app.hotdock.services.security import generate_token, utcnow
 from app.hotdock.services.workspaces import (
     accept_workspace_invitation,
     create_user,
@@ -64,6 +70,15 @@ from app.models.workspace_member import WorkspaceMember
 
 settings = get_settings()
 router = APIRouter()
+
+
+def _append_query_params(url: str, params: dict[str, str]) -> str:
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    for key, value in params.items():
+        if value:
+            query[key] = value
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 def render_auth(template_name: str, context: dict[str, Any]):
@@ -127,16 +142,37 @@ def _require_login(request: Request, db: Session, next_path: str):
     return auth, None
 
 
+def _admin_workspaces(db: Session, user) -> list:
+    return [item for item in list_user_workspaces(db, user) if item.membership.role in {"owner", "admin"}]
+
+
+def _workspace_slug_from_install_intent(db: Session, request: Request, auth, install_intent: dict[str, Any] | None) -> str | None:
+    if auth.user is None:
+        return None
+    if install_intent and install_intent.get("workspace_slug"):
+        workspace_slug = str(install_intent["workspace_slug"])
+        try:
+            resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="admin")
+        except HTTPException:
+            return None
+        return workspace_slug
+
+    admin_workspaces = _admin_workspaces(db, auth.user)
+    if len(admin_workspaces) == 1:
+        return admin_workspaces[0].workspace.slug
+    return None
+
+
 def _github_authorize_url(state_token: str) -> str:
     if settings.github_mock_oauth_enabled:
-        return f"/integrations/github/authorize/callback?{urlencode({'code': 'mock-code', 'state': state_token})}"
+        return f"/integrations/github/callback?{urlencode({'code': 'mock-code', 'state': state_token})}"
     if not settings.github_app_client_id:
         raise ValueError("GitHub OAuth is not configured")
     query = urlencode(
         {
             "client_id": settings.github_app_client_id,
             "state": state_token,
-            "redirect_uri": f"{settings.site_url}/integrations/github/authorize/callback",
+            "redirect_uri": f"{settings.site_url}/integrations/github/callback",
         }
     )
     return f"{settings.github_oauth_base_url}/login/oauth/authorize?{query}"
@@ -391,7 +427,7 @@ async def github_settings(request: Request, db: Session = Depends(get_db)):
     pending_claims = db.scalars(
         select(GithubPendingClaim).where(
             GithubPendingClaim.workspace_id == access.workspace.id,
-            GithubPendingClaim.status.in_(["pending", "workspace_selected", "awaiting_github_auth"]),
+            GithubPendingClaim.status.in_(["pending", "workspace_selected", "awaiting_github_auth", "github_authorized"]),
         )
     ).all()
     context.update({"workspace": access.workspace, "installations": installations, "pending_claims": pending_claims})
@@ -400,41 +436,46 @@ async def github_settings(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/integrations/github/install/start", name="hotdock-github-install-start")
 async def github_install_start(request: Request, db: Session = Depends(get_db)):
-    auth, access, redirect = _resolve_workspace_target(request, db, required_role="admin")
-    if redirect:
-        return redirect
     install_url = settings.github_app_install_url or (
         f"https://github.com/apps/{settings.github_app_slug}/installations/new" if settings.github_app_slug else None
     )
     if not install_url:
         set_flash(request, "error", "GitHub App の install URL が設定されていません。")
-        return RedirectResponse(
-            url=f"/settings/integrations/github?{urlencode({'workspace': access.workspace.slug})}",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    auth = attach_auth_context(request, db)
+    workspace_slug = request.query_params.get("workspace")
+    if auth.user is not None and workspace_slug:
+        resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="admin")
+    elif auth.user is not None:
+        workspace_slug = _workspace_slug_from_install_intent(db, request, auth, None)
+
+    install_state = generate_token()
     request.session["github_install_intent"] = {
-        "workspace_slug": access.workspace.slug,
-        "user_id": auth.user.id,
-        "nonce": generate_token(),
+        "workspace_slug": workspace_slug,
+        "user_id": auth.user.id if auth.user else None,
+        "nonce": install_state,
+        "issued_at": int(utcnow().timestamp()),
+        "source": "install_start",
     }
-    return RedirectResponse(url=install_url, status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=_append_query_params(install_url, {"state": install_state}), status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/integrations/github/setup", name="hotdock-github-setup")
-async def github_setup(request: Request, db: Session = Depends(get_db), installation_id: int = 0, setup_action: str = "install"):
-    if installation_id <= 0:
-        set_flash(request, "error", "installation_id が不正です。")
-        return RedirectResponse(url="/install/github", status_code=status.HTTP_303_SEE_OTHER)
-    result = create_pending_github_claim(
-        db,
-        request,
-        installation_id=installation_id,
-        initiated_via="setup_url",
-        setup_payload={"setup_action": setup_action},
-    )
-    claim_url = f"/integrations/github/claim/{result.claim_token}"
-    store_github_claim_context(request, claim_token=result.claim_token, next_path=claim_url)
-    return RedirectResponse(url=claim_url, status_code=status.HTTP_303_SEE_OTHER)
+async def github_setup(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    set_flash(request, "error", "GitHub App の setup URL フローは廃止されました。現在の連携ボタンからやり直してください。")
+    auth = attach_auth_context(request, db)
+    if auth.user is not None:
+        workspace_slug = _workspace_slug_from_install_intent(db, request, auth, None)
+        if workspace_slug:
+            return RedirectResponse(
+                url=f"/settings/integrations/github?{urlencode({'workspace': workspace_slug})}",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+    return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/integrations/github/claim/{claim_token}", name="hotdock-github-claim")
@@ -465,13 +506,14 @@ async def github_claim_page(claim_token: str, request: Request, db: Session = De
             ]
     context.update(
         {
-            "support_copy": "setup URL の installation_id 単独では ownership を確定しません。workspace 選択と GitHub user authorization を通した後に claim が完了します。",
+            "support_copy": "GitHub callback で取得した installation 情報は一時保存され、workspace 選択後に claim が完了します。callback 単独では ownership を確定しません。",
             "claim_token": claim_token,
             "pending_claim": pending_claim,
             "installation": installation,
             "workspace": workspace,
             "selected_workspace_id": selected_workspace_id,
             "available_workspaces": available_workspaces,
+            "github_authorized": pending_claim_has_verified_github_identity(pending_claim) if pending_claim else False,
         }
     )
     return render_auth("hotdock/auth/github_claim.html", context)
@@ -500,7 +542,16 @@ async def github_claim_workspace(
         set_flash(request, "error", "workspace が見つかりません。")
         return RedirectResponse(url=f"/integrations/github/claim/{claim_token}", status_code=status.HTTP_303_SEE_OTHER)
     resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace.slug, required_role="admin")
-    select_claim_workspace(db, request, pending_claim=pending_claim, user=auth.user, workspace=workspace)
+    pending_claim = select_claim_workspace(db, request, pending_claim=pending_claim, user=auth.user, workspace=workspace)
+    if pending_claim_has_verified_github_identity(pending_claim):
+        try:
+            installation = finalize_github_claim(db, request, pending_claim=pending_claim, user=auth.user)
+            sync_claimed_installation_repositories(db, installation)
+        except Exception:
+            set_flash(request, "error", "installation の claim 完了に失敗しました。")
+            return RedirectResponse(url=f"/integrations/github/claim/{claim_token}", status_code=status.HTTP_303_SEE_OTHER)
+        workspace = db.get(Workspace, installation.claimed_workspace_id)
+        return RedirectResponse(url=f"/workspaces/{workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(
         url=f"/integrations/github/authorize/start?{urlencode({'token': claim_token})}",
         status_code=status.HTTP_303_SEE_OTHER,
@@ -516,9 +567,16 @@ async def github_authorize_start(request: Request, db: Session = Depends(get_db)
     if pending_claim is None or pending_claim.user_id != auth.user.id:
         set_flash(request, "error", "claim を再開できませんでした。")
         return RedirectResponse(url="/settings/integrations/github", status_code=status.HTTP_303_SEE_OTHER)
+    if pending_claim_has_verified_github_identity(pending_claim):
+        set_flash(request, "success", "GitHub 側の確認は完了しています。workspace を選択して claim を完了してください。")
+        return RedirectResponse(url=f"/integrations/github/claim/{token}", status_code=status.HTTP_303_SEE_OTHER)
     state_token = generate_token()
     request.session["github_oauth_state"] = {"state": state_token, "claim_token": token}
-    set_pending_oauth_state(db, pending_claim, state_token)
+    try:
+        set_pending_oauth_state(db, pending_claim, state_token)
+    except Exception:
+        set_flash(request, "error", "claim 状態が無効です。最初からやり直してください。")
+        return RedirectResponse(url=f"/integrations/github/claim/{token}", status_code=status.HTTP_303_SEE_OTHER)
     try:
         authorize_url = _github_authorize_url(state_token)
     except ValueError:
@@ -527,44 +585,132 @@ async def github_authorize_start(request: Request, db: Session = Depends(get_db)
     return RedirectResponse(url=authorize_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
+@router.get("/integrations/github/callback", name="hotdock-github-callback")
 @router.get("/integrations/github/authorize/callback", name="hotdock-github-authorize-callback")
-async def github_authorize_callback(request: Request, db: Session = Depends(get_db), code: str = "", state: str = ""):
-    auth, redirect = _require_login(request, db, "/dashboard")
-    if redirect:
-        return redirect
-    oauth_state = request.session.pop("github_oauth_state", None)
-    if not oauth_state or oauth_state.get("state") != state:
-        set_flash(request, "error", "GitHub authorization state の検証に失敗しました。")
-        return RedirectResponse(url="/settings/integrations/github", status_code=status.HTTP_303_SEE_OTHER)
-    pending_claim = load_pending_claim_by_token(db, oauth_state["claim_token"])
-    if pending_claim is None or not verify_pending_oauth_state(pending_claim, state):
-        set_flash(request, "error", "claim 状態が一致しません。")
-        return RedirectResponse(url="/settings/integrations/github", status_code=status.HTTP_303_SEE_OTHER)
+async def github_callback(request: Request, db: Session = Depends(get_db), code: str = "", state: str = ""):
+    if not code or not state:
+        set_flash(request, "error", "GitHub callback のパラメータが不足しています。")
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
+    auth = attach_auth_context(request, db)
     oauth_client = GithubOAuthClient()
+
+    legacy_oauth_state = request.session.get("github_oauth_state")
+    if legacy_oauth_state and legacy_oauth_state.get("state") == state:
+        auth, redirect = _require_login(request, db, "/dashboard")
+        if redirect:
+            return redirect
+        request.session.pop("github_oauth_state", None)
+        pending_claim = load_pending_claim_by_token(db, legacy_oauth_state["claim_token"])
+        if pending_claim is None or not verify_pending_oauth_state(pending_claim, state):
+            set_flash(request, "error", "claim 状態が一致しません。")
+            return RedirectResponse(url="/settings/integrations/github", status_code=status.HTTP_303_SEE_OTHER)
+        try:
+            token_payload = await oauth_client.exchange_code(code)
+            installation = await complete_github_claim(
+                db,
+                request,
+                pending_claim=pending_claim,
+                user=auth.user,
+                access_token=token_payload["access_token"],
+                token_payload=token_payload,
+            )
+            sync_claimed_installation_repositories(db, installation)
+        except Exception:
+            set_flash(request, "error", "GitHub authorization の完了に失敗しました。")
+            return RedirectResponse(
+                url=f"/integrations/github/claim/{legacy_oauth_state['claim_token']}",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+
+        workspace = db.get(Workspace, installation.claimed_workspace_id)
+        return RedirectResponse(url=f"/workspaces/{workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+
+    install_intent = request.session.pop("github_install_intent", None)
+    if install_intent is None:
+        set_flash(request, "error", "GitHub callback を再開できませんでした。Hotdock から連携を開始してください。")
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    expected_state = install_intent.get("nonce", "")
+    if not expected_state or not hmac.compare_digest(expected_state, state):
+        set_flash(request, "error", "GitHub callback state の検証に失敗しました。")
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
     try:
+        preferred_workspace_id = None
+        if install_intent.get("workspace_slug"):
+            preferred_workspace = db.scalar(select(Workspace).where(Workspace.slug == install_intent["workspace_slug"]))
+            preferred_workspace_id = preferred_workspace.id if preferred_workspace is not None else None
         token_payload = await oauth_client.exchange_code(code)
-        installation = await complete_github_claim(
+        github_user, installation = await resolve_callback_installation(
+            db,
+            access_token=token_payload["access_token"],
+            issued_at_ts=int(install_intent.get("issued_at", 0) or 0),
+            preferred_workspace_id=preferred_workspace_id,
+        )
+        result = create_callback_pending_claim(
             db,
             request,
-            pending_claim=pending_claim,
-            user=auth.user,
-            access_token=token_payload["access_token"],
-            token_payload=token_payload,
+            installation=installation,
+            github_user=github_user,
+            source="callback_url",
+            callback_state=state,
+            install_intent=install_intent,
         )
-        sync_claimed_installation_repositories(db, installation)
     except Exception:
-        set_flash(request, "error", "GitHub authorization の完了に失敗しました。")
-        return RedirectResponse(
-            url=f"/integrations/github/claim/{oauth_state['claim_token']}",
-            status_code=status.HTTP_303_SEE_OTHER,
+        record_audit_log(
+            db,
+            request,
+            actor_type="user" if auth.user else "anonymous",
+            actor_id=auth.user.id if auth.user else None,
+            workspace_id=None,
+            target_type="github_installation",
+            target_id=None,
+            action="github_callback_failed",
+            metadata={"reason": "installation_resolution_failed"},
         )
+        db.commit()
+        set_flash(request, "error", "GitHub installation の確認に失敗しました。もう一度やり直してください。")
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
-    workspace = db.get(Workspace, installation.claimed_workspace_id)
-    return RedirectResponse(
-        url=f"/workspaces/{workspace.slug}/dashboard",
-        status_code=status.HTTP_303_SEE_OTHER,
+    claim_url = f"/integrations/github/claim/{result.claim_token}"
+    store_github_claim_context(request, claim_token=result.claim_token, next_path=claim_url)
+    record_audit_log(
+        db,
+        request,
+        actor_type="user" if auth.user else "anonymous",
+        actor_id=auth.user.id if auth.user else None,
+        workspace_id=None,
+        target_type="pending_claim",
+        target_id=result.pending_claim.id,
+        action="github_callback_context_created",
+        metadata={"installation_id": installation.installation_id, "github_user_id": github_user["id"]},
     )
+    db.commit()
+
+    if auth.user is None:
+        set_flash(request, "success", "GitHub 側の確認が完了しました。Hotdock にログインまたは新規登録すると claim を再開できます。")
+        return RedirectResponse(url=build_login_redirect(claim_url), status_code=status.HTTP_303_SEE_OTHER)
+
+    workspace_slug = _workspace_slug_from_install_intent(db, request, auth, install_intent)
+    if workspace_slug:
+        workspace = db.scalar(select(Workspace).where(Workspace.slug == workspace_slug))
+        if workspace is not None:
+            try:
+                pending_claim = select_claim_workspace(
+                    db,
+                    request,
+                    pending_claim=result.pending_claim,
+                    user=auth.user,
+                    workspace=workspace,
+                )
+                installation = finalize_github_claim(db, request, pending_claim=pending_claim, user=auth.user)
+                sync_claimed_installation_repositories(db, installation)
+                return RedirectResponse(url=f"/workspaces/{workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+            except Exception:
+                set_flash(request, "error", "workspace への自動紐付けに失敗しました。workspace を選択して再開してください。")
+
+    return RedirectResponse(url=claim_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/invitations/{invitation_token}", name="hotdock-invitation-show")
@@ -670,12 +816,9 @@ async def workspace_member_revoke(
 @router.post("/webhooks/github", name="hotdock-github-webhook")
 async def github_webhook(request: Request, db: Session = Depends(get_db)):
     body = await request.body()
-    payload = await request.json()
     signature_valid = verify_github_webhook_signature(body, request.headers.get("x-hub-signature-256"))
     delivery_id = request.headers.get("x-github-delivery", "")
     event_name = request.headers.get("x-github-event", "")
-    action_name = payload.get("action")
-    installation_id = ((payload.get("installation") or {}).get("id")) if isinstance(payload, dict) else None
 
     if not signature_valid:
         record_audit_log(
@@ -692,6 +835,17 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
         db.commit()
         return JSONResponse({"detail": "invalid signature"}, status_code=401)
 
+    if not delivery_id or not event_name:
+        return JSONResponse({"detail": "missing webhook headers"}, status_code=400)
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError:
+        return JSONResponse({"detail": "invalid payload"}, status_code=400)
+
+    action_name = payload.get("action") if isinstance(payload, dict) else None
+    installation_id = ((payload.get("installation") or {}).get("id")) if isinstance(payload, dict) else None
+
     recorded = record_webhook_event(
         db,
         delivery_id=delivery_id,
@@ -699,6 +853,7 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
         action_name=action_name,
         installation_id=installation_id,
         payload=payload,
+        payload_sha256=hashlib.sha256(body).hexdigest(),
         signature_valid=signature_valid,
     )
     if recorded is None:
@@ -716,13 +871,18 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
         db.commit()
         return JSONResponse({"status": "replayed"})
 
-    if event_name == "installation":
-        installation = sync_installation_event(db, payload)
-        sync_claimed_installation_repositories(db, installation)
-    elif event_name == "installation_repositories":
-        sync_installation_repositories_event(db, payload)
-    elif event_name == "push":
-        record_push_event(db, payload)
+    try:
+        if event_name == "installation":
+            installation = sync_installation_event(db, payload)
+            sync_claimed_installation_repositories(db, installation)
+        elif event_name == "installation_repositories":
+            sync_installation_repositories_event(db, payload)
+        elif event_name == "push":
+            record_push_event(db, payload)
+    except Exception as exc:
+        if recorded:
+            mark_webhook_event_failed(db, recorded.id, str(exc))
+        return JSONResponse({"detail": "processing failed"}, status_code=500)
 
     if recorded:
         event_row = db.get(GithubWebhookEvent, recorded.id)
@@ -751,7 +911,9 @@ async def install_github(request: Request, db: Session = Depends(get_db)):
     context.update(
         {
             "eyebrow": "GitHub App 導線",
-            "support_copy": "公開後は setup URL から pending claim を作成し、Hotdock login と GitHub user authorization を通して workspace claim を完了します。",
+            "support_copy": "GitHub callback で installation と GitHub user authorization を受け取り、Hotdock login 後に workspace claim を完了します。",
+            "install_available": bool(settings.github_app_install_url or settings.github_app_slug),
+            "install_href": "/integrations/github/install/start",
         }
     )
     return render_auth("hotdock/auth/install_github.html", context)

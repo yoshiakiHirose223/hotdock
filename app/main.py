@@ -19,6 +19,7 @@ templates = create_templates()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    settings.validate_runtime_security()
     if settings.init_db_on_startup:
         init_db()
     yield

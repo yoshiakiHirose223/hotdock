@@ -11,10 +11,13 @@
             <li>Installation ID: {{ installation.installation_id }}</li>
             <li>Status: {{ installation.installation_status }}</li>
             <li>GitHub Account: {{ installation.github_account_login or "pending" }}</li>
+            <li>GitHub User: {{ pending_claim.github_user_login if pending_claim and pending_claim.github_user_login else "未確認" }}</li>
         </ul>
         {% endif %}
         {% if pending_claim and pending_claim.status == "expired" %}
-        <div class="inline-alert">この claim は期限切れです。GitHub App の setup をやり直してください。</div>
+        <div class="inline-alert">この claim は期限切れです。現在の GitHub 連携ボタンからやり直してください。</div>
+        {% elif github_authorized %}
+        <div class="inline-alert">GitHub 側の user authorization は完了しています。workspace を選ぶと claim を確定できます。</div>
         {% endif %}
     </div>
     <div class="auth-card claim-card">
@@ -47,7 +50,13 @@
                     {% endfor %}
                 </select>
             </div>
-            <button class="button button-primary" type="submit">Workspace を選んで GitHub 確認へ進む</button>
+            <button class="button button-primary" type="submit">
+                {% if github_authorized %}
+                Workspace を選んで claim を完了する
+                {% else %}
+                Workspace を選んで GitHub 確認へ進む
+                {% endif %}
+            </button>
         </form>
         {% if not available_workspaces %}
         <div class="inline-alert">

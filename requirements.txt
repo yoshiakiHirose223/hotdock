@@ -10,3 +10,4 @@ markdown
 itsdangerous
 pytest
 httpx
+PyJWT[crypto]
