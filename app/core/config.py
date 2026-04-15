@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     auth_session_ttl_seconds: int = 60 * 60 * 24 * 7
     invitation_ttl_hours: int = 72
     pending_claim_ttl_hours: int = 72
+    github_install_intent_ttl_seconds: int = 30 * 60
     github_app_slug: str | None = None
     github_app_id: str | None = None
     github_app_client_id: str | None = None

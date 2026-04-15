@@ -1,0 +1,24 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="app-grid two-up">
+    {% for section in settings_sections %}
+    <article class="panel">
+        <p class="panel-title">{{ section.title }}</p>
+        <div class="form-stack">
+            {% for field in section.fields %}
+            <div class="form-row">
+                <label>{{ field.label }}</label>
+                <input type="text" value="{{ field.value }}" readonly>
+            </div>
+            {% endfor %}
+        </div>
+    </article>
+    {% endfor %}
+</section>
+
+<section class="panel">
+    <p class="panel-title">Access Policy</p>
+    <p>この画面は admin 以上のみ閲覧できます。owner は billing と owner 管理を担当し、member / viewer には公開しません。</p>
+</section>
+{% endblock %}

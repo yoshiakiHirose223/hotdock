@@ -37,18 +37,21 @@ from app.hotdock.services.github import (
     GithubOAuthClient,
     complete_github_claim,
     create_callback_pending_claim,
+    find_resumable_pending_claims_for_github_user,
     finalize_github_claim,
     load_pending_claim_by_token,
     mark_webhook_event_failed,
     pending_claim_has_verified_github_identity,
     record_push_event,
     record_webhook_event,
+    reissue_pending_claim_token,
     resolve_callback_installation,
     select_claim_workspace,
     set_pending_oauth_state,
     sync_claimed_installation_repositories,
     sync_installation_event,
     sync_installation_repositories_event,
+    unlink_github_installation,
     verify_github_webhook_signature,
     verify_pending_oauth_state,
 )
@@ -60,6 +63,7 @@ from app.hotdock.services.workspaces import (
     invite_workspace_member,
     list_user_workspaces,
     resolve_workspace_access,
+    update_workspace_member_role,
 )
 from app.models.github_installation import GithubInstallation
 from app.models.github_pending_claim import GithubPendingClaim
@@ -427,11 +431,57 @@ async def github_settings(request: Request, db: Session = Depends(get_db)):
     pending_claims = db.scalars(
         select(GithubPendingClaim).where(
             GithubPendingClaim.workspace_id == access.workspace.id,
-            GithubPendingClaim.status.in_(["pending", "workspace_selected", "awaiting_github_auth", "github_authorized"]),
+            GithubPendingClaim.status.in_(["pending", "workspace_selected", "awaiting_github_auth", "github_authorized", "expired"]),
         )
     ).all()
-    context.update({"workspace": access.workspace, "installations": installations, "pending_claims": pending_claims})
+    context.update(
+        {
+            "workspace": access.workspace,
+            "installations": installations,
+            "pending_claims": pending_claims,
+            "install_available": bool(settings.github_app_install_url or settings.github_app_slug),
+            "can_unlink_installation": access.membership.role == "owner",
+        }
+    )
     return render_auth("hotdock/auth/github_settings.html", context)
+
+
+@router.post("/integrations/github/installations/{installation_id}/unlink", name="hotdock-github-installation-unlink")
+async def github_installation_unlink(
+    installation_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    workspace_slug: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    auth, redirect = _require_login(request, db, f"/settings/integrations/github?workspace={workspace_slug}")
+    if redirect:
+        return redirect
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(
+            url=f"/settings/integrations/github?{urlencode({'workspace': workspace_slug})}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="owner")
+    installation = db.scalar(
+        select(GithubInstallation).where(
+            GithubInstallation.installation_id == installation_id,
+            GithubInstallation.claimed_workspace_id == access.workspace.id,
+        )
+    )
+    if installation is None:
+        set_flash(request, "error", "installation が見つかりません。")
+        return RedirectResponse(
+            url=f"/settings/integrations/github?{urlencode({'workspace': workspace_slug})}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    unlink_github_installation(db, request, installation=installation, workspace=access.workspace, actor=auth.user)
+    set_flash(request, "success", "installation の紐付けを解除しました。再利用する場合は GitHub App を再インストールして claim してください。")
+    return RedirectResponse(
+        url=f"/settings/integrations/github?{urlencode({'workspace': workspace_slug})}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @router.get("/integrations/github/install/start", name="hotdock-github-install-start")
@@ -585,6 +635,51 @@ async def github_authorize_start(request: Request, db: Session = Depends(get_db)
     return RedirectResponse(url=authorize_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
+@router.get("/integrations/github/recover", name="hotdock-github-recover")
+async def github_recover_page(request: Request, db: Session = Depends(get_db)):
+    auth, redirect = _require_login(request, db, request.url.path)
+    if redirect:
+        return redirect
+    context = auth_page_context(
+        request,
+        db,
+        page_title="GitHub Claim Recovery | Hotdock",
+        page_description="GitHub user authorization を使って保留中の installation claim を再開します。",
+        page_heading="GitHub Claim Recovery",
+        active_nav="github-recover",
+        body_class="page-auth page-github-recover",
+        breadcrumbs=[{"label": "Home", "href": "/"}, {"label": "GitHub Recovery", "href": "/integrations/github/recover"}],
+    )
+    pending_claims = db.scalars(
+        select(GithubPendingClaim).where(
+            GithubPendingClaim.user_id == auth.user.id,
+            GithubPendingClaim.status.in_(["pending", "workspace_selected", "awaiting_github_auth", "github_authorized"]),
+            GithubPendingClaim.expires_at > utcnow(),
+        )
+    ).all()
+    context.update({"pending_claims": pending_claims})
+    return render_auth("hotdock/auth/github_recover.html", context)
+
+
+@router.get("/integrations/github/recover/start", name="hotdock-github-recover-start")
+async def github_recover_start(request: Request, db: Session = Depends(get_db)):
+    auth, redirect = _require_login(request, db, "/integrations/github/recover")
+    if redirect:
+        return redirect
+    state_token = generate_token()
+    request.session["github_recovery_state"] = {
+        "state": state_token,
+        "issued_at": int(utcnow().timestamp()),
+        "user_id": auth.user.id,
+    }
+    try:
+        authorize_url = _github_authorize_url(state_token)
+    except ValueError:
+        set_flash(request, "error", "GitHub OAuth の設定が不足しています。")
+        return RedirectResponse(url="/integrations/github/recover", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=authorize_url, status_code=status.HTTP_303_SEE_OTHER)
+
+
 @router.get("/integrations/github/callback", name="hotdock-github-callback")
 @router.get("/integrations/github/authorize/callback", name="hotdock-github-authorize-callback")
 async def github_callback(
@@ -599,6 +694,7 @@ async def github_callback(
 ):
     auth = attach_auth_context(request, db)
     install_intent = request.session.get("github_install_intent")
+    install_intent_workspace_slug = _workspace_slug_from_install_intent(db, request, auth, install_intent)
 
     if error:
         set_flash(
@@ -607,9 +703,8 @@ async def github_callback(
             error_description or "GitHub 側で user authorization が完了しませんでした。もう一度やり直してください。",
         )
         redirect_url = "/install/github"
-        workspace_slug = _workspace_slug_from_install_intent(db, request, auth, request.session.get("github_install_intent"))
-        if workspace_slug:
-            redirect_url = f"/settings/integrations/github?{urlencode({'workspace': workspace_slug})}"
+        if install_intent_workspace_slug:
+            redirect_url = f"/settings/integrations/github?{urlencode({'workspace': install_intent_workspace_slug})}"
         return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
 
     if not code:
@@ -624,9 +719,8 @@ async def github_callback(
         else:
             set_flash(request, "error", "GitHub callback を直接開くことはできません。Hotdock から連携を開始してください。")
         redirect_url = "/install/github"
-        workspace_slug = _workspace_slug_from_install_intent(db, request, auth, install_intent)
-        if workspace_slug:
-            redirect_url = f"/settings/integrations/github?{urlencode({'workspace': workspace_slug})}"
+        if install_intent_workspace_slug:
+            redirect_url = f"/settings/integrations/github?{urlencode({'workspace': install_intent_workspace_slug})}"
         return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
 
     oauth_client = GithubOAuthClient()
@@ -661,16 +755,151 @@ async def github_callback(
 
         workspace = db.get(Workspace, installation.claimed_workspace_id)
         return RedirectResponse(url=f"/workspaces/{workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    if legacy_oauth_state:
+        request.session.pop("github_oauth_state", None)
+        record_audit_log(
+            db,
+            request,
+            actor_type="user" if auth.user else "anonymous",
+            actor_id=auth.user.id if auth.user else None,
+            workspace_id=None,
+            target_type="pending_claim",
+            target_id=legacy_oauth_state.get("claim_token"),
+            action="github_callback_failed",
+            metadata={"reason": "legacy_oauth_state_mismatch"},
+        )
+        db.commit()
+        set_flash(request, "error", "GitHub authorization state が一致しません。claim を最初からやり直してください。")
+        return RedirectResponse(url="/integrations/github/recover", status_code=status.HTTP_303_SEE_OTHER)
+
+    recovery_state = request.session.get("github_recovery_state")
+    if recovery_state and state and recovery_state.get("state") == state:
+        auth, redirect = _require_login(request, db, "/integrations/github/recover")
+        if redirect:
+            return redirect
+        if recovery_state.get("user_id") != auth.user.id:
+            request.session.pop("github_recovery_state", None)
+            set_flash(request, "error", "GitHub recovery セッションが一致しません。")
+            return RedirectResponse(url="/integrations/github/recover", status_code=status.HTTP_303_SEE_OTHER)
+        request.session.pop("github_recovery_state", None)
+        try:
+            token_payload = await oauth_client.exchange_code(code)
+            github_user = await oauth_client.fetch_user(token_payload["access_token"])
+            claims = find_resumable_pending_claims_for_github_user(db, github_user_id=github_user["id"], user_id=auth.user.id)
+        except Exception:
+            set_flash(request, "error", "GitHub 側の確認に失敗しました。もう一度お試しください。")
+            return RedirectResponse(url="/integrations/github/recover", status_code=status.HTTP_303_SEE_OTHER)
+        if not claims:
+            record_audit_log(
+                db,
+                request,
+                actor_type="user",
+                actor_id=auth.user.id,
+                workspace_id=None,
+                target_type="pending_claim",
+                target_id=None,
+                action="github_claim_recovery_failed",
+                metadata={"reason": "no_resumable_claims", "github_user_id": github_user["id"]},
+            )
+            db.commit()
+            set_flash(request, "error", "再開できる claim が見つかりませんでした。GitHub App のインストールからやり直してください。")
+            return RedirectResponse(url="/integrations/github/recover", status_code=status.HTTP_303_SEE_OTHER)
+        pending_claim = claims[0]
+        set_flash(
+            request,
+            "success",
+            "保留中の claim を見つけました。workspace を選んで再開してください。"
+            if len(claims) == 1
+            else "複数の claim 候補が見つかったため、最新のものを開きました。必要なら GitHub 設定画面も確認してください。",
+        )
+        claim_token = reissue_pending_claim_token(db, pending_claim)
+        record_audit_log(
+            db,
+            request,
+            actor_type="user",
+            actor_id=auth.user.id,
+            workspace_id=pending_claim.workspace_id,
+            target_type="pending_claim",
+            target_id=pending_claim.id,
+            action="github_claim_recovery_succeeded",
+            metadata={"github_user_id": github_user["id"], "installation_id": pending_claim.installation_id},
+        )
+        db.commit()
+        claim_url = f"/integrations/github/claim/{claim_token}"
+        store_github_claim_context(request, claim_token=claim_token, next_path=claim_url)
+        return RedirectResponse(url=claim_url, status_code=status.HTTP_303_SEE_OTHER)
+    if recovery_state:
+        request.session.pop("github_recovery_state", None)
+        record_audit_log(
+            db,
+            request,
+            actor_type="user" if auth.user else "anonymous",
+            actor_id=auth.user.id if auth.user else None,
+            workspace_id=None,
+            target_type="pending_claim",
+            target_id=None,
+            action="github_claim_recovery_failed",
+            metadata={"reason": "recovery_state_mismatch"},
+        )
+        db.commit()
+        set_flash(request, "error", "GitHub recovery state が一致しません。もう一度 recovery を実行してください。")
+        return RedirectResponse(url="/integrations/github/recover", status_code=status.HTTP_303_SEE_OTHER)
+
+    if install_intent is None:
+        record_audit_log(
+            db,
+            request,
+            actor_type="user" if auth.user else "anonymous",
+            actor_id=auth.user.id if auth.user else None,
+            workspace_id=None,
+            target_type="github_installation",
+            target_id=str(installation_id) if installation_id else None,
+            action="github_callback_failed",
+            metadata={"reason": "missing_install_intent"},
+        )
+        db.commit()
+        set_flash(request, "error", "GitHub callback の再開情報がありません。Hotdock から GitHub App 連携を開始してください。")
+        return RedirectResponse(url="/install/github", status_code=status.HTTP_303_SEE_OTHER)
 
     request.session.pop("github_install_intent", None)
-    state_verified = False
-    if install_intent is not None:
-        expected_state = install_intent.get("nonce", "")
-        if state:
-            if not expected_state or not hmac.compare_digest(expected_state, state):
-                set_flash(request, "error", "GitHub callback state の検証に失敗しました。")
-                return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-            state_verified = True
+    expected_state = install_intent.get("nonce", "")
+    issued_at = int(install_intent.get("issued_at", 0) or 0)
+    if not state or not expected_state or not hmac.compare_digest(expected_state, state):
+        record_audit_log(
+            db,
+            request,
+            actor_type="user" if auth.user else "anonymous",
+            actor_id=auth.user.id if auth.user else None,
+            workspace_id=None,
+            target_type="github_installation",
+            target_id=str(installation_id) if installation_id else None,
+            action="github_callback_failed",
+            metadata={"reason": "state_verification_failed"},
+        )
+        db.commit()
+        set_flash(request, "error", "GitHub callback state の検証に失敗しました。連携を最初からやり直してください。")
+        redirect_url = "/install/github"
+        if install_intent_workspace_slug:
+            redirect_url = f"/settings/integrations/github?{urlencode({'workspace': install_intent_workspace_slug})}"
+        return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+    if not issued_at or int(utcnow().timestamp()) - issued_at > settings.github_install_intent_ttl_seconds:
+        record_audit_log(
+            db,
+            request,
+            actor_type="user" if auth.user else "anonymous",
+            actor_id=auth.user.id if auth.user else None,
+            workspace_id=None,
+            target_type="github_installation",
+            target_id=str(installation_id) if installation_id else None,
+            action="github_callback_failed",
+            metadata={"reason": "install_intent_expired"},
+        )
+        db.commit()
+        set_flash(request, "error", "GitHub callback の有効期限が切れました。Hotdock から連携をやり直してください。")
+        redirect_url = "/install/github"
+        if install_intent_workspace_slug:
+            redirect_url = f"/settings/integrations/github?{urlencode({'workspace': install_intent_workspace_slug})}"
+        return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
 
     try:
         preferred_workspace_id = None
@@ -690,7 +919,7 @@ async def github_callback(
             request,
             installation=installation,
             github_user=github_user,
-            source="callback_url",
+            source="install_callback",
             callback_state=state,
             install_intent=install_intent,
         )
@@ -741,19 +970,17 @@ async def github_callback(
                     user=auth.user,
                     workspace=workspace,
                 )
-                if state_verified:
-                    installation = finalize_github_claim(db, request, pending_claim=pending_claim, user=auth.user)
-                    sync_claimed_installation_repositories(db, installation)
-                    return RedirectResponse(url=f"/workspaces/{workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+                installation = finalize_github_claim(db, request, pending_claim=pending_claim, user=auth.user)
+                sync_claimed_installation_repositories(db, installation)
+                return RedirectResponse(url=f"/workspaces/{workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
             except Exception:
                 set_flash(request, "error", "workspace への自動紐付けに失敗しました。workspace を選択して再開してください。")
 
-    if install_intent is not None and not state_verified:
-        set_flash(
-            request,
-            "success",
-            "GitHub 側の確認は完了しました。セキュリティ保護のため、最後に workspace への claim を確認してください。",
-        )
+    set_flash(
+        request,
+        "success",
+        "GitHub 側の確認は完了しました。workspace を選んで claim を完了してください。",
+    )
     return RedirectResponse(url=claim_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -845,15 +1072,59 @@ async def workspace_member_revoke(
     if member is None or member.workspace_id != access.workspace.id:
         set_flash(request, "error", "member が見つかりません。")
         return RedirectResponse(url=f"/workspaces/{workspace_slug}/members", status_code=status.HTTP_303_SEE_OTHER)
-    revoke_workspace_member(
-        db,
-        request,
-        workspace=access.workspace,
-        actor=auth.user,
-        actor_membership=access.membership,
-        member=member,
-    )
+    try:
+        revoke_workspace_member(
+            db,
+            request,
+            workspace=access.workspace,
+            actor=auth.user,
+            actor_membership=access.membership,
+            member=member,
+        )
+    except HTTPException as exc:
+        set_flash(request, "error", str(exc.detail))
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/members", status_code=status.HTTP_303_SEE_OTHER)
     set_flash(request, "success", "member を revoke しました。")
+    return RedirectResponse(url=f"/workspaces/{workspace_slug}/members", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/workspaces/{workspace_slug}/members/{member_id}/role", name="hotdock-workspace-member-role-update")
+async def workspace_member_role_update(
+    workspace_slug: str,
+    member_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    role: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    auth, redirect = _require_login(request, db, f"/workspaces/{workspace_slug}/members")
+    if redirect:
+        return redirect
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/members", status_code=status.HTTP_303_SEE_OTHER)
+
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="owner")
+    member = db.get(WorkspaceMember, member_id)
+    if member is None or member.workspace_id != access.workspace.id:
+        set_flash(request, "error", "member が見つかりません。")
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/members", status_code=status.HTTP_303_SEE_OTHER)
+
+    try:
+        update_workspace_member_role(
+            db,
+            request,
+            workspace=access.workspace,
+            actor=auth.user,
+            actor_membership=access.membership,
+            member=member,
+            new_role=role,
+        )
+    except HTTPException as exc:
+        set_flash(request, "error", str(exc.detail))
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/members", status_code=status.HTTP_303_SEE_OTHER)
+
+    set_flash(request, "success", "member の role を更新しました。")
     return RedirectResponse(url=f"/workspaces/{workspace_slug}/members", status_code=status.HTTP_303_SEE_OTHER)
 
 

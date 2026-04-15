@@ -98,7 +98,22 @@ def resolve_workspace_access(db: Session, request: Request, *, user: User | None
         deny_workspace_access(db, request, workspace_slug, user.id)
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    require_role(membership, required_role)
+    try:
+        require_role(membership, required_role)
+    except HTTPException:
+        record_audit_log(
+            db,
+            request,
+            actor_type="user",
+            actor_id=user.id,
+            workspace_id=workspace.id,
+            target_type="workspace",
+            target_id=workspace.id,
+            action="workspace_role_access_denied",
+            metadata={"workspace_slug": workspace.slug, "required_role": required_role, "actual_role": membership.role},
+        )
+        db.commit()
+        raise
     return WorkspaceAccess(workspace=workspace, membership=membership)
 
 
@@ -208,6 +223,16 @@ def revoke_workspace_member(
     member: WorkspaceMember,
 ) -> None:
     require_role(actor_membership, "owner")
+    _ensure_workspace_member_belongs_to_workspace(member, workspace)
+    _assert_owner_lifecycle_allows_change(
+        db,
+        request,
+        workspace=workspace,
+        actor=actor,
+        member=member,
+        next_role=None,
+        action="revoke",
+    )
     member.status = "revoked"
     member.revoked_at = utcnow()
     record_audit_log(
@@ -222,6 +247,53 @@ def revoke_workspace_member(
         metadata={"role": member.role},
     )
     db.commit()
+
+
+def update_workspace_member_role(
+    db: Session,
+    request: Request,
+    *,
+    workspace: Workspace,
+    actor: User,
+    actor_membership: WorkspaceMember,
+    member: WorkspaceMember,
+    new_role: str,
+) -> WorkspaceMember:
+    require_role(actor_membership, "owner")
+    _ensure_workspace_member_belongs_to_workspace(member, workspace)
+    if new_role not in {"owner", "admin", "member", "viewer"}:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    if member.status != "active" or member.revoked_at is not None:
+        raise HTTPException(status_code=400, detail="Only active members can change roles")
+    if member.role == new_role:
+        return member
+
+    _assert_owner_lifecycle_allows_change(
+        db,
+        request,
+        workspace=workspace,
+        actor=actor,
+        member=member,
+        next_role=new_role,
+        action="role_change",
+    )
+
+    previous_role = member.role
+    member.role = new_role
+    record_audit_log(
+        db,
+        request,
+        actor_type="user",
+        actor_id=actor.id,
+        workspace_id=workspace.id,
+        target_type="workspace_member",
+        target_id=member.user_id,
+        action="workspace_member_role_changed",
+        metadata={"previous_role": previous_role, "new_role": new_role},
+    )
+    db.commit()
+    db.refresh(member)
+    return member
 
 
 def list_user_workspaces(db: Session, user: User) -> list[WorkspaceAccess]:
@@ -240,16 +312,23 @@ def list_user_workspaces(db: Session, user: User) -> list[WorkspaceAccess]:
     return results
 
 
-def build_workspace_navigation(workspace_slug: str) -> list[dict[str, str]]:
+def build_workspace_navigation(workspace_slug: str, current_role: str | None = None) -> list[dict[str, str]]:
     base = f"/workspaces/{workspace_slug}"
-    return [
+    navigation = [
         {"label": "Dashboard", "href": f"{base}/dashboard", "key": "workspace-dashboard"},
         {"label": "Repositories", "href": f"{base}/repositories", "key": "workspace-repositories"},
         {"label": "Branches", "href": f"{base}/branches", "key": "workspace-branches"},
         {"label": "Conflicts", "href": f"{base}/conflicts", "key": "workspace-conflicts"},
         {"label": "Members", "href": f"{base}/members", "key": "workspace-members"},
+        {"label": "Settings", "href": f"{base}/settings", "key": "workspace-settings"},
+        {"label": "Billing", "href": f"{base}/billing", "key": "workspace-billing"},
         {"label": "GitHub", "href": f"/settings/integrations/github?workspace={workspace_slug}", "key": "workspace-github"},
     ]
+    if current_role not in {"owner", "admin"}:
+        navigation = [item for item in navigation if item["key"] not in {"workspace-settings", "workspace-github"}]
+    if current_role != "owner":
+        navigation = [item for item in navigation if item["key"] != "workspace-billing"]
+    return navigation
 
 
 def workspace_dashboard_data(db: Session, workspace: Workspace) -> dict[str, object]:
@@ -303,3 +382,81 @@ def workspace_members_data(db: Session, workspace: Workspace) -> dict[str, objec
         "members": members,
         "pending_invitations": invitations,
     }
+
+
+def workspace_settings_data(workspace: Workspace) -> list[dict[str, object]]:
+    return [
+        {
+            "title": "Workspace 設定",
+            "fields": [
+                {"label": "Workspace 名", "value": workspace.name},
+                {"label": "Slug", "value": workspace.slug},
+                {"label": "Status", "value": workspace.status},
+            ],
+        },
+        {
+            "title": "権限運用",
+            "fields": [
+                {"label": "owner", "value": "請求、owner 管理、メンバー招待/削除、GitHub claim を担当"},
+                {"label": "admin", "value": "GitHub 連携設定、repository 同期、workspace 設定閲覧"},
+                {"label": "member/viewer", "value": "閲覧中心。member は将来の運用設定拡張枠"},
+            ],
+        },
+    ]
+
+
+def workspace_billing_data(workspace: Workspace) -> dict[str, str]:
+    return {
+        "plan": "準備中",
+        "usage": f"{workspace.name} の billing 機能は後続実装です",
+        "renewal": "未接続",
+        "placeholder": "請求情報は owner のみ閲覧可能です。Stripe 等の接続前でも未認可公開にはしません。",
+    }
+
+
+def _ensure_workspace_member_belongs_to_workspace(member: WorkspaceMember, workspace: Workspace) -> None:
+    if member.workspace_id != workspace.id:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+
+def _active_owner_count(db: Session, workspace_id: str) -> int:
+    return len(
+        db.scalars(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.role == "owner",
+                WorkspaceMember.status == "active",
+                WorkspaceMember.revoked_at.is_(None),
+            )
+        ).all()
+    )
+
+
+def _assert_owner_lifecycle_allows_change(
+    db: Session,
+    request: Request,
+    *,
+    workspace: Workspace,
+    actor: User,
+    member: WorkspaceMember,
+    next_role: str | None,
+    action: str,
+) -> None:
+    active_owner_count = _active_owner_count(db, workspace.id)
+    removes_owner_privilege = member.role == "owner" and next_role != "owner"
+    if not removes_owner_privilege:
+        return
+    if active_owner_count <= 1:
+        record_audit_log(
+            db,
+            request,
+            actor_type="user",
+            actor_id=actor.id,
+            workspace_id=workspace.id,
+            target_type="workspace_member",
+            target_id=member.user_id,
+            action="workspace_owner_guard_denied",
+            metadata={"reason": "last_owner", "attempted_action": action, "next_role": next_role},
+        )
+        db.commit()
+        raise HTTPException(status_code=409, detail="Last owner cannot be removed or demoted")

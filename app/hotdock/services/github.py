@@ -477,6 +477,8 @@ def create_callback_pending_claim(
     pending_claim.github_user_login = github_user["login"]
     pending_claim.status = "github_authorized"
     pending_claim.oauth_state_hash = None
+    pending_claim.state_verified_at = utcnow()
+    pending_claim.callback_source = source
     db.commit()
     db.refresh(pending_claim)
     return PendingClaimResult(pending_claim=pending_claim, claim_token=result.claim_token)
@@ -490,7 +492,50 @@ def load_pending_claim_by_token(db: Session, token: str) -> GithubPendingClaim |
     if pending.expires_at <= utcnow() and pending.status not in {"succeeded", "expired"}:
         pending.status = "expired"
         db.commit()
+    elif pending.status not in {"expired"}:
+        pending.last_resume_at = utcnow()
+        db.commit()
     return pending
+
+
+def reissue_pending_claim_token(db: Session, pending_claim: GithubPendingClaim) -> str:
+    locked_claim = db.scalar(
+        select(GithubPendingClaim).where(GithubPendingClaim.id == pending_claim.id).with_for_update()
+    )
+    if locked_claim is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    if locked_claim.expires_at <= utcnow():
+        locked_claim.status = "expired"
+        db.commit()
+        raise HTTPException(status_code=410, detail="Claim expired")
+    if locked_claim.consumed_at is not None or locked_claim.status == "succeeded":
+        raise HTTPException(status_code=409, detail="Claim already completed")
+    token = generate_token()
+    locked_claim.claim_token_hash = hash_token(token)
+    locked_claim.last_resume_at = utcnow()
+    db.commit()
+    return token
+
+
+def find_resumable_pending_claims_for_github_user(
+    db: Session,
+    *,
+    github_user_id: int,
+    user_id: str | None = None,
+) -> list[GithubPendingClaim]:
+    claims = db.scalars(
+        select(GithubPendingClaim)
+        .where(
+            GithubPendingClaim.github_user_id == github_user_id,
+            GithubPendingClaim.status.in_(["pending", "workspace_selected", "awaiting_github_auth", "github_authorized"]),
+            GithubPendingClaim.consumed_at.is_(None),
+            GithubPendingClaim.expires_at > utcnow(),
+        )
+        .order_by(GithubPendingClaim.updated_at.desc(), GithubPendingClaim.created_at.desc())
+    ).all()
+    if user_id is None:
+        return claims
+    return [claim for claim in claims if claim.user_id in {None, user_id}]
 
 
 def select_claim_workspace(
@@ -646,6 +691,9 @@ def finalize_github_claim(
     installation.claimed_by_user_id = user.id
     installation.claimed_at = utcnow()
     installation.installation_status = "active"
+    installation.unlink_requested_at = None
+    installation.unlinked_at = None
+    installation.unlinked_by_user_id = None
     locked_claim.user_id = user.id
     locked_claim.status = "succeeded"
     locked_claim.consumed_at = utcnow()
@@ -719,6 +767,70 @@ async def complete_github_claim(
     )
     db.commit()
     return finalize_github_claim(db, request, pending_claim=locked_claim, user=user)
+
+
+def unlink_github_installation(
+    db: Session,
+    request: Request,
+    *,
+    installation: GithubInstallation,
+    workspace: Workspace,
+    actor: User,
+) -> GithubInstallation:
+    locked_installation = db.scalar(
+        select(GithubInstallation)
+        .where(GithubInstallation.id == installation.id)
+        .with_for_update()
+    )
+    if locked_installation is None:
+        raise HTTPException(status_code=404, detail="Installation not found")
+    if locked_installation.claimed_workspace_id != workspace.id:
+        raise HTTPException(status_code=404, detail="Installation not linked to this workspace")
+    if locked_installation.installation_status == "unlinked":
+        return locked_installation
+
+    now = utcnow()
+    locked_installation.unlink_requested_at = now
+    locked_installation.unlinked_at = now
+    locked_installation.unlinked_by_user_id = actor.id
+    locked_installation.installation_status = "unlinked"
+    locked_installation.claimed_workspace_id = None
+    locked_installation.claimed_by_user_id = None
+
+    installation_repositories = db.scalars(
+        select(GithubInstallationRepository).where(
+            GithubInstallationRepository.installation_ref_id == locked_installation.id,
+        )
+    ).all()
+    for installation_repository in installation_repositories:
+        installation_repository.workspace_id = None
+
+    repositories = db.scalars(
+        select(Repository).where(
+            Repository.workspace_id == workspace.id,
+            Repository.github_installation_id == locked_installation.id,
+            Repository.deleted_at.is_(None),
+        )
+    ).all()
+    for repository in repositories:
+        repository.is_active = False
+        repository.sync_status = "unlinked"
+        repository.last_synced_at = now
+
+    record_audit_log(
+        db,
+        request,
+        actor_type="user",
+        actor_id=actor.id,
+        workspace_id=workspace.id,
+        target_type="github_installation",
+        target_id=str(locked_installation.installation_id),
+        action="installation_unlinked",
+        metadata={"installation_id": locked_installation.installation_id},
+    )
+    db.commit()
+    db.refresh(locked_installation)
+    return locked_installation
 
 
 def verify_github_webhook_signature(body: bytes, signature_header: str | None) -> bool:

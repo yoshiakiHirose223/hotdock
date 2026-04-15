@@ -23,8 +23,10 @@ from app.hotdock.services.github import manual_sync_workspace_installation_repos
 from app.hotdock.services.workspaces import (
     build_workspace_navigation,
     resolve_workspace_access,
+    workspace_billing_data,
     workspace_dashboard_data,
     workspace_members_data,
+    workspace_settings_data,
 )
 from app.models.branch import Branch
 from app.models.branch_file import BranchFile
@@ -69,7 +71,7 @@ def workspace_page_context(
     )
     context.update(
         {
-            "app_navigation": build_workspace_navigation(workspace.slug),
+            "app_navigation": build_workspace_navigation(workspace.slug, current_membership.role if current_membership else None),
             "app_workspace": workspace.name,
             "current_user": auth.user,
             "current_membership": current_membership,
@@ -402,3 +404,57 @@ async def workspace_members(workspace_slug: str, request: Request, db: Session =
     )
     context["members_data"] = workspace_members_data(db, access.workspace)
     return render_app("hotdock/app/workspace_members.html", context)
+
+
+@router.get("/workspaces/{workspace_slug}/settings", name="hotdock-workspace-settings")
+async def workspace_settings(workspace_slug: str, request: Request, db: Session = Depends(get_db)):
+    auth = attach_auth_context(request, db)
+    if auth.user is None:
+        return RedirectResponse(
+            url=build_login_redirect(f"/workspaces/{workspace_slug}/settings"),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="admin")
+    context = workspace_page_context(
+        request,
+        db,
+        workspace=access.workspace,
+        active_nav="workspace-settings",
+        page_title=f"{access.workspace.name} | Settings | Hotdock",
+        page_heading="Workspace Settings",
+        page_description="workspace 単位の設定ページ。",
+        breadcrumbs=[
+            {"label": "Dashboard", "href": f"/workspaces/{workspace_slug}/dashboard"},
+            {"label": "Settings", "href": f"/workspaces/{workspace_slug}/settings"},
+        ],
+        current_membership=access.membership,
+    )
+    context["settings_sections"] = workspace_settings_data(access.workspace)
+    return render_app("hotdock/app/workspace_settings.html", context)
+
+
+@router.get("/workspaces/{workspace_slug}/billing", name="hotdock-workspace-billing")
+async def workspace_billing(workspace_slug: str, request: Request, db: Session = Depends(get_db)):
+    auth = attach_auth_context(request, db)
+    if auth.user is None:
+        return RedirectResponse(
+            url=build_login_redirect(f"/workspaces/{workspace_slug}/billing"),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="owner")
+    context = workspace_page_context(
+        request,
+        db,
+        workspace=access.workspace,
+        active_nav="workspace-billing",
+        page_title=f"{access.workspace.name} | Billing | Hotdock",
+        page_heading="Workspace Billing",
+        page_description="workspace 単位の請求情報ページ。",
+        breadcrumbs=[
+            {"label": "Dashboard", "href": f"/workspaces/{workspace_slug}/dashboard"},
+            {"label": "Billing", "href": f"/workspaces/{workspace_slug}/billing"},
+        ],
+        current_membership=access.membership,
+    )
+    context["billing_overview"] = workspace_billing_data(access.workspace)
+    return render_app("hotdock/app/workspace_billing.html", context)

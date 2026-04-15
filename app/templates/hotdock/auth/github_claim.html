@@ -23,6 +23,9 @@
     <div class="auth-card claim-card">
         {% if not pending_claim %}
         <p>claim 情報が見つかりませんでした。</p>
+        <div class="button-row">
+            <a class="button button-secondary" href="/integrations/github/recover">GitHub recovery を開く</a>
+        </div>
         {% elif current_user is none %}
         <p>この installation を workspace に紐付けるには Hotdock にログインする必要があります。</p>
         <div class="button-row">
@@ -31,7 +34,10 @@
         </div>
         {% elif pending_claim.status == "expired" %}
         <p>期限切れのため、この claim は再利用できません。</p>
-        <a class="button button-secondary" href="/settings/integrations/github">GitHub 設定へ戻る</a>
+        <div class="button-row">
+            <a class="button button-secondary" href="/integrations/github/recover">GitHub recovery を使う</a>
+            <a class="button button-ghost" href="/install/github">GitHub App 導線へ戻る</a>
+        </div>
         {% elif pending_claim.status == "succeeded" %}
         <p>この installation はすでに workspace に紐付いています。</p>
         {% if workspace %}
@@ -63,6 +69,7 @@
             claim できる workspace がありません。owner または admin の workspace を作成してください。
             <div class="button-row">
                 <a class="button button-secondary" href="/workspaces/new?next=/integrations/github/claim/{{ claim_token }}">Workspace を作成</a>
+                <a class="button button-ghost" href="/integrations/github/recover">GitHub recovery</a>
             </div>
         </div>
         {% endif %}

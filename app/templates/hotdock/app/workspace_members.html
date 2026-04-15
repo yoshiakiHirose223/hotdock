@@ -13,7 +13,7 @@
                         <th>Role</th>
                         <th>Status</th>
                         <th>Joined</th>
-                        <th></th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -24,7 +24,21 @@
                         <td>{{ member.status }}</td>
                         <td>{{ member.joined_at or '-' }}</td>
                         <td>
-                            {% if current_membership.role == "owner" and member.user_id != current_user.id and member.status == "active" %}
+                            {% if current_membership.role == "owner" and member.status == "active" %}
+                            <form method="post" action="/workspaces/{{ workspace.slug }}/members/{{ member.id }}/role">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <div class="inline-form">
+                                    <select name="role">
+                                        <option value="owner" {% if member.role == "owner" %}selected{% endif %}>owner</option>
+                                        <option value="admin" {% if member.role == "admin" %}selected{% endif %}>admin</option>
+                                        <option value="member" {% if member.role == "member" %}selected{% endif %}>member</option>
+                                        <option value="viewer" {% if member.role == "viewer" %}selected{% endif %}>viewer</option>
+                                    </select>
+                                    <button class="button button-ghost" type="submit">Role 更新</button>
+                                </div>
+                            </form>
+                            {% endif %}
+                            {% if current_membership.role == "owner" and member.status == "active" %}
                             <form method="post" action="/workspaces/{{ workspace.slug }}/members/{{ member.id }}/revoke">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <button class="button button-ghost" type="submit">Revoke</button>
@@ -35,6 +49,12 @@
                     {% endfor %}
                 </tbody>
             </table>
+        </div>
+    </article>
+    <article class="panel">
+        <p class="panel-title">Owner Policy</p>
+        <div class="empty-inline">
+            最後の owner は remove / demote できません。owner を引き継ぐ場合は、先に別 member を owner へ昇格してから自分を変更してください。
         </div>
     </article>
     <article class="panel">

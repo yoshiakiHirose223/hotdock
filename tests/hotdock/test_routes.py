@@ -69,11 +69,11 @@ def test_auth_routes_return_ok(client, path):
         "/app/billing",
     ],
 )
-def test_app_routes_return_ok(client, path):
-    response = client.get(path)
+def test_legacy_app_routes_require_login(client, path):
+    response = client.get(path, follow_redirects=False)
 
-    assert response.status_code == 200
-    assert "Hotdock" in response.text
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/login")
 
 
 def test_home_page_explains_two_entry_paths_and_shared_dashboard(client):
@@ -97,82 +97,6 @@ def test_removed_legacy_routes_return_not_found(client):
     for path in ("/blog", "/tools", "/exam"):
         response = client.get(path)
         assert response.status_code == 404
-
-
-def test_projects_page_links_to_project_detail(client):
-    response = client.get("/app/projects")
-
-    assert response.status_code == 200
-    assert 'href="/app/projects/1/branches"' in response.text
-    assert "web-portal" in response.text
-
-
-def test_project_base_url_redirects_to_branches(client):
-    response = client.get("/app/projects/1", follow_redirects=False)
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/app/projects/1/branches"
-
-
-def test_project_branches_shows_tabs_and_project_metadata(client):
-    response = client.get("/app/projects/1/branches")
-
-    assert response.status_code == 200
-    assert "Branches" in response.text
-    assert "Conflicts" in response.text
-    assert "Settings" in response.text
-    assert "Overview" not in response.text
-    assert "acme/web-portal" in response.text
-    assert "Product Team" in response.text
-
-
-def test_project_branches_page_shows_branch_rows_and_files(client):
-    response = client.get("/app/projects/1/branches")
-
-    assert response.status_code == 200
-    assert "feature/login-fix" in response.text
-    assert "static/css/login.css" in response.text
-    assert "Conflict" in response.text
-    assert "Total Branches" in response.text
-
-
-def test_project_branches_filter_can_limit_to_conflict_rows(client):
-    response = client.get("/app/projects/1/branches?submitted=1&conflict_only=1&push_only=1")
-
-    assert response.status_code == 200
-    assert "feature/login-fix" in response.text
-    assert "feature/home-hero-copy" not in response.text
-
-
-def test_unknown_project_returns_not_found(client):
-    response = client.get("/app/projects/999")
-
-    assert response.status_code == 404
-
-
-def test_bookmark_add_and_remove_updates_sidebar_shortcut(client):
-    add_response = client.post(
-        "/app/projects/1/bookmark",
-        data={"next": "/app/projects/1/branches"},
-        follow_redirects=True,
-    )
-
-    assert add_response.status_code == 200
-    assert "ブックマーク済み" in add_response.text
-
-    sidebar_response = client.get("/app/dashboard")
-    assert 'href="/app/projects/1/branches"' in sidebar_response.text
-    assert "web-portal" in sidebar_response.text
-
-    remove_response = client.post(
-        "/app/projects/1/unbookmark",
-        data={"next": "/app/projects/1/branches"},
-        follow_redirects=True,
-    )
-
-    assert remove_response.status_code == 200
-    dashboard_after_remove = client.get("/app/dashboard")
-    assert 'href="/app/projects/1/branches"' not in dashboard_after_remove.text
 
 
 def test_dashboard_requires_login(client):
@@ -209,6 +133,36 @@ def test_register_creates_workspace_and_redirects_to_workspace_dashboard(client)
     assert follow.status_code == 200
     assert "Example Team" in follow.text
     assert "Workspace Dashboard" in follow.text
+
+
+def test_legacy_app_routes_redirect_to_workspace_after_login(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Legacy User",
+            "email": "legacy@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Legacy Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    dashboard_redirect = client.get("/app/dashboard", follow_redirects=False)
+    assert dashboard_redirect.status_code == 303
+    assert dashboard_redirect.headers["location"] == "/dashboard"
+
+    settings_redirect = client.get("/app/settings", follow_redirects=False)
+    assert settings_redirect.status_code == 303
+    assert settings_redirect.headers["location"] == "/workspaces/legacy-team/settings"
+
+    billing_redirect = client.get("/app/billing", follow_redirects=False)
+    assert billing_redirect.status_code == 303
+    assert billing_redirect.headers["location"] == "/workspaces/legacy-team/billing"
 
 
 def test_github_claim_flow_claims_installation_to_workspace(client):
@@ -248,6 +202,16 @@ def test_github_claim_flow_claims_installation_to_workspace(client):
     installation = db.query(GithubInstallation).filter_by(installation_id=1001).one()
     assert installation.claimed_workspace_id == workspace.id
     db.close()
+
+
+def test_install_time_callback_requires_state_and_intent(client):
+    response = client.get(
+        "/integrations/github/callback?code=mock-code&installation_id=1001&setup_action=install",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/install/github"
 
 
 def test_push_webhook_uses_compare_and_creates_collisions(client):
@@ -398,3 +362,117 @@ def test_workspace_invitation_accept_flow(client):
     accept = client.post(f"/invitations/{invitation_token}/accept", data={"csrf_token": member_csrf}, follow_redirects=True)
     assert accept.status_code == 200
     assert "Invite Team" in accept.text
+
+
+def test_owner_can_unlink_installation(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Owner User",
+            "email": "unlink-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Unlink Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="unlink-team").one()
+    installation = GithubInstallation(
+        installation_id=2001,
+        github_account_id=9101,
+        github_account_login="unlink-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=701,
+        full_name="unlink-org/repository-2001",
+        display_name="repository-2001",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_active=True,
+        sync_status="active",
+    )
+    db.add(repository)
+    db.commit()
+    db.close()
+
+    response = client.post(
+        "/integrations/github/installations/2001/unlink",
+        data={"workspace_slug": "unlink-team", "csrf_token": owner_csrf},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "installation の紐付けを解除しました" in response.text
+
+    db = SessionLocal()
+    installation = db.query(GithubInstallation).filter_by(installation_id=2001).one()
+    repository = db.query(Repository).filter_by(github_repository_id=701).one()
+    assert installation.claimed_workspace_id is None
+    assert installation.installation_status == "unlinked"
+    assert repository.sync_status == "unlinked"
+    assert repository.is_active is False
+    db.close()
+
+
+def test_last_owner_cannot_be_demoted_or_revoked(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Owner User",
+            "email": "owner-guard@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Owner Guard Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="owner-guard-team").one()
+    db.close()
+
+    members_page = client.get(f"/workspaces/{workspace.slug}/members", follow_redirects=True)
+    assert members_page.status_code == 200
+
+    db = SessionLocal()
+    from app.models.workspace_member import WorkspaceMember
+
+    owner_membership = db.query(WorkspaceMember).filter_by(workspace_id=workspace.id).one()
+    db.close()
+
+    demote = client.post(
+        f"/workspaces/{workspace.slug}/members/{owner_membership.id}/role",
+        data={"role": "admin", "csrf_token": owner_csrf},
+        follow_redirects=True,
+    )
+    assert demote.status_code == 200
+    assert "Last owner cannot be removed or demoted" in demote.text
+
+    revoke = client.post(
+        f"/workspaces/{workspace.slug}/members/{owner_membership.id}/revoke",
+        data={"csrf_token": owner_csrf},
+        follow_redirects=True,
+    )
+    assert revoke.status_code == 200
+    assert "Last owner cannot be removed or demoted" in revoke.text

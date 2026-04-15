@@ -88,6 +88,16 @@ def apply_runtime_schema_upgrades() -> None:
         ("last_seen_at", "last_seen_at TIMESTAMP"),
         ("is_active", "is_active BOOLEAN NOT NULL DEFAULT TRUE"),
     ]
+    pending_claim_columns = [
+        ("last_resume_at", "last_resume_at TIMESTAMP"),
+        ("state_verified_at", "state_verified_at TIMESTAMP"),
+        ("callback_source", "callback_source VARCHAR(64)"),
+    ]
+    installation_columns = [
+        ("unlink_requested_at", "unlink_requested_at TIMESTAMP"),
+        ("unlinked_at", "unlinked_at TIMESTAMP"),
+        ("unlinked_by_user_id", "unlinked_by_user_id VARCHAR(36)"),
+    ]
 
     for column_name, ddl in repository_columns:
         _ensure_column("repositories", column_name, ddl)
@@ -95,6 +105,10 @@ def apply_runtime_schema_upgrades() -> None:
         _ensure_column("branches", column_name, ddl)
     for column_name, ddl in branch_file_columns:
         _ensure_column("branch_files", column_name, ddl)
+    for column_name, ddl in pending_claim_columns:
+        _ensure_column("github_pending_claims", column_name, ddl)
+    for column_name, ddl in installation_columns:
+        _ensure_column("github_installations", column_name, ddl)
 
     _execute_upgrade_sql(
         "UPDATE repositories SET is_active = TRUE WHERE is_active IS NULL"
@@ -121,6 +135,10 @@ def apply_runtime_schema_upgrades() -> None:
         "CREATE INDEX IF NOT EXISTS ix_branch_files_normalized_path ON branch_files (normalized_path)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_last_seen_at ON branch_files (last_seen_at)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_is_active ON branch_files (is_active)",
+        "CREATE INDEX IF NOT EXISTS ix_github_pending_claims_last_resume_at ON github_pending_claims (last_resume_at)",
+        "CREATE INDEX IF NOT EXISTS ix_github_pending_claims_state_verified_at ON github_pending_claims (state_verified_at)",
+        "CREATE INDEX IF NOT EXISTS ix_github_pending_claims_callback_source ON github_pending_claims (callback_source)",
+        "CREATE INDEX IF NOT EXISTS ix_github_installations_unlinked_at ON github_installations (unlinked_at)",
     ]
     for statement in index_statements:
         _execute_upgrade_sql(statement)

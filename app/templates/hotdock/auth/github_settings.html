@@ -18,6 +18,9 @@
         <div class="inline-alert">
             callback URL ベースで installation と GitHub user authorization を受け取り、workspace claim 完了後に repository 一覧を同期します。branch と conflict は claim 後に対象 repository へ push が入ると更新されます。
         </div>
+        <div class="button-row">
+            <a class="button button-ghost" href="/integrations/github/recover">保留中の claim を再開する</a>
+        </div>
         <h3>Installations</h3>
         {% if installations %}
         <ul class="stack-list">
@@ -26,6 +29,23 @@
                 <strong>{{ installation.github_account_login or ("installation-" ~ installation.installation_id) }}</strong>
                 <span>{{ installation.installation_status }}</span>
                 <p>ID: {{ installation.installation_id }}</p>
+                {% if installation.installation_status == "uninstalled" %}
+                <p>GitHub 側で App が uninstall されています。再利用するには再インストールが必要です。</p>
+                {% elif installation.installation_status == "suspended" %}
+                <p>GitHub 側で installation が停止されています。GitHub 側の状態を確認してください。</p>
+                {% endif %}
+                <div class="button-row">
+                    {% if can_unlink_installation and installation.installation_status in ["active", "suspended"] %}
+                    <form method="post" action="/integrations/github/installations/{{ installation.installation_id }}/unlink">
+                        <input type="hidden" name="workspace_slug" value="{{ workspace.slug }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="button button-ghost" type="submit">Hotdock から unlink</button>
+                    </form>
+                    {% endif %}
+                    {% if install_available and installation.installation_status in ["uninstalled", "suspended"] %}
+                    <a class="button button-secondary" href="/integrations/github/install/start?workspace={{ workspace.slug }}">再連携を開始</a>
+                    {% endif %}
+                </div>
             </li>
             {% endfor %}
         </ul>
@@ -43,6 +63,9 @@
                 <p>Expires: {{ claim.expires_at }}</p>
                 {% if claim.github_user_login %}
                 <p>GitHub User: {{ claim.github_user_login }}</p>
+                {% endif %}
+                {% if claim.status == "expired" %}
+                <p>期限切れです。GitHub App のインストールからやり直すか、GitHub recovery を利用してください。</p>
                 {% endif %}
             </li>
             {% endfor %}

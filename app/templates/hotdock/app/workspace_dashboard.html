@@ -74,6 +74,11 @@
                 <strong>{{ installation.github_account_login or ("installation-" ~ installation.installation_id) }}</strong>
                 <span>{{ installation.installation_status }}</span>
                 <p>ID: {{ installation.installation_id }}</p>
+                {% if installation.installation_status == "uninstalled" %}
+                <p>GitHub 側で App が uninstall されています。再インストール後に claim をやり直してください。</p>
+                {% elif installation.installation_status == "suspended" %}
+                <p>GitHub 側で installation が停止されています。</p>
+                {% endif %}
             </li>
             {% endfor %}
         </ul>

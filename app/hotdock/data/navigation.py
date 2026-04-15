@@ -15,14 +15,14 @@ AUTH_LINKS = [
 ]
 
 APP_NAVIGATION = [
-    {"label": "Overview", "href": "/app", "key": "app-index"},
-    {"label": "Dashboard", "href": "/app/dashboard", "key": "dashboard"},
-    {"label": "Projects", "href": "/app/projects", "key": "projects"},
-    {"label": "Conflicts", "href": "/app/conflicts", "key": "conflicts"},
-    {"label": "Integrations", "href": "/app/integrations", "key": "integrations"},
-    {"label": "Notifications", "href": "/app/notifications", "key": "notifications"},
-    {"label": "Settings", "href": "/app/settings", "key": "settings"},
-    {"label": "Billing", "href": "/app/billing", "key": "billing"},
+    {"label": "Overview", "href": "/dashboard", "key": "app-index"},
+    {"label": "Dashboard", "href": "/dashboard", "key": "dashboard"},
+    {"label": "Projects", "href": "/dashboard", "key": "projects"},
+    {"label": "Conflicts", "href": "/dashboard", "key": "conflicts"},
+    {"label": "Integrations", "href": "/settings/integrations/github", "key": "integrations"},
+    {"label": "Notifications", "href": "/dashboard", "key": "notifications"},
+    {"label": "Settings", "href": "/dashboard", "key": "settings"},
+    {"label": "Billing", "href": "/dashboard", "key": "billing"},
 ]
 
 FOOTER_LINK_GROUPS = [
