@@ -16,7 +16,7 @@ from app.models.workspace_member import WorkspaceMember
 from app.models.github_installation import GithubInstallation
 from app.models.repository import Repository
 from app.models.branch import Branch
-from app.models.conflict import Conflict
+from app.models.file_collision import FileCollision
 
 
 @dataclass
@@ -260,7 +260,14 @@ def workspace_dashboard_data(db: Session, workspace: Workspace) -> dict[str, obj
         select(Repository).where(Repository.workspace_id == workspace.id, Repository.deleted_at.is_(None))
     ).all()
     branches = db.scalars(select(Branch).where(Branch.workspace_id == workspace.id)).all()
-    conflicts = db.scalars(select(Conflict).where(Conflict.workspace_id == workspace.id, Conflict.conflict_status == "open")).all()
+    conflicts = db.scalars(
+        select(FileCollision)
+        .join(Repository, Repository.id == FileCollision.repository_id)
+        .where(
+            Repository.workspace_id == workspace.id,
+            FileCollision.collision_status == "open",
+        )
+    ).all()
     members = db.scalars(
         select(WorkspaceMember).where(
             WorkspaceMember.workspace_id == workspace.id,

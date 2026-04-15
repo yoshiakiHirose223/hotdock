@@ -2,8 +2,11 @@ from app.models.base import Base
 from app.models.audit_log import AuditLog
 from app.models.auth_session import AuthSession
 from app.models.branch import Branch
+from app.models.branch_event import BranchEvent
 from app.models.branch_file import BranchFile
 from app.models.conflict import Conflict
+from app.models.file_collision import FileCollision
+from app.models.file_collision_branch import FileCollisionBranch
 from app.models.github_installation import GithubInstallation
 from app.models.github_installation_repository import GithubInstallationRepository
 from app.models.github_pending_claim import GithubPendingClaim
@@ -21,8 +24,11 @@ __all__ = [
     "AuthSession",
     "Base",
     "Branch",
+    "BranchEvent",
     "BranchFile",
     "Conflict",
+    "FileCollision",
+    "FileCollisionBranch",
     "GithubInstallation",
     "GithubInstallationRepository",
     "GithubPendingClaim",

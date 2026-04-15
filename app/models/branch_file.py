@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -15,9 +15,16 @@ class BranchFile(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     workspace_id: Mapped[str] = mapped_column(String(36), ForeignKey("workspaces.id"), index=True)
+    repository_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("repositories.id"), nullable=True, index=True)
     branch_id: Mapped[str] = mapped_column(String(36), ForeignKey("branches.id"), index=True)
     path: Mapped[str] = mapped_column(String(2048))
+    normalized_path: Mapped[str | None] = mapped_column(String(2048), nullable=True, index=True)
     change_type: Mapped[str] = mapped_column(String(32))
+    last_change_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    previous_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    last_seen_commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     is_conflict: Mapped[bool] = mapped_column(default=False, index=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

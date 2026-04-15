@@ -14,9 +14,10 @@
             <thead>
                 <tr>
                     <th>Repository</th>
-                    <th>Branch</th>
                     <th>File</th>
+                    <th>Branches</th>
                     <th>Status</th>
+                    <th>First Detected</th>
                     <th>Last Detected</th>
                 </tr>
             </thead>
@@ -24,9 +25,14 @@
                 {% for conflict in conflicts %}
                 <tr>
                     <td>{{ conflict.repository_name }}</td>
-                    <td>{{ conflict.branch_name }}</td>
-                    <td>{{ conflict.file_path }}</td>
-                    <td>{{ conflict.conflict_status }}</td>
+                    <td><code>{{ conflict.file_path }}</code></td>
+                    <td>
+                        {% for branch in conflict.branches %}
+                        <div>{{ branch.name }} <span class="muted">({{ branch.last_change_type or '-' }})</span></div>
+                        {% endfor %}
+                    </td>
+                    <td>{{ conflict.conflict_status }} / {{ conflict.active_branch_count }} branches</td>
+                    <td>{{ conflict.first_detected_at }}</td>
                     <td>{{ conflict.last_detected_at }}</td>
                 </tr>
                 {% endfor %}
@@ -36,7 +42,7 @@
     {% else %}
     <div class="empty-state">
         <h3>競合候補はまだありません</h3>
-        <p>branch 同期が進むと競合候補がここに表示されます。</p>
+        <p>compare API による touched files 更新が進むと、同一 path を複数 branch が持つ collision がここに表示されます。</p>
     </div>
     {% endif %}
 </section>

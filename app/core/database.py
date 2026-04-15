@@ -1,7 +1,7 @@
 import time
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -46,3 +46,81 @@ def init_db() -> None:
     if not settings.resolved_database_url.startswith("sqlite"):
         wait_for_database()
     Base.metadata.create_all(bind=engine)
+    apply_runtime_schema_upgrades()
+
+
+def _ensure_column(table_name: str, column_name: str, ddl: str) -> None:
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+        if column_name in existing_columns:
+            return
+        connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {ddl}"))
+
+
+def _execute_upgrade_sql(sql: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(text(sql))
+
+
+def apply_runtime_schema_upgrades() -> None:
+    repository_columns = [
+        ("default_branch", "default_branch VARCHAR(255)"),
+        ("is_active", "is_active BOOLEAN NOT NULL DEFAULT TRUE"),
+    ]
+    branch_columns = [
+        ("current_head_sha", "current_head_sha VARCHAR(64)"),
+        ("last_before_sha", "last_before_sha VARCHAR(64)"),
+        ("last_after_sha", "last_after_sha VARCHAR(64)"),
+        ("is_deleted", "is_deleted BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("was_created_observed", "was_created_observed BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("was_force_pushed_observed", "was_force_pushed_observed BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("last_delivery_id", "last_delivery_id VARCHAR(128)"),
+        ("last_processed_compare_base", "last_processed_compare_base VARCHAR(64)"),
+        ("last_processed_compare_head", "last_processed_compare_head VARCHAR(64)"),
+    ]
+    branch_file_columns = [
+        ("repository_id", "repository_id VARCHAR(36)"),
+        ("normalized_path", "normalized_path VARCHAR(2048)"),
+        ("last_change_type", "last_change_type VARCHAR(32)"),
+        ("previous_path", "previous_path VARCHAR(2048)"),
+        ("last_seen_commit_sha", "last_seen_commit_sha VARCHAR(64)"),
+        ("last_seen_at", "last_seen_at TIMESTAMP"),
+        ("is_active", "is_active BOOLEAN NOT NULL DEFAULT TRUE"),
+    ]
+
+    for column_name, ddl in repository_columns:
+        _ensure_column("repositories", column_name, ddl)
+    for column_name, ddl in branch_columns:
+        _ensure_column("branches", column_name, ddl)
+    for column_name, ddl in branch_file_columns:
+        _ensure_column("branch_files", column_name, ddl)
+
+    _execute_upgrade_sql(
+        "UPDATE repositories SET is_active = TRUE WHERE is_active IS NULL"
+    )
+    _execute_upgrade_sql(
+        "UPDATE branches SET current_head_sha = COALESCE(current_head_sha, last_commit_sha), "
+        "last_after_sha = COALESCE(last_after_sha, last_commit_sha), "
+        "is_deleted = COALESCE(is_deleted, FALSE), "
+        "was_created_observed = COALESCE(was_created_observed, FALSE), "
+        "was_force_pushed_observed = COALESCE(was_force_pushed_observed, FALSE)"
+    )
+    _execute_upgrade_sql(
+        "UPDATE branch_files SET normalized_path = COALESCE(normalized_path, path), "
+        "last_change_type = COALESCE(last_change_type, change_type), "
+        "last_seen_at = COALESCE(last_seen_at, observed_at), "
+        "is_active = COALESCE(is_active, TRUE), "
+        "repository_id = COALESCE(repository_id, (SELECT repository_id FROM branches WHERE branches.id = branch_files.branch_id))"
+    )
+
+    index_statements = [
+        "CREATE INDEX IF NOT EXISTS ix_repositories_is_active ON repositories (is_active)",
+        "CREATE INDEX IF NOT EXISTS ix_branches_is_deleted ON branches (is_deleted)",
+        "CREATE INDEX IF NOT EXISTS ix_branch_files_repository_id ON branch_files (repository_id)",
+        "CREATE INDEX IF NOT EXISTS ix_branch_files_normalized_path ON branch_files (normalized_path)",
+        "CREATE INDEX IF NOT EXISTS ix_branch_files_last_seen_at ON branch_files (last_seen_at)",
+        "CREATE INDEX IF NOT EXISTS ix_branch_files_is_active ON branch_files (is_active)",
+    ]
+    for statement in index_statements:
+        _execute_upgrade_sql(statement)

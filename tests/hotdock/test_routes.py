@@ -1,7 +1,16 @@
+import hashlib
+import hmac
+import json
+
 import pytest
 
 from app.core.database import SessionLocal
+from app.models.branch import Branch
+from app.models.branch_event import BranchEvent
+from app.models.branch_file import BranchFile
+from app.models.file_collision import FileCollision
 from app.models.github_installation import GithubInstallation
+from app.models.repository import Repository
 from app.models.workspace import Workspace
 from app.models.workspace_invitation import WorkspaceInvitation
 
@@ -223,27 +232,117 @@ def test_github_claim_flow_claims_installation_to_workspace(client):
     workspace = db.query(Workspace).filter_by(slug="claim-team").one()
     db.close()
 
-    setup_response = client.get("/integrations/github/setup?installation_id=1001", follow_redirects=False)
-    assert setup_response.status_code == 303
-    claim_url = setup_response.headers["location"]
-    claim_token = claim_url.rsplit("/", 1)[-1]
-    csrf_token = client.cookies.get("hotdock_csrf")
+    install_start = client.get("/integrations/github/install/start?workspace=claim-team", follow_redirects=False)
+    assert install_start.status_code == 303
+    redirect_location = install_start.headers["location"]
+    state = redirect_location.split("state=")[1]
 
-    select_workspace = client.post(
-        f"/integrations/github/claim/{claim_token}/workspace",
-        data={"workspace_id": workspace.id, "csrf_token": csrf_token},
-        follow_redirects=False,
+    complete = client.get(
+        f"/integrations/github/callback?code=mock-code&state={state}&installation_id=1001&setup_action=install",
+        follow_redirects=True,
     )
-    assert select_workspace.status_code == 303
-    assert select_workspace.headers["location"].startswith("/integrations/github/authorize/start")
-
-    complete = client.get(select_workspace.headers["location"], follow_redirects=True)
     assert complete.status_code == 200
     assert "Claim Team" in complete.text
 
     db = SessionLocal()
     installation = db.query(GithubInstallation).filter_by(installation_id=1001).one()
     assert installation.claimed_workspace_id == workspace.id
+    db.close()
+
+
+def test_push_webhook_uses_compare_and_creates_collisions(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Webhook User",
+            "email": "webhook@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Webhook Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="webhook-team").one()
+    installation = GithubInstallation(
+        installation_id=1001,
+        github_account_id=9001,
+        github_account_login="mock-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=501,
+        full_name="mock-org/repository-1001",
+        display_name="repository-1001",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_active=True,
+        sync_status="active",
+    )
+    db.add(repository)
+    db.commit()
+    db.close()
+
+    def post_push(delivery_id: str, ref: str, before_sha: str, after_sha: str):
+        payload = {
+            "installation": {"id": 1001},
+            "repository": {
+                "id": 501,
+                "full_name": "mock-org/repository-1001",
+                "name": "repository-1001",
+                "default_branch": "main",
+                "private": True,
+                "pushed_at": 1776239000,
+            },
+            "ref": ref,
+            "before": before_sha,
+            "after": after_sha,
+            "created": False,
+            "deleted": False,
+            "forced": False,
+            "head_commit": {"id": after_sha},
+        }
+        body = json.dumps(payload).encode("utf-8")
+        signature = "sha256=" + hmac.new(
+            b"test-webhook-secret",
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        return client.post(
+            "/webhooks/github",
+            data=body,
+            headers={
+                "content-type": "application/json",
+                "x-hub-signature-256": signature,
+                "x-github-delivery": delivery_id,
+                "x-github-event": "push",
+            },
+        )
+
+    first = post_push("delivery-1", "refs/heads/feature-a", "a" * 40, "b" * 40)
+    assert first.status_code == 200
+    second = post_push("delivery-2", "refs/heads/feature-b", "c" * 40, "d" * 40)
+    assert second.status_code == 200
+
+    db = SessionLocal()
+    assert db.query(BranchEvent).count() == 2
+    assert db.query(Branch).filter_by(name="feature-a").one().touched_files_count > 0
+    assert db.query(BranchFile).filter(BranchFile.repository_id == repository.id).count() > 0
+    collision = db.query(FileCollision).filter_by(repository_id=repository.id, collision_status="open").one()
+    assert collision.active_branch_count == 2
     db.close()
 
 

@@ -916,24 +916,31 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"status": "replayed"})
 
     try:
+        push_result = None
         if event_name == "installation":
             installation = sync_installation_event(db, payload)
             sync_claimed_installation_repositories(db, installation)
         elif event_name == "installation_repositories":
             sync_installation_repositories_event(db, payload)
         elif event_name == "push":
-            record_push_event(db, payload)
+            push_result = await record_push_event(db, request, delivery_id=delivery_id, payload=payload)
     except Exception as exc:
         if recorded:
             mark_webhook_event_failed(db, recorded.id, str(exc))
-        return JSONResponse({"detail": "processing failed"}, status_code=500)
+        return JSONResponse({"status": "accepted_with_error", "detail": "processing failed"})
 
     if recorded:
         event_row = db.get(GithubWebhookEvent, recorded.id)
         if event_row:
-            event_row.processing_status = "processed"
-            event_row.processed_at = event_row.processed_at or event_row.received_at
+            if push_result and push_result.get("status") == "accepted_with_error":
+                event_row.processing_status = "failed"
+                event_row.error_message = str(push_result.get("reason") or "compare failed")[:2000]
+            else:
+                event_row.processing_status = "processed"
+                event_row.processed_at = event_row.processed_at or event_row.received_at
             db.commit()
+    if push_result and push_result.get("status") == "accepted_with_error":
+        return JSONResponse({"status": "accepted_with_error", "detail": push_result.get("reason")})
     return JSONResponse({"status": "ok"})
 
 

@@ -1,0 +1,93 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="panel-title">Branch Detail</p>
+            <h2>{{ branch_detail.name }}</h2>
+            <p>{{ branch_repository.display_name if branch_repository else "-" }}</p>
+        </div>
+    </div>
+    <div class="stack-list">
+        <div><strong>Current Head:</strong> <code>{{ branch_detail.current_head_sha or '-' }}</code></div>
+        <div><strong>Before:</strong> <code>{{ branch_detail.last_before_sha or '-' }}</code></div>
+        <div><strong>After:</strong> <code>{{ branch_detail.last_after_sha or '-' }}</code></div>
+        <div><strong>Last Push:</strong> {{ branch_detail.last_push_at or '-' }}</div>
+        <div><strong>Observed Flags:</strong> created={{ branch_detail.was_created_observed }}, forced={{ branch_detail.was_force_pushed_observed }}, deleted={{ branch_detail.is_deleted }}</div>
+    </div>
+</section>
+
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="panel-title">Touched Files</p>
+            <h2>{{ branch_files|length }} files</h2>
+        </div>
+    </div>
+    {% if branch_files %}
+    <div class="table-wrap">
+        <table class="app-table">
+            <thead>
+                <tr>
+                    <th>Path</th>
+                    <th>Change</th>
+                    <th>Previous Path</th>
+                    <th>Last Seen</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for file in branch_files %}
+                <tr>
+                    <td><code>{{ file.path }}</code></td>
+                    <td>{{ file.last_change_type or file.change_type }}</td>
+                    <td>{% if file.previous_path %}<code>{{ file.previous_path }} -> {{ file.path }}</code>{% else %}-{% endif %}</td>
+                    <td>{{ file.last_seen_at or file.observed_at }}</td>
+                    <td>
+                        {% if file.is_conflict %}
+                        <span class="badge badge-danger">collision</span>
+                        {% elif not file.is_active %}
+                        <span class="badge badge-muted">historical</span>
+                        {% elif (file.last_change_type or file.change_type) == 'removed' %}
+                        <span class="badge badge-warning">removed</span>
+                        {% elif (file.last_change_type or file.change_type) == 'renamed' %}
+                        <span class="badge badge-info">renamed</span>
+                        {% else %}
+                        <span class="badge badge-success">active</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h3>touched files はまだありません</h3>
+        <p>この branch への push を compare API で処理すると、ここに touched files が表示されます。</p>
+    </div>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="panel-title">Open Collisions</p>
+            <h2>{{ branch_collisions|length }} paths</h2>
+        </div>
+    </div>
+    {% if branch_collisions %}
+    <ul class="stack-list">
+        {% for collision in branch_collisions %}
+        <li>
+            <strong>{{ collision.path }}</strong>
+            <span>{{ collision.last_change_type or '-' }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty-inline">この branch に紐づく active collision はありません。</div>
+    {% endif %}
+</section>
+{% endblock %}

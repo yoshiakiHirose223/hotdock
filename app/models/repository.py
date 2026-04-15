@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -19,8 +19,10 @@ class Repository(Base):
     github_repository_id: Mapped[int] = mapped_column(BigInteger, index=True)
     full_name: Mapped[str] = mapped_column(String(255), index=True)
     display_name: Mapped[str] = mapped_column(String(255))
+    default_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     provider: Mapped[str] = mapped_column(String(32), default="github")
     visibility: Mapped[str] = mapped_column(String(32), default="private")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     sync_status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

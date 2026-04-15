@@ -351,6 +351,19 @@ body.page-app {
     background: rgba(245, 248, 252, 0.75);
 }
 
+.branch-detail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.branch-detail-head strong {
+    display: block;
+    margin-bottom: 0.2rem;
+}
+
 .branch-files-grid,
 .conflict-branch-list {
     display: grid;
@@ -488,6 +501,10 @@ body.page-app {
         grid-template-columns: 1fr;
         flex-direction: column;
         align-items: stretch;
+    }
+
+    .branch-detail-head {
+        align-items: flex-start;
     }
 
     .branch-filter-bar {

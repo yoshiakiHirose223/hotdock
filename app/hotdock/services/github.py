@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import jwt
 from fastapi import HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,8 +17,10 @@ from app.core.config import get_settings
 from app.hotdock.services.audit import record_audit_log
 from app.hotdock.services.security import future_claim_expiry, generate_token, hash_token, utcnow, verify_token_hash
 from app.models.branch import Branch
+from app.models.branch_event import BranchEvent
 from app.models.branch_file import BranchFile
-from app.models.conflict import Conflict
+from app.models.file_collision import FileCollision
+from app.models.file_collision_branch import FileCollisionBranch
 from app.models.github_installation import GithubInstallation
 from app.models.github_installation_repository import GithubInstallationRepository
 from app.models.github_pending_claim import GithubPendingClaim
@@ -62,6 +64,35 @@ def pending_claim_has_verified_github_identity(pending_claim: GithubPendingClaim
         and bool(pending_claim.github_user_login)
         and bool(metadata.get("authorization_verified_at"))
     )
+
+
+def _normalize_path(path: str) -> str:
+    return path
+
+
+def _all_zero_sha(sha: str | None) -> bool:
+    return bool(sha) and set(sha) == {"0"}
+
+
+def _extract_branch_name(ref: str | None) -> str | None:
+    if not ref or not ref.startswith("refs/heads/"):
+        return None
+    return ref.removeprefix("refs/heads/")
+
+
+def _payload_occurred_at(payload: dict[str, Any]) -> datetime:
+    repository_payload = payload.get("repository") or {}
+    pushed_at = repository_payload.get("pushed_at")
+    if isinstance(pushed_at, (int, float)):
+        return datetime.fromtimestamp(pushed_at, tz=UTC).replace(tzinfo=None)
+    head_commit = payload.get("head_commit") or {}
+    timestamp = head_commit.get("timestamp")
+    if isinstance(timestamp, str):
+        try:
+            return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).astimezone(UTC).replace(tzinfo=None)
+        except ValueError:
+            pass
+    return utcnow()
 
 
 class GithubAppClient:
@@ -165,6 +196,35 @@ class GithubAppClient:
                     "Authorization": f"Bearer {installation_token}",
                 },
                 params={"per_page": 100},
+            )
+        response.raise_for_status()
+        return response.json()
+
+    async def compare_commits(self, installation_token: str, repository_full_name: str, base_sha: str, head_sha: str) -> dict[str, Any]:
+        if settings.github_mock_oauth_enabled and installation_token.startswith("mock-installation-token-"):
+            repo_key = repository_full_name.replace("/", "-")
+            return {
+                "merge_base_commit": {"sha": base_sha or f"mock-base-{repo_key}"},
+                "total_commits": 1,
+                "commits": [{"sha": head_sha or f"mock-head-{repo_key}"}],
+                "files": [
+                    {
+                        "filename": f"src/{repo_key}/service.py",
+                        "status": "modified",
+                    },
+                    {
+                        "filename": f"templates/{repo_key}/index.html",
+                        "status": "added",
+                    },
+                ],
+            }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                f"{settings.github_api_base_url}/repos/{repository_full_name}/compare/{base_sha}...{head_sha}",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {installation_token}",
+                },
             )
         response.raise_for_status()
         return response.json()
@@ -817,6 +877,15 @@ def sync_installation_repositories_event(db: Session, payload: dict[str, Any]) -
         if record is not None:
             record.status = "removed"
             record.removed_at = utcnow()
+        repository = db.scalar(
+            select(Repository).where(
+                Repository.workspace_id == installation.claimed_workspace_id,
+                Repository.github_repository_id == repository_payload["id"],
+            )
+        )
+        if repository is not None:
+            repository.is_active = False
+            repository.sync_status = "removed"
     db.commit()
     if installation.claimed_workspace_id is not None:
         sync_claimed_installation_repositories(db, installation)
@@ -845,13 +914,17 @@ def sync_claimed_installation_repositories(db: Session, installation: GithubInst
                 github_repository_id=installation_repository.github_repository_id,
                 full_name=installation_repository.full_name,
                 display_name=installation_repository.name,
+                default_branch=installation_repository.default_branch,
                 provider="github",
                 visibility="private" if installation_repository.private else "public",
+                is_active=True,
                 sync_status="active",
                 last_synced_at=utcnow(),
             )
             db.add(repository)
         else:
+            repository.default_branch = installation_repository.default_branch or repository.default_branch
+            repository.is_active = True
             repository.sync_status = "active"
             repository.last_synced_at = utcnow()
     db.commit()
@@ -907,6 +980,16 @@ def _upsert_installation_repositories_from_api(
         if record.github_repository_id not in seen_repository_ids:
             record.status = "removed"
             record.removed_at = utcnow()
+            if installation.claimed_workspace_id is not None:
+                repository = db.scalar(
+                    select(Repository).where(
+                        Repository.workspace_id == installation.claimed_workspace_id,
+                        Repository.github_repository_id == record.github_repository_id,
+                    )
+                )
+                if repository is not None:
+                    repository.is_active = False
+                    repository.sync_status = "removed"
 
     db.commit()
     sync_claimed_installation_repositories(db, installation)
@@ -940,16 +1023,22 @@ def _upsert_repository_branches_from_api(
                 workspace_id=workspace_id,
                 repository_id=repository.id,
                 name=branch_name,
+                current_head_sha=commit.get("sha"),
+                last_after_sha=commit.get("sha"),
                 last_commit_sha=commit.get("sha"),
                 touched_files_count=0,
                 conflict_files_count=0,
                 branch_status="normal",
                 is_active=True,
+                is_deleted=False,
             )
             db.add(branch)
         else:
+            branch.current_head_sha = commit.get("sha") or branch.current_head_sha
+            branch.last_after_sha = commit.get("sha") or branch.last_after_sha
             branch.last_commit_sha = commit.get("sha") or branch.last_commit_sha
             branch.is_active = True
+            branch.is_deleted = False
             if branch.conflict_files_count == 0:
                 branch.branch_status = "normal"
         synced_count += 1
@@ -960,9 +1049,518 @@ def _upsert_repository_branches_from_api(
     for branch in existing_branches:
         if branch.name not in seen_branch_names:
             branch.is_active = False
+            branch.is_deleted = True
 
     db.commit()
     return synced_count
+
+
+class GenerateInstallationTokenService:
+    async def __call__(self, installation: GithubInstallation) -> str:
+        payload = await GithubAppClient().create_installation_token(installation.installation_id)
+        token = payload.get("token")
+        if not token:
+            raise HTTPException(status_code=503, detail="installation token missing")
+        return token
+
+
+class CompareBranchRangeService:
+    async def __call__(self, installation_token: str, repository: Repository, before_sha: str, after_sha: str) -> dict[str, Any]:
+        return await GithubAppClient().compare_commits(
+            installation_token,
+            repository.full_name,
+            before_sha,
+            after_sha,
+        )
+
+
+class UpsertBranchStateService:
+    def __call__(
+        self,
+        db: Session,
+        *,
+        repository: Repository,
+        branch_name: str,
+        before_sha: str,
+        after_sha: str,
+        delivery_id: str,
+        occurred_at: datetime,
+        created: bool,
+        deleted: bool,
+        forced: bool,
+    ) -> Branch:
+        branch = db.scalar(
+            select(Branch).where(Branch.repository_id == repository.id, Branch.name == branch_name)
+        )
+        if branch is None:
+            branch = Branch(
+                workspace_id=repository.workspace_id,
+                repository_id=repository.id,
+                name=branch_name,
+                touched_files_count=0,
+                conflict_files_count=0,
+                branch_status="normal",
+                is_active=not deleted,
+                is_deleted=deleted,
+            )
+            db.add(branch)
+            db.flush()
+        branch.last_push_at = occurred_at
+        branch.last_before_sha = before_sha
+        branch.last_after_sha = after_sha
+        branch.last_delivery_id = delivery_id
+        branch.was_created_observed = branch.was_created_observed or bool(created)
+        branch.was_force_pushed_observed = branch.was_force_pushed_observed or bool(forced)
+        branch.is_deleted = bool(deleted)
+        branch.is_active = not deleted
+        if not deleted:
+            branch.current_head_sha = after_sha
+            branch.last_commit_sha = after_sha
+            if branch.conflict_files_count == 0:
+                branch.branch_status = "normal"
+        else:
+            branch.branch_status = "deleted"
+        return branch
+
+
+class UpsertBranchFilesFromCompareService:
+    def __call__(
+        self,
+        db: Session,
+        *,
+        repository: Repository,
+        branch: Branch,
+        compare_payload: dict[str, Any],
+        head_sha: str,
+        occurred_at: datetime,
+    ) -> dict[str, Any]:
+        impacted_paths: set[str] = set()
+        changed_files = compare_payload.get("files") or []
+        for file_payload in changed_files:
+            path = file_payload.get("filename")
+            if not path:
+                continue
+            change_type = file_payload.get("status") or "modified"
+            previous_path = file_payload.get("previous_filename")
+            normalized_path = _normalize_path(path)
+            impacted_paths.add(normalized_path)
+            if previous_path:
+                impacted_paths.add(_normalize_path(previous_path))
+
+            if change_type == "renamed" and previous_path:
+                previous_record = db.scalar(
+                    select(BranchFile).where(
+                        BranchFile.branch_id == branch.id,
+                        BranchFile.path == previous_path,
+                    )
+                )
+                if previous_record is not None:
+                    previous_record.is_active = False
+                    previous_record.is_conflict = False
+                    previous_record.last_seen_at = occurred_at
+                    previous_record.observed_at = occurred_at
+
+            file_record = db.scalar(
+                select(BranchFile).where(
+                    BranchFile.branch_id == branch.id,
+                    BranchFile.path == path,
+                )
+            )
+            if file_record is None:
+                file_record = BranchFile(
+                    workspace_id=repository.workspace_id,
+                    repository_id=repository.id,
+                    branch_id=branch.id,
+                    path=path,
+                    normalized_path=normalized_path,
+                    change_type=change_type,
+                    last_change_type=change_type,
+                    previous_path=previous_path,
+                    last_seen_commit_sha=head_sha,
+                    last_seen_at=occurred_at,
+                    is_active=True,
+                    is_conflict=False,
+                    observed_at=occurred_at,
+                )
+                db.add(file_record)
+            else:
+                file_record.repository_id = repository.id
+                file_record.path = path
+                file_record.normalized_path = normalized_path
+                file_record.change_type = change_type
+                file_record.last_change_type = change_type
+                file_record.previous_path = previous_path
+                file_record.last_seen_commit_sha = head_sha
+                file_record.last_seen_at = occurred_at
+                file_record.is_active = True
+                file_record.observed_at = occurred_at
+
+        branch.touched_files_count = db.scalar(
+            select(func.count(BranchFile.id)).where(
+                BranchFile.branch_id == branch.id,
+                BranchFile.is_active.is_(True),
+            )
+        ) or 0
+        return {
+            "impacted_paths": impacted_paths,
+            "files_seen": len(changed_files),
+            "merge_base_sha": ((compare_payload.get("merge_base_commit") or {}).get("sha")),
+            "head_commit_sha": head_sha,
+        }
+
+
+class RecalculateFileCollisionsService:
+    def __call__(
+        self,
+        db: Session,
+        *,
+        repository: Repository,
+        impacted_paths: set[str],
+        occurred_at: datetime,
+    ) -> dict[str, Any]:
+        new_collisions: list[str] = []
+        resolved_collisions: list[str] = []
+        affected_branch_ids: set[str] = set()
+
+        for normalized_path in impacted_paths:
+            active_files = db.scalars(
+                select(BranchFile)
+                .join(Branch, Branch.id == BranchFile.branch_id)
+                .where(
+                    BranchFile.repository_id == repository.id,
+                    BranchFile.normalized_path == normalized_path,
+                    BranchFile.is_active.is_(True),
+                    Branch.is_deleted.is_(False),
+                    Branch.is_active.is_(True),
+                )
+            ).all()
+            active_files = [file_item for file_item in active_files if file_item.branch_id]
+            active_branch_ids = {file_item.branch_id for file_item in active_files}
+            affected_branch_ids.update(active_branch_ids)
+
+            collision = db.scalar(
+                select(FileCollision).where(
+                    FileCollision.repository_id == repository.id,
+                    FileCollision.normalized_path == normalized_path,
+                )
+            )
+            previous_branch_ids: set[str] = set()
+            if collision is not None:
+                previous_branch_ids = {
+                    row.branch_id
+                    for row in db.scalars(
+                        select(FileCollisionBranch).where(FileCollisionBranch.collision_id == collision.id)
+                    ).all()
+                }
+                affected_branch_ids.update(previous_branch_ids)
+
+            if len(active_branch_ids) >= 2:
+                if collision is None:
+                    collision = FileCollision(
+                        repository_id=repository.id,
+                        normalized_path=normalized_path,
+                        active_branch_count=len(active_branch_ids),
+                        collision_status="open",
+                        first_detected_at=occurred_at,
+                        last_detected_at=occurred_at,
+                    )
+                    db.add(collision)
+                    db.flush()
+                    new_collisions.append(normalized_path)
+                else:
+                    if collision.collision_status != "open":
+                        collision.collision_status = "open"
+                        collision.first_detected_at = collision.first_detected_at or occurred_at
+                        collision.resolved_at = None
+                        new_collisions.append(normalized_path)
+                    elif collision.active_branch_count != len(active_branch_ids):
+                        new_collisions.append(normalized_path)
+                    collision.active_branch_count = len(active_branch_ids)
+                    collision.last_detected_at = occurred_at
+                    collision.resolved_at = None
+
+                existing_rows = {
+                    row.branch_id: row
+                    for row in db.scalars(
+                        select(FileCollisionBranch).where(FileCollisionBranch.collision_id == collision.id)
+                    ).all()
+                }
+                for file_item in active_files:
+                    row = existing_rows.pop(file_item.branch_id, None)
+                    if row is None:
+                        row = FileCollisionBranch(
+                            collision_id=collision.id,
+                            branch_id=file_item.branch_id,
+                            path=file_item.path,
+                            last_change_type=file_item.last_change_type or file_item.change_type,
+                            updated_at=occurred_at,
+                        )
+                        db.add(row)
+                    else:
+                        row.path = file_item.path
+                        row.last_change_type = file_item.last_change_type or file_item.change_type
+                        row.updated_at = occurred_at
+                if existing_rows:
+                    db.execute(
+                        delete(FileCollisionBranch).where(
+                            FileCollisionBranch.collision_id == collision.id,
+                            FileCollisionBranch.branch_id.in_(list(existing_rows.keys())),
+                        )
+                    )
+            elif collision is not None:
+                if collision.collision_status == "open":
+                    collision.collision_status = "resolved"
+                    collision.resolved_at = occurred_at
+                    collision.last_detected_at = occurred_at
+                    collision.active_branch_count = len(active_branch_ids)
+                    resolved_collisions.append(normalized_path)
+                else:
+                    collision.active_branch_count = len(active_branch_ids)
+                db.execute(delete(FileCollisionBranch).where(FileCollisionBranch.collision_id == collision.id))
+
+        open_collision_paths = {
+            item.normalized_path
+            for item in db.scalars(
+                select(FileCollision).where(
+                    FileCollision.repository_id == repository.id,
+                    FileCollision.normalized_path.in_(list(impacted_paths)),
+                    FileCollision.collision_status == "open",
+                )
+            ).all()
+        }
+        active_impacted_files = db.scalars(
+            select(BranchFile).where(
+                BranchFile.repository_id == repository.id,
+                BranchFile.normalized_path.in_(list(impacted_paths)),
+            )
+        ).all()
+        for file_item in active_impacted_files:
+            file_item.is_conflict = file_item.is_active and file_item.normalized_path in open_collision_paths
+
+        for branch_id in affected_branch_ids:
+            branch = db.get(Branch, branch_id)
+            if branch is None:
+                continue
+            branch.touched_files_count = db.scalar(
+                select(func.count(BranchFile.id)).where(
+                    BranchFile.branch_id == branch.id,
+                    BranchFile.is_active.is_(True),
+                )
+            ) or 0
+            branch.conflict_files_count = db.scalar(
+                select(func.count(FileCollisionBranch.branch_id)).join(
+                    FileCollision,
+                    FileCollision.id == FileCollisionBranch.collision_id,
+                ).where(
+                    FileCollisionBranch.branch_id == branch.id,
+                    FileCollision.collision_status == "open",
+                )
+            ) or 0
+            if branch.is_deleted:
+                branch.branch_status = "deleted"
+            elif branch.conflict_files_count > 0:
+                branch.branch_status = "has_conflict"
+            else:
+                branch.branch_status = "normal"
+
+        return {
+            "new_collisions": new_collisions,
+            "resolved_collisions": resolved_collisions,
+        }
+
+
+class NotifyFileCollisionsService:
+    def __call__(
+        self,
+        db: Session,
+        request: Request,
+        *,
+        repository: Repository,
+        new_collisions: list[str],
+        resolved_collisions: list[str],
+    ) -> None:
+        for normalized_path in new_collisions:
+            record_audit_log(
+                db,
+                request,
+                actor_type="system",
+                actor_id=None,
+                workspace_id=repository.workspace_id,
+                target_type="repository",
+                target_id=repository.id,
+                action="file_collision_detected",
+                metadata={"path": normalized_path, "repository": repository.full_name},
+            )
+        for normalized_path in resolved_collisions:
+            record_audit_log(
+                db,
+                request,
+                actor_type="system",
+                actor_id=None,
+                workspace_id=repository.workspace_id,
+                target_type="repository",
+                target_id=repository.id,
+                action="file_collision_resolved",
+                metadata={"path": normalized_path, "repository": repository.full_name},
+            )
+
+
+class HandleGithubPushWebhookService:
+    async def __call__(self, db: Session, request: Request, *, delivery_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        installation_id = (payload.get("installation") or {}).get("id")
+        if installation_id is None:
+            return {"status": "ignored", "reason": "missing_installation_id"}
+
+        installation = db.scalar(select(GithubInstallation).where(GithubInstallation.installation_id == installation_id))
+        if installation is None or installation.claimed_workspace_id is None:
+            return {"status": "ignored", "reason": "installation_unclaimed"}
+        if installation.installation_status in {"uninstalled", "suspended"}:
+            return {"status": "ignored", "reason": "installation_inactive"}
+
+        repository_payload = payload.get("repository") or {}
+        repository = db.scalar(
+            select(Repository).where(
+                Repository.workspace_id == installation.claimed_workspace_id,
+                Repository.github_repository_id == repository_payload.get("id"),
+                Repository.deleted_at.is_(None),
+            )
+        )
+        if repository is None or not repository.is_active:
+            return {"status": "ignored", "reason": "repository_not_monitored"}
+
+        branch_name = _extract_branch_name(payload.get("ref"))
+        if not branch_name:
+            return {"status": "ignored", "reason": "ref_not_branch"}
+
+        occurred_at = _payload_occurred_at(payload)
+        before_sha = str(payload.get("before") or "")
+        after_sha = str(payload.get("after") or "")
+        created = bool(payload.get("created"))
+        deleted = bool(payload.get("deleted"))
+        forced = bool(payload.get("forced"))
+
+        branch = UpsertBranchStateService()(
+            db,
+            repository=repository,
+            branch_name=branch_name,
+            before_sha=before_sha,
+            after_sha=after_sha,
+            delivery_id=delivery_id,
+            occurred_at=occurred_at,
+            created=created,
+            deleted=deleted,
+            forced=forced,
+        )
+
+        branch_event = BranchEvent(
+            repository_id=repository.id,
+            branch_id=branch.id,
+            webhook_delivery_id=delivery_id,
+            event_type="push",
+            before_sha=before_sha or None,
+            after_sha=after_sha or None,
+            created=created,
+            deleted=deleted,
+            forced=forced,
+            occurred_at=occurred_at,
+        )
+        db.add(branch_event)
+        db.flush()
+
+        if deleted:
+            impacted_paths = {
+                item.normalized_path or _normalize_path(item.path)
+                for item in db.scalars(
+                    select(BranchFile).where(
+                        BranchFile.branch_id == branch.id,
+                        BranchFile.is_active.is_(True),
+                    )
+                ).all()
+            }
+            branch_files = db.scalars(select(BranchFile).where(BranchFile.branch_id == branch.id)).all()
+            for file_item in branch_files:
+                file_item.is_active = False
+                file_item.is_conflict = False
+                file_item.last_seen_at = occurred_at
+                file_item.observed_at = occurred_at
+            branch.touched_files_count = 0
+            branch.conflict_files_count = 0
+            branch.branch_status = "deleted"
+            RecalculateFileCollisionsService()(db, repository=repository, impacted_paths=impacted_paths, occurred_at=occurred_at)
+            repository.last_synced_at = occurred_at
+            db.commit()
+            return {"status": "processed", "reason": "branch_deleted", "compare_requested": False}
+
+        if branch.last_processed_compare_head == after_sha or branch.current_head_sha == after_sha and branch.last_delivery_id != delivery_id:
+            branch_event.compare_requested = False
+            branch_event.compare_completed = False
+            db.commit()
+            return {"status": "ignored", "reason": "after_sha_already_processed"}
+
+        branch_event.compare_requested = True
+        try:
+            installation_token = await GenerateInstallationTokenService()(installation)
+            compare_payload = await CompareBranchRangeService()(installation_token, repository, before_sha, after_sha)
+            compare_head_sha = after_sha or ((compare_payload.get("commits") or [{}])[-1].get("sha"))
+            compare_result = UpsertBranchFilesFromCompareService()(
+                db,
+                repository=repository,
+                branch=branch,
+                compare_payload=compare_payload,
+                head_sha=compare_head_sha,
+                occurred_at=occurred_at,
+            )
+            branch.last_processed_compare_base = compare_result["merge_base_sha"] or before_sha or None
+            branch.last_processed_compare_head = compare_head_sha
+            branch.current_head_sha = compare_head_sha
+            branch.last_commit_sha = compare_head_sha
+            collision_result = RecalculateFileCollisionsService()(
+                db,
+                repository=repository,
+                impacted_paths=compare_result["impacted_paths"],
+                occurred_at=occurred_at,
+            )
+            NotifyFileCollisionsService()(
+                db,
+                request,
+                repository=repository,
+                new_collisions=collision_result["new_collisions"],
+                resolved_collisions=collision_result["resolved_collisions"],
+            )
+            branch_event.compare_completed = True
+            repository.last_synced_at = occurred_at
+            db.commit()
+            return {
+                "status": "processed",
+                "reason": "compare_completed",
+                "files_seen": compare_result["files_seen"],
+                "new_collisions": len(collision_result["new_collisions"]),
+                "resolved_collisions": len(collision_result["resolved_collisions"]),
+            }
+        except (httpx.HTTPError, HTTPException) as exc:
+            branch_event.compare_error = True
+            branch_event.compare_error_message = str(getattr(exc, "detail", None) or exc)
+            branch.branch_status = "compare_error"
+            repository.last_synced_at = occurred_at
+            record_audit_log(
+                db,
+                request,
+                actor_type="github_app",
+                actor_id=None,
+                workspace_id=repository.workspace_id,
+                target_type="branch_event",
+                target_id=branch_event.id,
+                action="branch_compare_failed",
+                metadata={
+                    "repository": repository.full_name,
+                    "branch": branch.name,
+                    "before": before_sha,
+                    "after": after_sha,
+                    "delivery_id": delivery_id,
+                },
+            )
+            db.commit()
+            return {"status": "accepted_with_error", "reason": branch_event.compare_error_message}
 
 async def manual_sync_workspace_installation_repositories(
     db: Session,
@@ -1081,108 +1679,5 @@ async def manual_sync_workspace_installation_repositories(
     }
 
 
-def record_push_event(db: Session, payload: dict[str, Any]) -> None:
-    installation_id = (payload.get("installation") or {}).get("id")
-    if installation_id is None:
-        return
-    installation = db.scalar(select(GithubInstallation).where(GithubInstallation.installation_id == installation_id))
-    if installation is None or installation.claimed_workspace_id is None:
-        return
-
-    repository_payload = payload.get("repository") or {}
-    repository = db.scalar(
-        select(Repository).where(
-            Repository.workspace_id == installation.claimed_workspace_id,
-            Repository.github_repository_id == repository_payload.get("id"),
-        )
-    )
-    if repository is None:
-        repository = Repository(
-            workspace_id=installation.claimed_workspace_id,
-            github_installation_id=installation.id,
-            github_repository_id=repository_payload["id"],
-            full_name=repository_payload["full_name"],
-            display_name=repository_payload["name"],
-            provider="github",
-            visibility="private" if repository_payload.get("private", True) else "public",
-            sync_status="active",
-            last_synced_at=utcnow(),
-        )
-        db.add(repository)
-        db.flush()
-
-    ref = payload.get("ref", "")
-    branch_name = ref.split("/")[-1] if ref else "unknown"
-    branch = db.scalar(
-        select(Branch).where(Branch.repository_id == repository.id, Branch.name == branch_name)
-    )
-    if branch is None:
-        branch = Branch(workspace_id=installation.claimed_workspace_id, repository_id=repository.id, name=branch_name)
-        db.add(branch)
-        db.flush()
-
-    files: set[tuple[str, str]] = set()
-    for commit in payload.get("commits") or []:
-        for path in commit.get("added") or []:
-            files.add((path, "added"))
-        for path in commit.get("modified") or []:
-            files.add((path, "modified"))
-        for path in commit.get("removed") or []:
-            files.add((path, "removed"))
-
-    last_push_at = utcnow()
-    branch.last_push_at = last_push_at
-    branch.last_commit_sha = payload.get("after")
-
-    existing_files = {
-        item.path: item
-        for item in db.scalars(select(BranchFile).where(BranchFile.branch_id == branch.id)).all()
-    }
-    conflict_count = 0
-    for path, change_type in files:
-        is_conflict = "conflict" in path.lower()
-        file_record = existing_files.get(path)
-        if file_record is None:
-            file_record = BranchFile(
-                workspace_id=installation.claimed_workspace_id,
-                branch_id=branch.id,
-                path=path,
-                change_type=change_type,
-                is_conflict=is_conflict,
-                observed_at=last_push_at,
-            )
-            db.add(file_record)
-        else:
-            file_record.change_type = change_type
-            file_record.is_conflict = is_conflict
-            file_record.observed_at = last_push_at
-        if is_conflict:
-            conflict_count += 1
-            conflict = db.scalar(
-                select(Conflict).where(
-                    Conflict.workspace_id == installation.claimed_workspace_id,
-                    Conflict.repository_id == repository.id,
-                    Conflict.primary_branch_id == branch.id,
-                    Conflict.file_path == path,
-                    Conflict.conflict_status == "open",
-                )
-            )
-            if conflict is None:
-                conflict = Conflict(
-                    workspace_id=installation.claimed_workspace_id,
-                    repository_id=repository.id,
-                    primary_branch_id=branch.id,
-                    file_path=path,
-                    conflict_status="open",
-                    first_detected_at=last_push_at,
-                    last_detected_at=last_push_at,
-                )
-                db.add(conflict)
-            else:
-                conflict.last_detected_at = last_push_at
-
-    branch.touched_files_count = len(files)
-    branch.conflict_files_count = conflict_count
-    branch.branch_status = "has_conflict" if conflict_count else "normal"
-    repository.last_synced_at = last_push_at
-    db.commit()
+async def record_push_event(db: Session, request: Request, *, delivery_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return await HandleGithubPushWebhookService()(db, request, delivery_id=delivery_id, payload=payload)

@@ -27,7 +27,9 @@ from app.hotdock.services.workspaces import (
     workspace_members_data,
 )
 from app.models.branch import Branch
-from app.models.conflict import Conflict
+from app.models.branch_file import BranchFile
+from app.models.file_collision import FileCollision
+from app.models.file_collision_branch import FileCollisionBranch
 from app.models.repository import Repository
 from app.models.workspace import Workspace
 
@@ -231,18 +233,91 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
         current_membership=access.membership,
     )
     repositories = {repository.id: repository for repository in db.scalars(select(Repository).where(Repository.workspace_id == access.workspace.id)).all()}
-    branches = db.scalars(select(Branch).where(Branch.workspace_id == access.workspace.id)).all()
+    branches = db.scalars(select(Branch).where(Branch.workspace_id == access.workspace.id).order_by(Branch.last_push_at.desc().nullslast())).all()
+    branch_ids = [branch.id for branch in branches]
+    branch_files = []
+    if branch_ids:
+        branch_files = db.scalars(
+            select(BranchFile)
+            .where(BranchFile.branch_id.in_(branch_ids))
+            .order_by(BranchFile.last_seen_at.desc().nullslast(), BranchFile.updated_at.desc())
+        ).all()
+    files_by_branch: dict[str, list[BranchFile]] = {}
+    for file_item in branch_files:
+        files_by_branch.setdefault(file_item.branch_id, []).append(file_item)
     context["branches"] = [
         {
+            "id": branch.id,
+            "details_id": f"branch-details-{branch.id}",
             "name": branch.name,
             "last_push_at": branch.last_push_at,
+            "current_head_sha": branch.current_head_sha or branch.last_commit_sha,
             "touched_files_count": branch.touched_files_count,
             "conflict_files_count": branch.conflict_files_count,
+            "branch_status": branch.branch_status,
+            "is_deleted": branch.is_deleted,
             "repository_name": repositories.get(branch.repository_id).display_name if repositories.get(branch.repository_id) else "-",
+            "files": files_by_branch.get(branch.id, []),
         }
         for branch in branches
     ]
     return render_app("hotdock/app/workspace_branches.html", context)
+
+
+@router.get("/workspaces/{workspace_slug}/branches/{branch_id}", name="hotdock-workspace-branch-detail")
+async def workspace_branch_detail(workspace_slug: str, branch_id: str, request: Request, db: Session = Depends(get_db)):
+    auth = attach_auth_context(request, db)
+    if auth.user is None:
+        return RedirectResponse(
+            url=build_login_redirect(f"/workspaces/{workspace_slug}/branches/{branch_id}"),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="viewer")
+    branch = db.scalar(
+        select(Branch).where(
+            Branch.id == branch_id,
+            Branch.workspace_id == access.workspace.id,
+        )
+    )
+    if branch is None:
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/branches", status_code=status.HTTP_303_SEE_OTHER)
+    repository = db.get(Repository, branch.repository_id)
+    context = workspace_page_context(
+        request,
+        db,
+        workspace=access.workspace,
+        active_nav="workspace-branches",
+        page_title=f"{branch.name} | Branch | Hotdock",
+        page_heading="Branch Detail",
+        page_description="branch ごとの touched files と collision 状態。",
+        breadcrumbs=[
+            {"label": "Dashboard", "href": f"/workspaces/{workspace_slug}/dashboard"},
+            {"label": "Branches", "href": f"/workspaces/{workspace_slug}/branches"},
+            {"label": branch.name, "href": f"/workspaces/{workspace_slug}/branches/{branch_id}"},
+        ],
+        current_membership=access.membership,
+    )
+    files = db.scalars(
+        select(BranchFile).where(BranchFile.branch_id == branch.id).order_by(BranchFile.is_active.desc(), BranchFile.last_seen_at.desc().nullslast())
+    ).all()
+    open_collisions = db.scalars(
+        select(FileCollisionBranch)
+        .join(FileCollision, FileCollision.id == FileCollisionBranch.collision_id)
+        .where(
+            FileCollision.collision_status == "open",
+            FileCollisionBranch.branch_id == branch.id,
+        )
+        .order_by(FileCollision.updated_at.desc())
+    ).all()
+    context.update(
+        {
+            "branch_detail": branch,
+            "branch_repository": repository,
+            "branch_files": files,
+            "branch_collisions": open_collisions,
+        }
+    )
+    return render_app("hotdock/app/workspace_branch_detail.html", context)
 
 
 @router.get("/workspaces/{workspace_slug}/conflicts", name="hotdock-workspace-conflicts")
@@ -270,18 +345,34 @@ async def workspace_conflicts(workspace_slug: str, request: Request, db: Session
     )
     repositories = {repository.id: repository for repository in db.scalars(select(Repository).where(Repository.workspace_id == access.workspace.id)).all()}
     branches = {branch.id: branch for branch in db.scalars(select(Branch).where(Branch.workspace_id == access.workspace.id)).all()}
-    conflicts = db.scalars(
-        select(Conflict).where(Conflict.workspace_id == access.workspace.id, Conflict.conflict_status == "open")
+    collision_rows = db.scalars(
+        select(FileCollision)
+        .join(Repository, Repository.id == FileCollision.repository_id)
+        .where(
+            Repository.workspace_id == access.workspace.id,
+            FileCollision.collision_status == "open",
+        )
+        .order_by(FileCollision.last_detected_at.desc())
     ).all()
     context["conflicts"] = [
         {
-            "repository_name": repositories.get(conflict.repository_id).display_name if repositories.get(conflict.repository_id) else "-",
-            "branch_name": branches.get(conflict.primary_branch_id).name if branches.get(conflict.primary_branch_id) else "-",
-            "file_path": conflict.file_path,
-            "conflict_status": conflict.conflict_status,
-            "last_detected_at": conflict.last_detected_at,
+            "repository_name": repositories.get(collision.repository_id).display_name if repositories.get(collision.repository_id) else "-",
+            "file_path": collision.normalized_path,
+            "conflict_status": collision.collision_status,
+            "active_branch_count": collision.active_branch_count,
+            "first_detected_at": collision.first_detected_at,
+            "last_detected_at": collision.last_detected_at,
+            "branches": [
+                {
+                    "name": branches.get(collision_branch.branch_id).name if branches.get(collision_branch.branch_id) else "-",
+                    "last_change_type": collision_branch.last_change_type,
+                }
+                for collision_branch in db.scalars(
+                    select(FileCollisionBranch).where(FileCollisionBranch.collision_id == collision.id).order_by(FileCollisionBranch.updated_at.desc())
+                ).all()
+            ],
         }
-        for conflict in conflicts
+        for collision in collision_rows
     ]
     return render_app("hotdock/app/workspace_conflicts.html", context)
 

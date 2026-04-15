@@ -9,6 +9,7 @@ os.environ["APP_ENV"] = "test"
 os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.gettempdir()}/project-test-{uuid.uuid4().hex}.db"
 os.environ["GITHUB_MOCK_OAUTH_ENABLED"] = "true"
 os.environ["GITHUB_APP_INSTALL_URL"] = "https://github.com/apps/hotdock/installations/new"
+os.environ["GITHUB_APP_WEBHOOK_SECRET"] = "test-webhook-secret"
 
 from app.core.database import SessionLocal, init_db
 from app.main import app
