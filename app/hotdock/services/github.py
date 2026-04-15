@@ -230,6 +230,7 @@ async def resolve_callback_installation(
     db: Session,
     *,
     access_token: str,
+    installation_id: int | None = None,
     issued_at_ts: int | None = None,
     preferred_workspace_id: str | None = None,
 ) -> tuple[dict[str, Any], GithubInstallation]:
@@ -241,6 +242,19 @@ async def resolve_callback_installation(
     visible_ids = [item.get("id") for item in visible_installations if item.get("id")]
     if not visible_ids:
         raise HTTPException(status_code=403, detail="GitHub user has no visible installations")
+
+    if installation_id is not None:
+        if installation_id not in visible_ids:
+            raise HTTPException(status_code=403, detail="GitHub user is not authorized for this installation")
+        installation = db.scalar(
+            select(GithubInstallation).where(GithubInstallation.installation_id == installation_id)
+        )
+        if installation is None:
+            installation_payload = await app_client.fetch_installation(installation_id)
+            installation = sync_installation_from_api_payload(db, installation_payload)
+        if installation.installation_status == "uninstalled":
+            raise HTTPException(status_code=404, detail="Installation is already uninstalled")
+        return github_user, installation
 
     local_installations = db.scalars(
         select(GithubInstallation).where(GithubInstallation.installation_id.in_(visible_ids))

@@ -587,16 +587,52 @@ async def github_authorize_start(request: Request, db: Session = Depends(get_db)
 
 @router.get("/integrations/github/callback", name="hotdock-github-callback")
 @router.get("/integrations/github/authorize/callback", name="hotdock-github-authorize-callback")
-async def github_callback(request: Request, db: Session = Depends(get_db), code: str = "", state: str = ""):
-    if not code or not state:
-        set_flash(request, "error", "GitHub callback のパラメータが不足しています。")
-        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-
+async def github_callback(
+    request: Request,
+    db: Session = Depends(get_db),
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    error_description: str = "",
+    installation_id: int = 0,
+    setup_action: str = "",
+):
     auth = attach_auth_context(request, db)
+    install_intent = request.session.get("github_install_intent")
+
+    if error:
+        set_flash(
+            request,
+            "error",
+            error_description or "GitHub 側で user authorization が完了しませんでした。もう一度やり直してください。",
+        )
+        redirect_url = "/install/github"
+        workspace_slug = _workspace_slug_from_install_intent(db, request, auth, request.session.get("github_install_intent"))
+        if workspace_slug:
+            redirect_url = f"/settings/integrations/github?{urlencode({'workspace': workspace_slug})}"
+        return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+
+    if not code:
+        if installation_id > 0 or setup_action:
+            set_flash(
+                request,
+                "error",
+                "GitHub callback に authorization code が含まれていません。GitHub App 側で "
+                "`Request user authorization (OAuth) during installation` を有効にし、"
+                "Callback URL が正しく設定されているか確認してください。",
+            )
+        else:
+            set_flash(request, "error", "GitHub callback を直接開くことはできません。Hotdock から連携を開始してください。")
+        redirect_url = "/install/github"
+        workspace_slug = _workspace_slug_from_install_intent(db, request, auth, install_intent)
+        if workspace_slug:
+            redirect_url = f"/settings/integrations/github?{urlencode({'workspace': workspace_slug})}"
+        return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+
     oauth_client = GithubOAuthClient()
 
     legacy_oauth_state = request.session.get("github_oauth_state")
-    if legacy_oauth_state and legacy_oauth_state.get("state") == state:
+    if legacy_oauth_state and state and legacy_oauth_state.get("state") == state:
         auth, redirect = _require_login(request, db, "/dashboard")
         if redirect:
             return redirect
@@ -626,26 +662,27 @@ async def github_callback(request: Request, db: Session = Depends(get_db), code:
         workspace = db.get(Workspace, installation.claimed_workspace_id)
         return RedirectResponse(url=f"/workspaces/{workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
 
-    install_intent = request.session.pop("github_install_intent", None)
-    if install_intent is None:
-        set_flash(request, "error", "GitHub callback を再開できませんでした。Hotdock から連携を開始してください。")
-        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-
-    expected_state = install_intent.get("nonce", "")
-    if not expected_state or not hmac.compare_digest(expected_state, state):
-        set_flash(request, "error", "GitHub callback state の検証に失敗しました。")
-        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    request.session.pop("github_install_intent", None)
+    state_verified = False
+    if install_intent is not None:
+        expected_state = install_intent.get("nonce", "")
+        if state:
+            if not expected_state or not hmac.compare_digest(expected_state, state):
+                set_flash(request, "error", "GitHub callback state の検証に失敗しました。")
+                return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+            state_verified = True
 
     try:
         preferred_workspace_id = None
-        if install_intent.get("workspace_slug"):
+        if install_intent and install_intent.get("workspace_slug"):
             preferred_workspace = db.scalar(select(Workspace).where(Workspace.slug == install_intent["workspace_slug"]))
             preferred_workspace_id = preferred_workspace.id if preferred_workspace is not None else None
         token_payload = await oauth_client.exchange_code(code)
         github_user, installation = await resolve_callback_installation(
             db,
             access_token=token_payload["access_token"],
-            issued_at_ts=int(install_intent.get("issued_at", 0) or 0),
+            installation_id=installation_id or None,
+            issued_at_ts=int((install_intent or {}).get("issued_at", 0) or 0),
             preferred_workspace_id=preferred_workspace_id,
         )
         result = create_callback_pending_claim(
@@ -704,12 +741,19 @@ async def github_callback(request: Request, db: Session = Depends(get_db), code:
                     user=auth.user,
                     workspace=workspace,
                 )
-                installation = finalize_github_claim(db, request, pending_claim=pending_claim, user=auth.user)
-                sync_claimed_installation_repositories(db, installation)
-                return RedirectResponse(url=f"/workspaces/{workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+                if state_verified:
+                    installation = finalize_github_claim(db, request, pending_claim=pending_claim, user=auth.user)
+                    sync_claimed_installation_repositories(db, installation)
+                    return RedirectResponse(url=f"/workspaces/{workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
             except Exception:
                 set_flash(request, "error", "workspace への自動紐付けに失敗しました。workspace を選択して再開してください。")
 
+    if install_intent is not None and not state_verified:
+        set_flash(
+            request,
+            "success",
+            "GitHub 側の確認は完了しました。セキュリティ保護のため、最後に workspace への claim を確認してください。",
+        )
     return RedirectResponse(url=claim_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
