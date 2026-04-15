@@ -45,6 +45,7 @@ def public_page_context(request: Request, db: Session, **kwargs: Any) -> dict[st
         {
             "current_user": auth.user,
             "dashboard_href": dashboard_href,
+            "csrf_token": auth.csrf_token,
         }
     )
     return context

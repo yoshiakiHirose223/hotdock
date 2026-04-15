@@ -11,6 +11,10 @@
                 {% if current_user %}
                 <span class="nav-user-label">{{ current_user.display_name }}</span>
                 <a class="button button-ghost" href="{{ dashboard_href }}">ダッシュボード</a>
+                <form class="inline-form" method="post" action="/logout">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="button button-ghost" type="submit">ログアウト</button>
+                </form>
                 {% else %}
                 <a class="button button-ghost" href="/login">ログイン</a>
                 <a class="button button-primary" href="/signup">SaaS 版で始める</a>

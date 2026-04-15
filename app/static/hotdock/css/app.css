@@ -468,8 +468,19 @@ body.page-app {
     margin-bottom: 0.5rem;
 }
 
+.nav-actions .inline-form,
+.app-header-meta .inline-form {
+    margin-bottom: 0;
+}
+
 .inline-form select {
     min-width: 7rem;
+}
+
+.button-small {
+    min-height: 38px;
+    padding: 0.55rem 0.9rem;
+    font-size: 0.92rem;
 }
 
 .page-workspace .app-content {
