@@ -29,14 +29,10 @@ from app.hotdock.services.workspaces import (
     workspace_members_data,
     workspace_settings_data,
 )
-from app.models.audit_log import AuditLog
 from app.models.branch import Branch
 from app.models.branch_file import BranchFile
 from app.models.file_collision import FileCollision
 from app.models.file_collision_branch import FileCollisionBranch
-from app.models.github_installation import GithubInstallation
-from app.models.github_pending_claim import GithubPendingClaim
-from app.models.github_webhook_event import GithubWebhookEvent
 from app.models.repository import Repository
 from app.models.workspace import Workspace
 
@@ -229,75 +225,6 @@ async def workspace_repositories_sync(
         url=f"/workspaces/{workspace_slug}/repositories",
         status_code=status.HTTP_303_SEE_OTHER,
     )
-
-
-@router.get("/workspaces/{workspace_slug}/logs", name="hotdock-workspace-logs")
-async def workspace_logs(workspace_slug: str, request: Request, db: Session = Depends(get_db)):
-    auth = attach_auth_context(request, db)
-    if auth.user is None:
-        return RedirectResponse(
-            url=build_login_redirect(f"/workspaces/{workspace_slug}/logs"),
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
-    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="admin")
-    context = workspace_page_context(
-        request,
-        db,
-        workspace=access.workspace,
-        active_nav="workspace-logs",
-        page_title=f"{access.workspace.name} | Logs | Hotdock",
-        page_heading="Logs",
-        page_description="workspace 単位の監査ログ、webhook、installation、pending claim を確認します。",
-        breadcrumbs=[
-            {"label": "Dashboard", "href": f"/workspaces/{workspace_slug}/dashboard"},
-            {"label": "Logs", "href": f"/workspaces/{workspace_slug}/logs"},
-        ],
-        current_membership=access.membership,
-    )
-
-    installations = db.scalars(
-        select(GithubInstallation)
-        .where(GithubInstallation.claimed_workspace_id == access.workspace.id)
-        .order_by(GithubInstallation.updated_at.desc())
-    ).all()
-    installation_ids = [item.installation_id for item in installations]
-
-    pending_claims = db.scalars(
-        select(GithubPendingClaim)
-        .where(
-            (GithubPendingClaim.workspace_id == access.workspace.id)
-            | ((GithubPendingClaim.user_id == auth.user.id) & GithubPendingClaim.workspace_id.is_(None))
-        )
-        .order_by(GithubPendingClaim.updated_at.desc(), GithubPendingClaim.created_at.desc())
-        .limit(25)
-    ).all()
-
-    audit_logs = db.scalars(
-        select(AuditLog)
-        .where(AuditLog.workspace_id == access.workspace.id)
-        .order_by(AuditLog.created_at.desc())
-        .limit(100)
-    ).all()
-
-    webhook_query = select(GithubWebhookEvent).order_by(GithubWebhookEvent.received_at.desc()).limit(100)
-    if installation_ids:
-        webhook_query = webhook_query.where(
-            (GithubWebhookEvent.workspace_id == access.workspace.id)
-            | (GithubWebhookEvent.installation_id.in_(installation_ids))
-        )
-    else:
-        webhook_query = webhook_query.where(GithubWebhookEvent.workspace_id == access.workspace.id)
-    webhook_events = db.scalars(webhook_query).all()
-
-    context.update(
-        {
-            "log_installations": installations,
-            "log_pending_claims": pending_claims,
-            "log_audit_logs": audit_logs,
-            "log_webhook_events": webhook_events,
-        }
-    )
-    return render_app("hotdock/app/workspace_logs.html", context)
 
 
 @router.get("/workspaces/{workspace_slug}/branches", name="hotdock-workspace-branches")

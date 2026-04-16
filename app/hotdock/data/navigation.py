@@ -6,6 +6,7 @@ PUBLIC_NAVIGATION = [
     {"label": "Security", "href": "/security", "key": "security"},
     {"label": "FAQ", "href": "/faq", "key": "faq"},
     {"label": "Docs", "href": "/docs", "key": "docs"},
+    {"label": "Logs", "href": "/logs", "key": "logs"},
 ]
 
 AUTH_LINKS = [

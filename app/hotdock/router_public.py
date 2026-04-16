@@ -1,7 +1,11 @@
+import json
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette import status
 
@@ -24,9 +28,24 @@ from app.hotdock.data.pricing import PRICING_COMPARISON, PRICING_NOTES, PRICING_
 from app.hotdock.services.auth import attach_auth_context, default_workspace_for_user, get_flash, set_flash, verify_form_csrf
 from app.hotdock.services.context import build_public_context
 from app.hotdock.services.github import delete_all_non_article_data
+from app.models.audit_log import AuditLog
+from app.models.branch_event import BranchEvent
+from app.models.github_webhook_event import GithubWebhookEvent
 
 router = APIRouter()
 settings = get_settings()
+
+
+def _json_log_default(value: Any):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return str(value)
+
+
+def format_log_details(details: dict[str, Any]) -> str:
+    return json.dumps(details, ensure_ascii=False, indent=2, default=_json_log_default)
 
 
 def render_public(template_name: str, context: dict[str, Any]):
@@ -305,3 +324,87 @@ async def compare(request: Request, db: Session = Depends(get_db)):
     )
     context.update({"compare_columns": COMPARE_COLUMNS, "compare_rows": COMPARE_ROWS, "start_paths": START_PATHS, "global_cta": GLOBAL_CTA})
     return render_public("hotdock/public/compare.html", context)
+
+
+@router.get("/logs", name="hotdock-logs")
+async def logs(request: Request, db: Session = Depends(get_db)):
+    context = public_page_context(
+        request,
+        db,
+        page_title="Logs | Hotdock",
+        page_description="Hotdock の監査ログ、GitHub webhook、branch event をまとめて確認するページ。",
+        page_heading="Logs",
+        active_nav="logs",
+        body_class="page-logs",
+        breadcrumbs=[{"label": "Home", "href": "/"}, {"label": "Logs", "href": "/logs"}],
+    )
+
+    audit_logs = db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc())).all()
+    webhook_events = db.scalars(select(GithubWebhookEvent).order_by(GithubWebhookEvent.received_at.desc())).all()
+    branch_events = db.scalars(select(BranchEvent).order_by(BranchEvent.occurred_at.desc())).all()
+
+    timeline: list[dict[str, Any]] = []
+
+    for item in audit_logs:
+        timeline.append(
+            {
+                "at": item.created_at,
+                "source": "audit",
+                "title": item.action,
+                "summary": f"{item.actor_type} / {item.target_type}",
+                "details": format_log_details(
+                    {
+                    "actor_id": item.actor_id,
+                    "workspace_id": item.workspace_id,
+                    "target_id": item.target_id,
+                    "metadata": item.event_metadata,
+                    }
+                ),
+            }
+        )
+
+    for item in webhook_events:
+        timeline.append(
+            {
+                "at": item.received_at,
+                "source": "webhook",
+                "title": f"{item.event_name}{' / ' + item.action_name if item.action_name else ''}",
+                "summary": f"installation={item.installation_id or '-'} status={item.processing_status}",
+                "details": format_log_details(
+                    {
+                    "delivery_id": item.delivery_id,
+                    "workspace_id": item.workspace_id,
+                    "signature_valid": item.signature_valid,
+                    "error_message": item.error_message,
+                    }
+                ),
+            }
+        )
+
+    for item in branch_events:
+        timeline.append(
+            {
+                "at": item.occurred_at,
+                "source": "branch",
+                "title": item.event_type,
+                "summary": f"repo={item.repository_id} branch={item.branch_id or '-'}",
+                "details": format_log_details(
+                    {
+                    "delivery_id": item.webhook_delivery_id,
+                    "before_sha": item.before_sha,
+                    "after_sha": item.after_sha,
+                    "created": item.created,
+                    "deleted": item.deleted,
+                    "forced": item.forced,
+                    "compare_requested": item.compare_requested,
+                    "compare_completed": item.compare_completed,
+                    "compare_error": item.compare_error,
+                    "compare_error_message": item.compare_error_message,
+                    }
+                ),
+            }
+        )
+
+    timeline.sort(key=lambda row: row["at"], reverse=True)
+    context.update({"timeline_logs": timeline})
+    return render_public("hotdock/public/logs.html", context)

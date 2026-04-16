@@ -1,0 +1,35 @@
+{% extends "hotdock/layouts/public_base.html" %}
+
+{% block content %}
+<section class="section">
+    <div class="container">
+        {% set section_eyebrow = "Operational Logs" %}
+        {% set section_title = "時系列ログ" %}
+        {% set section_copy = "監査ログ、GitHub webhook、branch event をまとめて時系列順に表示します。" %}
+        {% include "hotdock/partials/section_title.html" %}
+
+        {% if timeline_logs %}
+        <div class="logs-timeline">
+            {% for item in timeline_logs %}
+            <article class="log-entry-card">
+                <div class="log-entry-head">
+                    <div>
+                        <p class="panel-title log-source-badge">{{ item.source }}</p>
+                        <h3>{{ item.title }}</h3>
+                    </div>
+                    <time datetime="{{ item.at.isoformat() if item.at else '' }}">{{ item.at }}</time>
+                </div>
+                <p class="log-entry-summary">{{ item.summary }}</p>
+                <pre class="log-entry-details">{{ item.details }}</pre>
+            </article>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <h3>ログはまだありません</h3>
+            <p>監査ログ、GitHub webhook、branch event が発生するとここに時系列で表示されます。</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}
