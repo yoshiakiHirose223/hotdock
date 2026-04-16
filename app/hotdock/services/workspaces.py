@@ -3,17 +3,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.hotdock.services.audit import record_audit_log
 from app.hotdock.services.auth import deny_workspace_access, require_role
 from app.hotdock.services.security import future_invitation_expiry, generate_token, hash_password, hash_token, utcnow
+from app.models.branch_event import BranchEvent
+from app.models.branch_file import BranchFile
+from app.models.conflict import Conflict
+from app.models.file_collision_branch import FileCollisionBranch
+from app.models.github_install_intent import GithubInstallIntent
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.models.workspace_invitation import WorkspaceInvitation
 from app.models.workspace_member import WorkspaceMember
 from app.models.github_installation import GithubInstallation
+from app.models.github_installation_repository import GithubInstallationRepository
+from app.models.github_pending_claim import GithubPendingClaim
 from app.models.repository import Repository
 from app.models.branch import Branch
 from app.models.file_collision import FileCollision
@@ -294,6 +301,220 @@ def update_workspace_member_role(
     db.commit()
     db.refresh(member)
     return member
+
+
+def leave_workspace(
+    db: Session,
+    request: Request,
+    *,
+    workspace: Workspace,
+    member: WorkspaceMember,
+    actor: User,
+) -> None:
+    try:
+        locked_workspace = db.scalar(
+            select(Workspace).where(Workspace.id == workspace.id, Workspace.deleted_at.is_(None)).with_for_update()
+        )
+        if locked_workspace is None:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        locked_member = db.scalar(
+            select(WorkspaceMember).where(WorkspaceMember.id == member.id).with_for_update()
+        )
+        if locked_member is None:
+            raise HTTPException(status_code=404, detail="Membership not found")
+
+        _ensure_workspace_member_belongs_to_workspace(locked_member, locked_workspace)
+        if locked_member.user_id != actor.id:
+            raise HTTPException(status_code=403, detail="You can only leave your own membership")
+        if locked_member.status != "active" or locked_member.revoked_at is not None:
+            raise HTTPException(status_code=400, detail="Membership is already inactive")
+
+        _assert_owner_lifecycle_allows_change(
+            db,
+            request,
+            workspace=locked_workspace,
+            actor=actor,
+            member=locked_member,
+            next_role=None,
+            action="leave",
+        )
+
+        db.execute(
+            delete(GithubPendingClaim).where(
+                GithubPendingClaim.workspace_id == locked_workspace.id,
+                GithubPendingClaim.user_id == actor.id,
+            )
+        )
+        db.execute(
+            delete(WorkspaceInvitation).where(
+                WorkspaceInvitation.workspace_id == locked_workspace.id,
+                (WorkspaceInvitation.email == actor.email.lower().strip()) | (WorkspaceInvitation.accepted_by_user_id == actor.id),
+            )
+        )
+        db.execute(delete(WorkspaceMember).where(WorkspaceMember.id == locked_member.id))
+        record_audit_log(
+            db,
+            request,
+            actor_type="user",
+            actor_id=actor.id,
+            workspace_id=locked_workspace.id,
+            target_type="workspace_member",
+            target_id=actor.id,
+            action="workspace_member_leave",
+            metadata={
+                "result": "success",
+                "actor_email": actor.email,
+                "target_workspace_id": locked_workspace.id,
+                "target_workspace_name": locked_workspace.name,
+                "role": locked_member.role,
+            },
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        if not isinstance(exc, HTTPException):
+            record_audit_log(
+                db,
+                request,
+                actor_type="user",
+                actor_id=actor.id,
+                workspace_id=workspace.id,
+                target_type="workspace_member",
+                target_id=actor.id,
+                action="workspace_member_leave",
+                metadata={
+                    "result": "failed",
+                    "actor_email": actor.email,
+                    "target_workspace_id": workspace.id,
+                    "target_workspace_name": workspace.name,
+                    "role": member.role,
+                    "error": str(exc),
+                },
+            )
+            db.commit()
+        raise
+
+
+def delete_workspace_and_related_data(
+    db: Session,
+    request: Request,
+    *,
+    workspace: Workspace,
+    actor: User,
+    actor_membership: WorkspaceMember,
+) -> None:
+    require_role(actor_membership, "owner")
+    if actor_membership.workspace_id != workspace.id or actor_membership.user_id != actor.id:
+        raise HTTPException(status_code=403, detail="Workspace delete is not allowed")
+
+    try:
+        locked_workspace = db.scalar(
+            select(Workspace).where(Workspace.id == workspace.id, Workspace.deleted_at.is_(None)).with_for_update()
+        )
+        if locked_workspace is None:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        locked_actor_membership = db.scalar(
+            select(WorkspaceMember).where(WorkspaceMember.id == actor_membership.id).with_for_update()
+        )
+        if locked_actor_membership is None:
+            raise HTTPException(status_code=403, detail="Workspace delete is not allowed")
+        now = utcnow()
+        repository_ids = db.scalars(
+            select(Repository.id).where(Repository.workspace_id == locked_workspace.id)
+        ).all()
+        branch_ids = db.scalars(
+            select(Branch.id).where(Branch.workspace_id == locked_workspace.id)
+        ).all()
+        collision_ids = db.scalars(
+            select(FileCollision.id).where(FileCollision.repository_id.in_(repository_ids) if repository_ids else False)
+        ).all() if repository_ids else []
+
+        db.scalars(
+            select(GithubPendingClaim.id).where(GithubPendingClaim.workspace_id == locked_workspace.id).with_for_update()
+        ).all()
+
+        installations = db.scalars(
+            select(GithubInstallation).where(GithubInstallation.claimed_workspace_id == locked_workspace.id).with_for_update()
+        ).all()
+        installation_ref_ids = [installation.id for installation in installations]
+
+        for installation in installations:
+            installation.claimed_workspace_id = None
+            installation.claimed_by_user_id = None
+            installation.installation_status = "unlinked"
+            installation.unlink_requested_at = now
+            installation.unlinked_at = now
+            installation.unlinked_by_user_id = actor.id
+
+        if installation_ref_ids:
+            db.execute(
+                delete(GithubInstallationRepository).where(
+                    GithubInstallationRepository.workspace_id == locked_workspace.id
+                )
+            )
+
+        if collision_ids:
+            db.execute(delete(FileCollisionBranch).where(FileCollisionBranch.collision_id.in_(collision_ids)))
+        if repository_ids:
+            db.execute(delete(FileCollision).where(FileCollision.repository_id.in_(repository_ids)))
+            db.execute(delete(Conflict).where(Conflict.repository_id.in_(repository_ids)))
+            db.execute(delete(BranchEvent).where(BranchEvent.repository_id.in_(repository_ids)))
+        if branch_ids:
+            db.execute(delete(BranchFile).where(BranchFile.branch_id.in_(branch_ids)))
+            db.execute(delete(Branch).where(Branch.id.in_(branch_ids)))
+        if repository_ids:
+            db.execute(delete(Repository).where(Repository.id.in_(repository_ids)))
+
+        db.execute(delete(GithubPendingClaim).where(GithubPendingClaim.workspace_id == locked_workspace.id))
+        db.execute(delete(WorkspaceInvitation).where(WorkspaceInvitation.workspace_id == locked_workspace.id))
+        db.execute(delete(GithubInstallIntent).where(GithubInstallIntent.workspace_slug == locked_workspace.slug))
+        db.execute(delete(WorkspaceMember).where(WorkspaceMember.workspace_id == locked_workspace.id))
+        db.execute(delete(Workspace).where(Workspace.id == locked_workspace.id))
+
+        record_audit_log(
+            db,
+            request,
+            actor_type="user",
+            actor_id=actor.id,
+            workspace_id=locked_workspace.id,
+            target_type="workspace",
+            target_id=locked_workspace.id,
+            action="workspace_deleted",
+            metadata={
+                "result": "success",
+                "actor_email": actor.email,
+                "target_workspace_id": locked_workspace.id,
+                "target_workspace_name": locked_workspace.name,
+                "actor_role": locked_actor_membership.role,
+                "repository_count": len(repository_ids),
+                "branch_count": len(branch_ids),
+                "linked_installation_count": len(installations),
+            },
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        if not isinstance(exc, HTTPException):
+            record_audit_log(
+                db,
+                request,
+                actor_type="user",
+                actor_id=actor.id,
+                workspace_id=workspace.id,
+                target_type="workspace",
+                target_id=workspace.id,
+                action="workspace_deleted",
+                metadata={
+                    "result": "failed",
+                    "actor_email": actor.email,
+                    "target_workspace_id": workspace.id,
+                    "target_workspace_name": workspace.name,
+                    "actor_role": actor_membership.role,
+                    "error": str(exc),
+                },
+            )
+            db.commit()
+        raise
 
 
 def list_user_workspaces(db: Session, user: User) -> list[WorkspaceAccess]:

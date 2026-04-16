@@ -11,10 +11,12 @@ from app.models.branch import Branch
 from app.models.branch_event import BranchEvent
 from app.models.branch_file import BranchFile
 from app.models.file_collision import FileCollision
+from app.models.audit_log import AuditLog
 from app.models.github_installation import GithubInstallation
 from app.models.repository import Repository
 from app.models.workspace import Workspace
 from app.models.workspace_invitation import WorkspaceInvitation
+from app.models.workspace_member import WorkspaceMember
 
 
 @pytest.mark.parametrize(
@@ -503,3 +505,227 @@ def test_last_owner_cannot_be_demoted_or_revoked(client):
     )
     assert revoke.status_code == 200
     assert "Last owner cannot be removed or demoted" in revoke.text
+
+
+def test_last_owner_cannot_leave_workspace(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Solo Owner",
+            "email": "solo-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Solo Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    response = client.post(
+        "/workspaces/solo-team/leave",
+        data={"csrf_token": owner_csrf},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "Last owner cannot be removed or demoted" in response.text
+
+    db = SessionLocal()
+    membership = db.query(WorkspaceMember).join(Workspace, Workspace.id == WorkspaceMember.workspace_id).filter(Workspace.slug == "solo-team").one()
+    assert membership.status == "active"
+    db.close()
+
+
+def test_owner_transfer_allows_previous_owner_to_leave(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Primary Owner",
+            "email": "primary-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Transfer Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="transfer-team").one()
+    owner = db.query(WorkspaceMember).filter_by(workspace_id=workspace.id).one()
+    second_user_workspace = WorkspaceMember(
+        workspace_id=workspace.id,
+        user_id="member-user-2",
+        role="admin",
+        status="active",
+    )
+    db.add(second_user_workspace)
+    db.commit()
+    db.refresh(second_user_workspace)
+    second_member_id = second_user_workspace.id
+    db.close()
+
+    promote = client.post(
+        f"/workspaces/{workspace.slug}/members/{second_member_id}/role",
+        data={"role": "owner", "csrf_token": owner_csrf},
+        follow_redirects=True,
+    )
+    assert promote.status_code == 200
+
+    leave = client.post(
+        f"/workspaces/{workspace.slug}/leave",
+        data={"csrf_token": owner_csrf},
+        follow_redirects=False,
+    )
+    assert leave.status_code == 303
+    assert leave.headers["location"] == "/dashboard"
+
+    db = SessionLocal()
+    remaining_members = db.query(WorkspaceMember).filter_by(workspace_id=workspace.id).all()
+    assert len(remaining_members) == 1
+    assert remaining_members[0].id == second_member_id
+    assert remaining_members[0].role == "owner"
+    leave_audit = db.query(AuditLog).filter_by(action="workspace_member_leave", workspace_id=workspace.id).one()
+    assert leave_audit.actor_id == owner.user_id
+    db.close()
+
+
+def test_workspace_delete_removes_workspace_owned_data_and_unlinks_installations(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Delete Owner",
+            "email": "delete-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Delete Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="delete-team").one()
+    installation = GithubInstallation(
+        installation_id=3001,
+        github_account_id=99001,
+        github_account_login="delete-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=801,
+        full_name="delete-org/repository-3001",
+        display_name="repository-3001",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_active=True,
+        sync_status="active",
+    )
+    db.add(repository)
+    db.commit()
+    db.close()
+
+    response = client.post(
+        "/workspaces/delete-team/delete",
+        data={"csrf_token": owner_csrf, "confirm_slug": "delete-team"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/workspaces/new"
+
+    db = SessionLocal()
+    assert db.query(Workspace).filter_by(slug="delete-team").count() == 0
+    assert db.query(WorkspaceMember).filter_by(workspace_id=workspace.id).count() == 0
+    assert db.query(Repository).filter_by(workspace_id=workspace.id).count() == 0
+    installation = db.query(GithubInstallation).filter_by(installation_id=3001).one()
+    assert installation.claimed_workspace_id is None
+    assert installation.installation_status == "unlinked"
+    deletion_audit = db.query(AuditLog).filter_by(action="workspace_deleted", target_id=workspace.id).one()
+    assert deletion_audit.actor_type == "user"
+    db.close()
+
+    gone = client.get("/workspaces/delete-team/dashboard", follow_redirects=False)
+    assert gone.status_code == 404
+
+
+def test_unlinked_installation_push_webhook_is_ignored(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Webhook Ignore User",
+            "email": "webhook-ignore@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Webhook Ignore Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="webhook-ignore-team").one()
+    installation = GithubInstallation(
+        installation_id=4001,
+        github_account_id=99901,
+        github_account_login="ignore-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="unlinked",
+        claimed_workspace_id=None,
+    )
+    db.add(installation)
+    db.commit()
+    db.close()
+
+    payload = {
+        "installation": {"id": 4001},
+        "repository": {"id": 9001, "full_name": "ignore-org/repo", "default_branch": "main"},
+        "ref": "refs/heads/feature/test",
+        "before": "0000000000000000000000000000000000000001",
+        "after": "0000000000000000000000000000000000000002",
+        "created": False,
+        "deleted": False,
+        "forced": False,
+        "head_commit": {"id": "0000000000000000000000000000000000000002"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(b"test-webhook-secret", body, hashlib.sha256).hexdigest()
+
+    response = client.post(
+        "/webhooks/github",
+        data=body,
+        headers={
+            "X-GitHub-Delivery": "delivery-unlinked-1",
+            "X-GitHub-Event": "push",
+            "X-Hub-Signature-256": signature,
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+    assert response.json()["reason"] == "installation_unlinked"

@@ -56,6 +56,12 @@
         <div class="empty-inline">
             最後の owner は remove / demote できません。owner を引き継ぐ場合は、先に別 member を owner へ昇格してから自分を変更してください。
         </div>
+        <div class="button-row">
+            <form method="post" action="/workspaces/{{ workspace.slug }}/leave">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="button button-ghost" type="submit">この workspace から退会する</button>
+            </form>
+        </div>
     </article>
     <article class="panel">
         <p class="panel-title">Invite</p>

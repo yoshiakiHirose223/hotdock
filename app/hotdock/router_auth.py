@@ -63,7 +63,9 @@ from app.hotdock.services.workspaces import (
     accept_workspace_invitation,
     create_user,
     create_workspace,
+    delete_workspace_and_related_data,
     invite_workspace_member,
+    leave_workspace,
     list_user_workspaces,
     resolve_workspace_access,
     update_workspace_member_role,
@@ -1177,6 +1179,79 @@ async def workspace_member_role_update(
 
     set_flash(request, "success", "member の role を更新しました。")
     return RedirectResponse(url=f"/workspaces/{workspace_slug}/members", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/workspaces/{workspace_slug}/leave", name="hotdock-workspace-leave")
+async def workspace_leave(
+    workspace_slug: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    csrf_token: str = Form(...),
+):
+    auth, redirect = _require_login(request, db, f"/workspaces/{workspace_slug}/members")
+    if redirect:
+        return redirect
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/members", status_code=status.HTTP_303_SEE_OTHER)
+
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="viewer")
+    try:
+        leave_workspace(
+            db,
+            request,
+            workspace=access.workspace,
+            member=access.membership,
+            actor=auth.user,
+        )
+    except HTTPException as exc:
+        set_flash(request, "error", str(exc.detail))
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/members", status_code=status.HTTP_303_SEE_OTHER)
+
+    set_flash(request, "success", f"{access.workspace.name} から退会しました。")
+    next_workspace = default_workspace_for_user(db, auth.user.id)
+    if next_workspace is not None:
+        return RedirectResponse(url=f"/workspaces/{next_workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/workspaces/new", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/workspaces/{workspace_slug}/delete", name="hotdock-workspace-delete")
+async def workspace_delete(
+    workspace_slug: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    csrf_token: str = Form(...),
+    confirm_slug: str = Form(""),
+):
+    auth, redirect = _require_login(request, db, f"/workspaces/{workspace_slug}/settings")
+    if redirect:
+        return redirect
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/settings", status_code=status.HTTP_303_SEE_OTHER)
+    if confirm_slug.strip() != workspace_slug:
+        set_flash(request, "error", "退会確認のため、workspace slug を正しく入力してください。")
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="owner")
+    workspace_name = access.workspace.name
+    try:
+        delete_workspace_and_related_data(
+            db,
+            request,
+            workspace=access.workspace,
+            actor=auth.user,
+            actor_membership=access.membership,
+        )
+    except HTTPException as exc:
+        set_flash(request, "error", str(exc.detail))
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+    set_flash(request, "success", f"{workspace_name} を退会し、workspace データを削除しました。")
+    next_workspace = default_workspace_for_user(db, auth.user.id)
+    if next_workspace is not None:
+        return RedirectResponse(url=f"/workspaces/{next_workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/workspaces/new", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/webhooks/github", name="hotdock-github-webhook")

@@ -697,6 +697,14 @@ def finalize_github_claim(
         raise HTTPException(status_code=403, detail="Claim belongs to another user")
     if not pending_claim_has_verified_github_identity(locked_claim):
         raise HTTPException(status_code=409, detail="GitHub authorization is not attached to this claim")
+    workspace = db.scalar(
+        select(Workspace).where(
+            Workspace.id == locked_claim.workspace_id,
+            Workspace.deleted_at.is_(None),
+        ).with_for_update()
+    )
+    if workspace is None:
+        raise HTTPException(status_code=409, detail="Workspace is no longer available")
 
     installation = db.scalar(
         select(GithubInstallation)
@@ -1588,6 +1596,8 @@ class HandleGithubPushWebhookService:
             return {"status": "ignored", "reason": "missing_installation_id"}
 
         installation = db.scalar(select(GithubInstallation).where(GithubInstallation.installation_id == installation_id))
+        if installation is not None and installation.installation_status == "unlinked":
+            return {"status": "ignored", "reason": "installation_unlinked"}
         if installation is None or installation.claimed_workspace_id is None:
             return {"status": "ignored", "reason": "installation_unclaimed"}
         if installation.installation_status in {"uninstalled", "suspended"}:
