@@ -119,10 +119,30 @@
     gap: 1rem;
 }
 
+.debug-reset-section {
+    padding-bottom: 0;
+}
+
+.debug-reset-card {
+    display: grid;
+    gap: 1rem;
+    align-items: center;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 1.25rem 1.4rem;
+    border: 1px solid rgba(189, 70, 70, 0.18);
+    border-radius: var(--radius-md);
+    background: rgba(251, 241, 241, 0.92);
+}
+
+.debug-reset-card h2 {
+    margin-bottom: 0.45rem;
+}
+
 @media (max-width: 980px) {
     .auth-panel,
     .auth-panel-wide,
-    .hero-micro-grid {
+    .hero-micro-grid,
+    .debug-reset-card {
         grid-template-columns: 1fr;
     }
 }

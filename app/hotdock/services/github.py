@@ -40,6 +40,99 @@ class PendingClaimResult:
     claim_token: str
 
 
+def delete_all_github_app_data(
+    db: Session,
+    request: Request,
+    *,
+    actor_type: str,
+    actor_id: str | None,
+    actor_label: str | None,
+) -> dict[str, int]:
+    try:
+        repository_ids = db.scalars(select(Repository.id)).all()
+        branch_ids = db.scalars(select(Branch.id)).all()
+        collision_ids = db.scalars(select(FileCollision.id)).all()
+        installation_ids = db.scalars(select(GithubInstallation.id)).all()
+
+        if collision_ids:
+            db.execute(delete(FileCollisionBranch).where(FileCollisionBranch.collision_id.in_(collision_ids)))
+        if repository_ids:
+            db.execute(delete(FileCollision).where(FileCollision.repository_id.in_(repository_ids)))
+            db.execute(delete(Conflict).where(Conflict.repository_id.in_(repository_ids)))
+            db.execute(delete(BranchEvent).where(BranchEvent.repository_id.in_(repository_ids)))
+        if branch_ids:
+            db.execute(delete(BranchFile).where(BranchFile.branch_id.in_(branch_ids)))
+            db.execute(delete(Branch).where(Branch.id.in_(branch_ids)))
+        if repository_ids:
+            db.execute(delete(Repository).where(Repository.id.in_(repository_ids)))
+        if installation_ids:
+            db.execute(
+                delete(GithubInstallationRepository).where(
+                    GithubInstallationRepository.installation_ref_id.in_(installation_ids)
+                )
+            )
+
+        pending_claims_deleted = db.query(GithubPendingClaim).count()
+        install_intents_deleted = db.query(GithubInstallIntent).count()
+        webhook_events_deleted = db.query(GithubWebhookEvent).count()
+        user_links_deleted = db.query(GithubUserLink).count()
+        installations_deleted = db.query(GithubInstallation).count()
+
+        db.execute(delete(GithubPendingClaim))
+        db.execute(delete(GithubInstallIntent))
+        db.execute(delete(GithubWebhookEvent))
+        db.execute(delete(GithubUserLink))
+        db.execute(delete(GithubInstallationRepository))
+        db.execute(delete(GithubInstallation))
+
+        result = {
+            "repositories_deleted": len(repository_ids),
+            "branches_deleted": len(branch_ids),
+            "collisions_deleted": len(collision_ids),
+            "installations_deleted": installations_deleted,
+            "pending_claims_deleted": pending_claims_deleted,
+            "install_intents_deleted": install_intents_deleted,
+            "webhook_events_deleted": webhook_events_deleted,
+            "user_links_deleted": user_links_deleted,
+        }
+        record_audit_log(
+            db,
+            request,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            workspace_id=None,
+            target_type="github_installation",
+            target_id=None,
+            action="github_data_reset",
+            metadata={
+                "result": "success",
+                "actor_label": actor_label,
+                **result,
+            },
+        )
+        db.commit()
+        return result
+    except Exception as exc:
+        db.rollback()
+        record_audit_log(
+            db,
+            request,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            workspace_id=None,
+            target_type="github_installation",
+            target_id=None,
+            action="github_data_reset",
+            metadata={
+                "result": "failed",
+                "actor_label": actor_label,
+                "error": str(exc),
+            },
+        )
+        db.commit()
+        raise
+
+
 def future_install_intent_expiry() -> datetime:
     return utcnow() + timedelta(seconds=settings.github_install_intent_ttl_seconds)
 

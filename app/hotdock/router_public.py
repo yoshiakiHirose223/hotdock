@@ -1,8 +1,11 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
+from starlette import status
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.hotdock.data.compare import COMPARE_COLUMNS, COMPARE_ROWS
 from app.hotdock.data.contact import CONTACT_INFO, CONTACT_SUBJECTS
@@ -18,10 +21,12 @@ from app.hotdock.data.features import (
 )
 from app.hotdock.data.integrations import GITHUB_APP_PAGE, INTEGRATIONS, INTEGRATION_STATUS_STYLES
 from app.hotdock.data.pricing import PRICING_COMPARISON, PRICING_NOTES, PRICING_PLANS
-from app.hotdock.services.auth import attach_auth_context, default_workspace_for_user
+from app.hotdock.services.auth import attach_auth_context, default_workspace_for_user, get_flash, set_flash, verify_form_csrf
 from app.hotdock.services.context import build_public_context
+from app.hotdock.services.github import delete_all_github_app_data
 
 router = APIRouter()
+settings = get_settings()
 
 
 def render_public(template_name: str, context: dict[str, Any]):
@@ -46,6 +51,8 @@ def public_page_context(request: Request, db: Session, **kwargs: Any) -> dict[st
             "current_user": auth.user,
             "dashboard_href": dashboard_href,
             "csrf_token": auth.csrf_token,
+            "flash": get_flash(request),
+            "show_github_reset": settings.app_env != "production",
         }
     )
     return context
@@ -75,6 +82,47 @@ async def home(request: Request, db: Session = Depends(get_db)):
         }
     )
     return render_public("hotdock/public/home.html", context)
+
+
+@router.post("/debug/github-reset", name="hotdock-debug-github-reset")
+async def debug_github_reset(
+    request: Request,
+    db: Session = Depends(get_db),
+    csrf_token: str = Form(...),
+):
+    if settings.app_env == "production":
+        return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+
+    try:
+        verify_form_csrf(request, csrf_token, db)
+    except Exception:
+        set_flash(request, "error", "リセット要求を確認できませんでした。")
+        return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+
+    auth = attach_auth_context(request, db)
+    actor_type = "user" if auth.user else "anonymous"
+    actor_id = auth.user.id if auth.user else None
+    actor_label = auth.user.email if auth.user else "anonymous"
+
+    try:
+        result = delete_all_github_app_data(
+            db,
+            request,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            actor_label=actor_label,
+        )
+    except Exception:
+        set_flash(request, "error", "GitHub App 関連データの削除に失敗しました。")
+        return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+
+    set_flash(
+        request,
+        "success",
+        "GitHub App 関連データを削除しました。"
+        f" installation={result['installations_deleted']} / repository={result['repositories_deleted']} / branch={result['branches_deleted']}",
+    )
+    return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/features", name="hotdock-features")

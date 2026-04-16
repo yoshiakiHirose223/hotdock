@@ -18,6 +18,11 @@
 <body class="{{ body_class }}">
     {% include "hotdock/partials/public_header.html" %}
     <main class="public-main">
+        {% if flash %}
+        <div class="container">
+            <div class="flash-banner is-{{ flash.level }}">{{ flash.message }}</div>
+        </div>
+        {% endif %}
         {% block content %}{% endblock %}
     </main>
     {% include "hotdock/partials/public_footer.html" %}
