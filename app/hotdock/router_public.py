@@ -23,7 +23,7 @@ from app.hotdock.data.integrations import GITHUB_APP_PAGE, INTEGRATIONS, INTEGRA
 from app.hotdock.data.pricing import PRICING_COMPARISON, PRICING_NOTES, PRICING_PLANS
 from app.hotdock.services.auth import attach_auth_context, default_workspace_for_user, get_flash, set_flash, verify_form_csrf
 from app.hotdock.services.context import build_public_context
-from app.hotdock.services.github import delete_all_github_app_data
+from app.hotdock.services.github import delete_all_non_article_data
 
 router = APIRouter()
 settings = get_settings()
@@ -84,8 +84,8 @@ async def home(request: Request, db: Session = Depends(get_db)):
     return render_public("hotdock/public/home.html", context)
 
 
-@router.post("/debug/github-reset", name="hotdock-debug-github-reset")
-async def debug_github_reset(
+@router.post("/debug/all-delete", name="hotdock-debug-all-delete")
+async def debug_all_delete(
     request: Request,
     db: Session = Depends(get_db),
     csrf_token: str = Form(...),
@@ -105,7 +105,7 @@ async def debug_github_reset(
     actor_label = auth.user.email if auth.user else "anonymous"
 
     try:
-        result = delete_all_github_app_data(
+        result = delete_all_non_article_data(
             db,
             request,
             actor_type=actor_type,
@@ -113,16 +113,21 @@ async def debug_github_reset(
             actor_label=actor_label,
         )
     except Exception:
-        set_flash(request, "error", "GitHub App 関連データの削除に失敗しました。")
+        set_flash(request, "error", "全データ削除に失敗しました。")
         return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
+    request.session.clear()
     set_flash(
         request,
         "success",
-        "GitHub App 関連データを削除しました。"
-        f" installation={result['installations_deleted']} / repository={result['repositories_deleted']} / branch={result['branches_deleted']}",
+        "記事DBを除く全データを削除しました。"
+        f" table={result['deleted_tables']} / row={result['deleted_rows']}",
     )
-    return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+    response = RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(settings.auth_cookie_name, path="/")
+    response.delete_cookie(settings.csrf_cookie_name, path="/")
+    response.delete_cookie("session", path="/")
+    return response
 
 
 @router.get("/features", name="hotdock-features")

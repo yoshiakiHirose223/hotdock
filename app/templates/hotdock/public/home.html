@@ -8,9 +8,9 @@
             <div>
                 <p class="eyebrow">Debug Only</p>
                 <h2>GitHub App 関連データを全削除</h2>
-                <p>検証用のリセットです。installation / pending claim / webhook / repository / branch / collision など、GitHub App 関連の DB データを削除してまっさらな状態へ戻します。</p>
+                <p>検証用のリセットです。記事DBを除く全アプリデータを削除して、ユーザー / workspace / session / GitHub 連携データごとまっさらな状態へ戻します。</p>
             </div>
-            <form method="post" action="/debug/github-reset" onsubmit="return window.confirm('GitHub App 関連のDBデータをすべて削除します。続行しますか？');">
+            <form method="post" action="/debug/all-delete" onsubmit="return window.confirm('記事DBを除く全データを削除します。続行しますか？');">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button class="button button-secondary" type="submit">ALL DELETE</button>
             </form>

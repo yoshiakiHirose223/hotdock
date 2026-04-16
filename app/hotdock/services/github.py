@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.hotdock.services.audit import record_audit_log
 from app.hotdock.services.security import future_claim_expiry, generate_token, hash_token, utcnow, verify_token_hash
+from app.models import Base
 from app.models.branch import Branch
 from app.models.branch_event import BranchEvent
 from app.models.branch_file import BranchFile
@@ -40,7 +41,15 @@ class PendingClaimResult:
     claim_token: str
 
 
-def delete_all_github_app_data(
+ARTICLE_TABLE_NAMES = {
+    "articles",
+    "blog_articles",
+    "blog_posts",
+    "posts",
+}
+
+
+def delete_all_non_article_data(
     db: Session,
     request: Request,
     *,
@@ -49,87 +58,27 @@ def delete_all_github_app_data(
     actor_label: str | None,
 ) -> dict[str, int]:
     try:
-        repository_ids = db.scalars(select(Repository.id)).all()
-        branch_ids = db.scalars(select(Branch.id)).all()
-        collision_ids = db.scalars(select(FileCollision.id)).all()
-        installation_ids = db.scalars(select(GithubInstallation.id)).all()
+        table_counts: dict[str, int] = {}
+        deleted_tables: list[str] = []
+        for table in reversed(Base.metadata.sorted_tables):
+            if table.name in ARTICLE_TABLE_NAMES:
+                continue
+            count = db.execute(select(func.count()).select_from(table)).scalar_one()
+            table_counts[table.name] = int(count)
+            db.execute(table.delete())
+            deleted_tables.append(table.name)
 
-        if collision_ids:
-            db.execute(delete(FileCollisionBranch).where(FileCollisionBranch.collision_id.in_(collision_ids)))
-        if repository_ids:
-            db.execute(delete(FileCollision).where(FileCollision.repository_id.in_(repository_ids)))
-            db.execute(delete(Conflict).where(Conflict.repository_id.in_(repository_ids)))
-            db.execute(delete(BranchEvent).where(BranchEvent.repository_id.in_(repository_ids)))
-        if branch_ids:
-            db.execute(delete(BranchFile).where(BranchFile.branch_id.in_(branch_ids)))
-            db.execute(delete(Branch).where(Branch.id.in_(branch_ids)))
-        if repository_ids:
-            db.execute(delete(Repository).where(Repository.id.in_(repository_ids)))
-        if installation_ids:
-            db.execute(
-                delete(GithubInstallationRepository).where(
-                    GithubInstallationRepository.installation_ref_id.in_(installation_ids)
-                )
-            )
-
-        pending_claims_deleted = db.query(GithubPendingClaim).count()
-        install_intents_deleted = db.query(GithubInstallIntent).count()
-        webhook_events_deleted = db.query(GithubWebhookEvent).count()
-        user_links_deleted = db.query(GithubUserLink).count()
-        installations_deleted = db.query(GithubInstallation).count()
-
-        db.execute(delete(GithubPendingClaim))
-        db.execute(delete(GithubInstallIntent))
-        db.execute(delete(GithubWebhookEvent))
-        db.execute(delete(GithubUserLink))
-        db.execute(delete(GithubInstallationRepository))
-        db.execute(delete(GithubInstallation))
-
-        result = {
-            "repositories_deleted": len(repository_ids),
-            "branches_deleted": len(branch_ids),
-            "collisions_deleted": len(collision_ids),
-            "installations_deleted": installations_deleted,
-            "pending_claims_deleted": pending_claims_deleted,
-            "install_intents_deleted": install_intents_deleted,
-            "webhook_events_deleted": webhook_events_deleted,
-            "user_links_deleted": user_links_deleted,
-        }
-        record_audit_log(
-            db,
-            request,
-            actor_type=actor_type,
-            actor_id=actor_id,
-            workspace_id=None,
-            target_type="github_installation",
-            target_id=None,
-            action="github_data_reset",
-            metadata={
-                "result": "success",
-                "actor_label": actor_label,
-                **result,
-            },
-        )
         db.commit()
-        return result
+        return {
+            "deleted_tables": len(deleted_tables),
+            "deleted_rows": sum(table_counts.values()),
+            "table_counts": table_counts,
+            "actor_type": actor_type,
+            "actor_id": actor_id,
+            "actor_label": actor_label,
+        }
     except Exception as exc:
         db.rollback()
-        record_audit_log(
-            db,
-            request,
-            actor_type=actor_type,
-            actor_id=actor_id,
-            workspace_id=None,
-            target_type="github_installation",
-            target_id=None,
-            action="github_data_reset",
-            metadata={
-                "result": "failed",
-                "actor_label": actor_label,
-                "error": str(exc),
-            },
-        )
-        db.commit()
         raise
 
 
