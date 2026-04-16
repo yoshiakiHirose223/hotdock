@@ -49,6 +49,7 @@ from app.hotdock.services.github import (
     record_webhook_event,
     reissue_pending_claim_token,
     resolve_callback_installation,
+    resolve_callback_installation_unverified,
     select_claim_workspace,
     set_pending_oauth_state,
     sync_claimed_installation_repositories,
@@ -930,19 +931,30 @@ async def github_callback(
         set_flash(request, "error", "GitHub installation を特定できませんでした。Hotdock から連携をやり直してください。")
         return RedirectResponse(url="/install/github", status_code=status.HTTP_303_SEE_OTHER)
 
+    verified_identity = True
     try:
         preferred_workspace_id = None
         if state_verified and install_intent and install_intent.workspace_slug:
             preferred_workspace = db.scalar(select(Workspace).where(Workspace.slug == install_intent.workspace_slug))
             preferred_workspace_id = preferred_workspace.id if preferred_workspace is not None else None
         token_payload = await oauth_client.exchange_code(code)
-        github_user, installation = await resolve_callback_installation(
-            db,
-            access_token=token_payload["access_token"],
-            installation_id=installation_id or None,
-            issued_at_ts=int(install_intent.created_at.timestamp()) if state_verified and install_intent else None,
-            preferred_workspace_id=preferred_workspace_id,
-        )
+        try:
+            github_user, installation = await resolve_callback_installation(
+                db,
+                access_token=token_payload["access_token"],
+                installation_id=installation_id or None,
+                issued_at_ts=int(install_intent.created_at.timestamp()) if state_verified and install_intent else None,
+                preferred_workspace_id=preferred_workspace_id,
+            )
+        except Exception:
+            if installation_id <= 0 or state_verified:
+                raise
+            verified_identity = False
+            github_user, installation = await resolve_callback_installation_unverified(
+                db,
+                access_token=token_payload["access_token"],
+                installation_id=installation_id,
+            )
         result = create_callback_pending_claim(
             db,
             request,
@@ -960,6 +972,7 @@ async def github_callback(
                 "source": "callback_without_verified_state",
                 "state_verified": False,
             },
+            verified_identity=verified_identity,
         )
         if state_verified and install_intent:
             consume_github_install_intent(db, intent=install_intent)
@@ -995,7 +1008,10 @@ async def github_callback(
     db.commit()
 
     if auth.user is None:
-        set_flash(request, "success", "GitHub 側の確認が完了しました。Hotdock にログインまたは新規登録すると claim を再開できます。")
+        if verified_identity:
+            set_flash(request, "success", "GitHub 側の確認が完了しました。Hotdock にログインまたは新規登録すると claim を再開できます。")
+        else:
+            set_flash(request, "success", "GitHub App のインストールは検出できました。Hotdock にログインまたは新規登録後、workspace 選択時に GitHub 側の確認を続けます。")
         return RedirectResponse(url=build_login_redirect(claim_url), status_code=status.HTTP_303_SEE_OTHER)
 
     workspace_slug = None
@@ -1032,11 +1048,17 @@ async def github_callback(
             "success",
             "GitHub 側の確認は完了しました。workspace を選んで claim を完了してください。",
         )
-    else:
+    elif verified_identity:
         set_flash(
             request,
             "success",
             "GitHub 側の確認は完了しました。workspace を選んで claim を完了してください。GitHub callback に state が含まれなかったため、自動確定は行っていません。",
+        )
+    else:
+        set_flash(
+            request,
+            "success",
+            "GitHub App のインストールは検出できました。workspace を選んだ後に GitHub 確認を続けて claim を完了してください。",
         )
     return RedirectResponse(url=claim_url, status_code=status.HTTP_303_SEE_OTHER)
 

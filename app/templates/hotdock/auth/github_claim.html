@@ -18,6 +18,8 @@
         <div class="inline-alert">この claim は期限切れです。現在の GitHub 連携ボタンからやり直してください。</div>
         {% elif github_authorized %}
         <div class="inline-alert">GitHub 側の user authorization は完了しています。workspace を選ぶと claim を確定できます。</div>
+        {% elif pending_claim %}
+        <div class="inline-alert">GitHub App の installation は検出できています。workspace を選ぶと GitHub 側の確認を続けて claim を完了します。</div>
         {% endif %}
     </div>
     <div class="auth-card claim-card">

@@ -409,6 +409,27 @@ async def resolve_callback_installation(
     return github_user, candidates[0]
 
 
+async def resolve_callback_installation_unverified(
+    db: Session,
+    *,
+    access_token: str,
+    installation_id: int,
+) -> tuple[dict[str, Any], GithubInstallation]:
+    oauth_client = GithubOAuthClient()
+    app_client = GithubAppClient()
+
+    github_user = await oauth_client.fetch_user(access_token)
+    installation = db.scalar(
+        select(GithubInstallation).where(GithubInstallation.installation_id == installation_id)
+    )
+    if installation is None or installation.installation_status == "uninstalled":
+        installation_payload = await app_client.fetch_installation(installation_id)
+        installation = sync_installation_from_api_payload(db, installation_payload)
+    if installation.installation_status == "uninstalled":
+        raise HTTPException(status_code=404, detail="Installation is already uninstalled")
+    return github_user, installation
+
+
 def _upsert_installation_snapshot(
     db: Session,
     *,
@@ -556,6 +577,7 @@ def create_callback_pending_claim(
     source: str,
     callback_state: str,
     install_intent: dict[str, Any] | None,
+    verified_identity: bool = True,
 ) -> PendingClaimResult:
     result = create_pending_github_claim(
         db,
@@ -564,12 +586,13 @@ def create_callback_pending_claim(
         initiated_via=source,
         setup_payload={
             "source": source,
-            "callback_state_hash": hash_token(callback_state),
-            "authorization_verified_at": utcnow().isoformat(),
+            "callback_state_hash": hash_token(callback_state) if callback_state else None,
+            "authorization_verified_at": utcnow().isoformat() if verified_identity else None,
             "github_account_id": installation.github_account_id,
             "github_account_login": installation.github_account_login,
             "github_account_type": installation.github_account_type,
             "install_intent": install_intent or {},
+            "identity_verification": "verified" if verified_identity else "callback_pending_recheck",
         },
     )
     pending_claim = db.scalar(select(GithubPendingClaim).where(GithubPendingClaim.id == result.pending_claim.id).with_for_update())
@@ -581,9 +604,9 @@ def create_callback_pending_claim(
     pending_claim.expires_at = future_claim_expiry()
     pending_claim.github_user_id = github_user["id"]
     pending_claim.github_user_login = github_user["login"]
-    pending_claim.status = "github_authorized"
+    pending_claim.status = "github_authorized" if verified_identity else "pending"
     pending_claim.oauth_state_hash = None
-    pending_claim.state_verified_at = utcnow()
+    pending_claim.state_verified_at = utcnow() if verified_identity else None
     pending_claim.callback_source = source
     db.commit()
     db.refresh(pending_claim)
