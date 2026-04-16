@@ -263,6 +263,10 @@ async def register_submit(
     redirect_to = sanitize_next_path(next, f"/workspaces/{workspace.slug}/dashboard" if workspace else "/dashboard")
     response = RedirectResponse(url=redirect_to, status_code=status.HTTP_303_SEE_OTHER)
     create_login_session(db, request, response, user=user)
+    claim_context = pop_github_claim_context(request)
+    if claim_context:
+        response.headers["location"] = sanitize_next_path(claim_context["next"], redirect_to)
+        set_flash(request, "success", "登録が完了しました。続けて GitHub App installation の claim を完了してください。")
     return response
 
 
