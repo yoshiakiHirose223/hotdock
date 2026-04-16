@@ -22,6 +22,7 @@ from app.models.branch_file import BranchFile
 from app.models.file_collision import FileCollision
 from app.models.file_collision_branch import FileCollisionBranch
 from app.models.github_installation import GithubInstallation
+from app.models.github_install_intent import GithubInstallIntent
 from app.models.github_installation_repository import GithubInstallationRepository
 from app.models.github_pending_claim import GithubPendingClaim
 from app.models.github_user_link import GithubUserLink
@@ -37,6 +38,10 @@ settings = get_settings()
 class PendingClaimResult:
     pending_claim: GithubPendingClaim
     claim_token: str
+
+
+def future_install_intent_expiry() -> datetime:
+    return utcnow() + timedelta(seconds=settings.github_install_intent_ttl_seconds)
 
 
 def _claim_metadata(pending_claim: GithubPendingClaim) -> dict[str, Any]:
@@ -439,6 +444,65 @@ def create_pending_github_claim(
     db.commit()
     db.refresh(pending)
     return PendingClaimResult(pending_claim=pending, claim_token=claim_token)
+
+
+def create_github_install_intent(
+    db: Session,
+    request: Request,
+    *,
+    state_token: str,
+    workspace_slug: str | None,
+    user_id: str | None,
+    source: str,
+) -> GithubInstallIntent:
+    intent = GithubInstallIntent(
+        state_token_hash=hash_token(state_token),
+        workspace_slug=workspace_slug,
+        user_id=user_id,
+        source=source,
+        expires_at=future_install_intent_expiry(),
+    )
+    db.add(intent)
+    record_audit_log(
+        db,
+        request,
+        actor_type="user" if user_id else "anonymous",
+        actor_id=user_id,
+        workspace_id=None,
+        target_type="github_install_intent",
+        target_id=intent.id,
+        action="github_install_intent_created",
+        metadata={"workspace_slug": workspace_slug, "source": source},
+    )
+    db.commit()
+    db.refresh(intent)
+    return intent
+
+
+def load_github_install_intent_by_state(db: Session, state_token: str) -> GithubInstallIntent | None:
+    return db.scalar(
+        select(GithubInstallIntent).where(GithubInstallIntent.state_token_hash == hash_token(state_token))
+    )
+
+
+def consume_github_install_intent(
+    db: Session,
+    *,
+    intent: GithubInstallIntent,
+) -> GithubInstallIntent:
+    locked_intent = db.scalar(
+        select(GithubInstallIntent).where(GithubInstallIntent.id == intent.id).with_for_update()
+    )
+    if locked_intent is None:
+        raise HTTPException(status_code=404, detail="Install intent not found")
+    if locked_intent.expires_at <= utcnow():
+        raise HTTPException(status_code=410, detail="Install intent expired")
+    if locked_intent.consumed_at is not None:
+        raise HTTPException(status_code=409, detail="Install intent already consumed")
+    locked_intent.consumed_at = utcnow()
+    db.commit()
+    db.refresh(locked_intent)
+    return locked_intent
 
 
 def create_callback_pending_claim(

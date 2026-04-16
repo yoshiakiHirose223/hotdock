@@ -8,6 +8,7 @@ from app.models.conflict import Conflict
 from app.models.file_collision import FileCollision
 from app.models.file_collision_branch import FileCollisionBranch
 from app.models.github_installation import GithubInstallation
+from app.models.github_install_intent import GithubInstallIntent
 from app.models.github_installation_repository import GithubInstallationRepository
 from app.models.github_pending_claim import GithubPendingClaim
 from app.models.github_user_link import GithubUserLink
@@ -30,6 +31,7 @@ __all__ = [
     "FileCollision",
     "FileCollisionBranch",
     "GithubInstallation",
+    "GithubInstallIntent",
     "GithubInstallationRepository",
     "GithubPendingClaim",
     "GithubUserLink",

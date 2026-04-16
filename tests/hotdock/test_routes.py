@@ -3,7 +3,9 @@ import hmac
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.main import app
 from app.core.database import SessionLocal
 from app.models.branch import Branch
 from app.models.branch_event import BranchEvent
@@ -204,14 +206,39 @@ def test_github_claim_flow_claims_installation_to_workspace(client):
     db.close()
 
 
-def test_install_time_callback_requires_state_and_intent(client):
+def test_install_time_callback_without_state_creates_claim_and_redirects_to_login(client):
     response = client.get(
         "/integrations/github/callback?code=mock-code&installation_id=1001&setup_action=install",
         follow_redirects=False,
     )
 
     assert response.status_code == 303
+    assert response.headers["location"].startswith("/login?next=%2Fintegrations%2Fgithub%2Fclaim%2F")
+
+
+def test_install_time_callback_without_installation_id_redirects_to_install(client):
+    response = client.get(
+        "/integrations/github/callback?code=mock-code&setup_action=install",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
     assert response.headers["location"] == "/install/github"
+
+
+def test_install_time_callback_can_resume_without_session_using_db_intent(client):
+    install_start = client.get("/integrations/github/install/start", follow_redirects=False)
+    assert install_start.status_code == 303
+    state = install_start.headers["location"].split("state=")[1]
+
+    with TestClient(app) as fresh_client:
+        callback = fresh_client.get(
+            f"/integrations/github/callback?code=mock-code&state={state}&installation_id=1001&setup_action=install",
+            follow_redirects=False,
+        )
+
+    assert callback.status_code == 303
+    assert callback.headers["location"].startswith("/login?next=%2Fintegrations%2Fgithub%2Fclaim%2F")
 
 
 def test_push_webhook_uses_compare_and_creates_collisions(client):

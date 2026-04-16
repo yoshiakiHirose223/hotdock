@@ -36,9 +36,12 @@ from app.hotdock.services.context import build_auth_context
 from app.hotdock.services.github import (
     GithubOAuthClient,
     complete_github_claim,
+    consume_github_install_intent,
     create_callback_pending_claim,
+    create_github_install_intent,
     find_resumable_pending_claims_for_github_user,
     finalize_github_claim,
+    load_github_install_intent_by_state,
     load_pending_claim_by_token,
     mark_webhook_event_failed,
     pending_claim_has_verified_github_identity,
@@ -501,6 +504,14 @@ async def github_install_start(request: Request, db: Session = Depends(get_db)):
         workspace_slug = _workspace_slug_from_install_intent(db, request, auth, None)
 
     install_state = generate_token()
+    create_github_install_intent(
+        db,
+        request,
+        state_token=install_state,
+        workspace_slug=workspace_slug,
+        user_id=auth.user.id if auth.user else None,
+        source="install_start",
+    )
     request.session["github_install_intent"] = {
         "workspace_slug": workspace_slug,
         "user_id": auth.user.id if auth.user else None,
@@ -693,8 +704,10 @@ async def github_callback(
     setup_action: str = "",
 ):
     auth = attach_auth_context(request, db)
-    install_intent = request.session.get("github_install_intent")
-    install_intent_workspace_slug = _workspace_slug_from_install_intent(db, request, auth, install_intent)
+    install_intent_session = request.session.get("github_install_intent")
+    install_intent_workspace_slug = _workspace_slug_from_install_intent(db, request, auth, install_intent_session)
+    state_verified = False
+    install_intent = None
 
     if error:
         set_flash(
@@ -845,7 +858,55 @@ async def github_callback(
         set_flash(request, "error", "GitHub recovery state が一致しません。もう一度 recovery を実行してください。")
         return RedirectResponse(url="/integrations/github/recover", status_code=status.HTTP_303_SEE_OTHER)
 
-    if install_intent is None:
+    if state:
+        install_intent = load_github_install_intent_by_state(db, state)
+        if install_intent is None:
+            record_audit_log(
+                db,
+                request,
+                actor_type="user" if auth.user else "anonymous",
+                actor_id=auth.user.id if auth.user else None,
+                workspace_id=None,
+                target_type="github_installation",
+                target_id=str(installation_id) if installation_id else None,
+                action="github_callback_failed",
+                metadata={"reason": "missing_install_intent"},
+            )
+            db.commit()
+        else:
+            install_intent_workspace_slug = install_intent.workspace_slug
+            request.session.pop("github_install_intent", None)
+            if install_intent.expires_at <= utcnow():
+                record_audit_log(
+                    db,
+                    request,
+                    actor_type="user" if auth.user else "anonymous",
+                    actor_id=auth.user.id if auth.user else None,
+                    workspace_id=None,
+                    target_type="github_installation",
+                    target_id=str(installation_id) if installation_id else None,
+                    action="github_callback_failed",
+                    metadata={"reason": "install_intent_expired"},
+                )
+                db.commit()
+                install_intent = None
+            elif install_intent.consumed_at is not None:
+                record_audit_log(
+                    db,
+                    request,
+                    actor_type="user" if auth.user else "anonymous",
+                    actor_id=auth.user.id if auth.user else None,
+                    workspace_id=None,
+                    target_type="github_installation",
+                    target_id=str(installation_id) if installation_id else None,
+                    action="github_callback_failed",
+                    metadata={"reason": "install_intent_already_consumed"},
+                )
+                db.commit()
+                install_intent = None
+            else:
+                state_verified = True
+    else:
         record_audit_log(
             db,
             request,
@@ -854,64 +915,26 @@ async def github_callback(
             workspace_id=None,
             target_type="github_installation",
             target_id=str(installation_id) if installation_id else None,
-            action="github_callback_failed",
-            metadata={"reason": "missing_install_intent"},
+            action="github_callback_missing_state",
+            metadata={"reason": "state_not_returned"},
         )
         db.commit()
-        set_flash(request, "error", "GitHub callback の再開情報がありません。Hotdock から GitHub App 連携を開始してください。")
-        return RedirectResponse(url="/install/github", status_code=status.HTTP_303_SEE_OTHER)
 
-    request.session.pop("github_install_intent", None)
-    expected_state = install_intent.get("nonce", "")
-    issued_at = int(install_intent.get("issued_at", 0) or 0)
-    if not state or not expected_state or not hmac.compare_digest(expected_state, state):
-        record_audit_log(
-            db,
-            request,
-            actor_type="user" if auth.user else "anonymous",
-            actor_id=auth.user.id if auth.user else None,
-            workspace_id=None,
-            target_type="github_installation",
-            target_id=str(installation_id) if installation_id else None,
-            action="github_callback_failed",
-            metadata={"reason": "state_verification_failed"},
-        )
-        db.commit()
-        set_flash(request, "error", "GitHub callback state の検証に失敗しました。連携を最初からやり直してください。")
-        redirect_url = "/install/github"
-        if install_intent_workspace_slug:
-            redirect_url = f"/settings/integrations/github?{urlencode({'workspace': install_intent_workspace_slug})}"
-        return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
-    if not issued_at or int(utcnow().timestamp()) - issued_at > settings.github_install_intent_ttl_seconds:
-        record_audit_log(
-            db,
-            request,
-            actor_type="user" if auth.user else "anonymous",
-            actor_id=auth.user.id if auth.user else None,
-            workspace_id=None,
-            target_type="github_installation",
-            target_id=str(installation_id) if installation_id else None,
-            action="github_callback_failed",
-            metadata={"reason": "install_intent_expired"},
-        )
-        db.commit()
-        set_flash(request, "error", "GitHub callback の有効期限が切れました。Hotdock から連携をやり直してください。")
-        redirect_url = "/install/github"
-        if install_intent_workspace_slug:
-            redirect_url = f"/settings/integrations/github?{urlencode({'workspace': install_intent_workspace_slug})}"
-        return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+    if installation_id <= 0:
+        set_flash(request, "error", "GitHub installation を特定できませんでした。Hotdock から連携をやり直してください。")
+        return RedirectResponse(url="/install/github", status_code=status.HTTP_303_SEE_OTHER)
 
     try:
         preferred_workspace_id = None
-        if install_intent and install_intent.get("workspace_slug"):
-            preferred_workspace = db.scalar(select(Workspace).where(Workspace.slug == install_intent["workspace_slug"]))
+        if state_verified and install_intent and install_intent.workspace_slug:
+            preferred_workspace = db.scalar(select(Workspace).where(Workspace.slug == install_intent.workspace_slug))
             preferred_workspace_id = preferred_workspace.id if preferred_workspace is not None else None
         token_payload = await oauth_client.exchange_code(code)
         github_user, installation = await resolve_callback_installation(
             db,
             access_token=token_payload["access_token"],
             installation_id=installation_id or None,
-            issued_at_ts=int((install_intent or {}).get("issued_at", 0) or 0),
+            issued_at_ts=int(install_intent.created_at.timestamp()) if state_verified and install_intent else None,
             preferred_workspace_id=preferred_workspace_id,
         )
         result = create_callback_pending_claim(
@@ -921,8 +944,19 @@ async def github_callback(
             github_user=github_user,
             source="install_callback",
             callback_state=state,
-            install_intent=install_intent,
+            install_intent={
+                "workspace_slug": install_intent.workspace_slug,
+                "user_id": install_intent.user_id,
+                "source": install_intent.source,
+                "issued_at": int(install_intent.created_at.timestamp()),
+                "state_verified": True,
+            } if state_verified and install_intent else {
+                "source": "callback_without_verified_state",
+                "state_verified": False,
+            },
         )
+        if state_verified and install_intent:
+            consume_github_install_intent(db, intent=install_intent)
     except Exception:
         record_audit_log(
             db,
@@ -958,7 +992,17 @@ async def github_callback(
         set_flash(request, "success", "GitHub 側の確認が完了しました。Hotdock にログインまたは新規登録すると claim を再開できます。")
         return RedirectResponse(url=build_login_redirect(claim_url), status_code=status.HTTP_303_SEE_OTHER)
 
-    workspace_slug = _workspace_slug_from_install_intent(db, request, auth, install_intent)
+    workspace_slug = None
+    if state_verified and install_intent:
+        workspace_slug = _workspace_slug_from_install_intent(
+            db,
+            request,
+            auth,
+            {
+                "workspace_slug": install_intent.workspace_slug,
+                "user_id": install_intent.user_id,
+            },
+        )
     if workspace_slug:
         workspace = db.scalar(select(Workspace).where(Workspace.slug == workspace_slug))
         if workspace is not None:
@@ -976,11 +1020,18 @@ async def github_callback(
             except Exception:
                 set_flash(request, "error", "workspace への自動紐付けに失敗しました。workspace を選択して再開してください。")
 
-    set_flash(
-        request,
-        "success",
-        "GitHub 側の確認は完了しました。workspace を選んで claim を完了してください。",
-    )
+    if state_verified:
+        set_flash(
+            request,
+            "success",
+            "GitHub 側の確認は完了しました。workspace を選んで claim を完了してください。",
+        )
+    else:
+        set_flash(
+            request,
+            "success",
+            "GitHub 側の確認は完了しました。workspace を選んで claim を完了してください。GitHub callback に state が含まれなかったため、自動確定は行っていません。",
+        )
     return RedirectResponse(url=claim_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
