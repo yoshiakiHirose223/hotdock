@@ -141,6 +141,15 @@ body.page-app {
     margin-top: 1.25rem;
 }
 
+.log-metadata {
+    display: block;
+    max-width: 520px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.82rem;
+    color: var(--text-soft);
+}
+
 .panel {
     border-radius: 20px;
 }

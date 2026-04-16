@@ -1,0 +1,121 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<section class="app-grid two-up">
+    <article class="panel">
+        <p class="panel-title">GitHub Installations</p>
+        <h2>{{ workspace.name }}</h2>
+        {% if log_installations %}
+        <ul class="stack-list">
+            {% for installation in log_installations %}
+            <li>
+                <strong>{{ installation.github_account_login or ("installation-" ~ installation.installation_id) }}</strong>
+                <span>{{ installation.installation_status }}</span>
+                <p>ID: {{ installation.installation_id }}</p>
+                {% if installation.unlinked_at %}
+                <p>unlinked_at: {{ installation.unlinked_at }}</p>
+                {% endif %}
+                {% if installation.uninstalled_at %}
+                <p>uninstalled_at: {{ installation.uninstalled_at }}</p>
+                {% endif %}
+                {% if installation.suspended_at %}
+                <p>suspended_at: {{ installation.suspended_at }}</p>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty-inline">claim 済み installation はまだありません。</div>
+        {% endif %}
+    </article>
+
+    <article class="panel">
+        <p class="panel-title">Pending Claims</p>
+        <h2>再開待ちの連携</h2>
+        {% if log_pending_claims %}
+        <ul class="stack-list">
+            {% for claim in log_pending_claims %}
+            <li>
+                <strong>Installation {{ claim.installation_id }}</strong>
+                <span>{{ claim.status }}</span>
+                <p>GitHub User: {{ claim.github_user_login or "未確認" }}</p>
+                <p>Workspace: {{ claim.workspace_id or "未選択" }}</p>
+                <p>Expires: {{ claim.expires_at }}</p>
+                {% if claim.last_resume_at %}
+                <p>Last Resume: {{ claim.last_resume_at }}</p>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty-inline">保留中の claim はありません。</div>
+        {% endif %}
+    </article>
+</section>
+
+<section class="panel">
+    <p class="panel-title">Webhook Events</p>
+    <h2>GitHub からの受信履歴</h2>
+    {% if log_webhook_events %}
+    <div class="table-wrap">
+        <table class="app-table">
+            <thead>
+                <tr>
+                    <th>Received</th>
+                    <th>Event</th>
+                    <th>Installation</th>
+                    <th>Status</th>
+                    <th>Error</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for event in log_webhook_events %}
+                <tr>
+                    <td>{{ event.received_at }}</td>
+                    <td>{{ event.event_name }}{% if event.action_name %} / {{ event.action_name }}{% endif %}</td>
+                    <td>{{ event.installation_id or "-" }}</td>
+                    <td>{{ event.processing_status }}</td>
+                    <td>{{ event.error_message or "-" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-inline">関連する webhook はまだありません。</div>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <p class="panel-title">Audit Logs</p>
+    <h2>アプリ内操作の履歴</h2>
+    {% if log_audit_logs %}
+    <div class="table-wrap">
+        <table class="app-table">
+            <thead>
+                <tr>
+                    <th>At</th>
+                    <th>Action</th>
+                    <th>Actor</th>
+                    <th>Target</th>
+                    <th>Metadata</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in log_audit_logs %}
+                <tr>
+                    <td>{{ log.created_at }}</td>
+                    <td>{{ log.action }}</td>
+                    <td>{{ log.actor_type }}{% if log.actor_id %} / {{ log.actor_id }}{% endif %}</td>
+                    <td>{{ log.target_type }}{% if log.target_id %} / {{ log.target_id }}{% endif %}</td>
+                    <td><code class="log-metadata">{{ log.event_metadata }}</code></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-inline">監査ログはまだありません。</div>
+    {% endif %}
+</section>
+{% endblock %}

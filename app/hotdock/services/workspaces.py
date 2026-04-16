@@ -541,12 +541,13 @@ def build_workspace_navigation(workspace_slug: str, current_role: str | None = N
         {"label": "Branches", "href": f"{base}/branches", "key": "workspace-branches"},
         {"label": "Conflicts", "href": f"{base}/conflicts", "key": "workspace-conflicts"},
         {"label": "Members", "href": f"{base}/members", "key": "workspace-members"},
+        {"label": "Logs", "href": f"{base}/logs", "key": "workspace-logs"},
         {"label": "Settings", "href": f"{base}/settings", "key": "workspace-settings"},
         {"label": "Billing", "href": f"{base}/billing", "key": "workspace-billing"},
         {"label": "GitHub", "href": f"/settings/integrations/github?workspace={workspace_slug}", "key": "workspace-github"},
     ]
     if current_role not in {"owner", "admin"}:
-        navigation = [item for item in navigation if item["key"] not in {"workspace-settings", "workspace-github"}]
+        navigation = [item for item in navigation if item["key"] not in {"workspace-settings", "workspace-github", "workspace-logs"}]
     if current_role != "owner":
         navigation = [item for item in navigation if item["key"] != "workspace-billing"]
     return navigation
