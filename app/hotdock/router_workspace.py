@@ -20,7 +20,7 @@ from app.hotdock.services.auth import (
     set_flash,
 )
 from app.hotdock.services.context import build_app_context
-from app.hotdock.services.github import manual_sync_workspace_installation_repositories
+from app.hotdock.services.github import SINGLE_REPOSITORY_INSTALLATION_ERROR, manual_sync_workspace_installation_repositories
 from app.hotdock.services.workspaces import (
     build_workspace_navigation,
     resolve_workspace_access,
@@ -184,6 +184,8 @@ async def workspace_repositories_sync(
         message = "repository 同期に失敗しました。"
         if getattr(exc, "detail", None) == "No claimed installations":
             message = "先に GitHub App installation を claim してください。"
+        elif getattr(exc, "detail", None) == SINGLE_REPOSITORY_INSTALLATION_ERROR:
+            message = SINGLE_REPOSITORY_INSTALLATION_ERROR
         else:
             message = "GitHub 側の認証または installation 状態を確認してください。"
         record_audit_log(

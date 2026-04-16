@@ -34,6 +34,11 @@ from app.models.workspace import Workspace
 
 settings = get_settings()
 
+SINGLE_REPOSITORY_INSTALLATION_ERROR = (
+    "GitHub App 連携は 1 installation につき 1 repository のみ対応しています。"
+    "GitHub 側で対象 repository を 1 件に絞ってから、もう一度 claim または同期を実行してください。"
+)
+
 
 @dataclass
 class PendingClaimResult:
@@ -1149,6 +1154,24 @@ def sync_claimed_installation_repositories(db: Session, installation: GithubInst
             GithubInstallationRepository.status == "active",
         )
     ).all()
+    if len(installation_repositories) > 1:
+        installation.installation_status = "repository_limit_exceeded"
+        installation.updated_at = utcnow()
+        repositories = db.scalars(
+            select(Repository).where(
+                Repository.workspace_id == installation.claimed_workspace_id,
+                Repository.github_installation_id == installation.id,
+                Repository.deleted_at.is_(None),
+            )
+        ).all()
+        for repository in repositories:
+            repository.is_active = False
+            repository.sync_status = "repository_limit_exceeded"
+            repository.last_synced_at = utcnow()
+        db.commit()
+        raise HTTPException(status_code=409, detail=SINGLE_REPOSITORY_INSTALLATION_ERROR)
+    if len(installation_repositories) <= 1 and installation.installation_status == "repository_limit_exceeded":
+        installation.installation_status = "active" if installation.claimed_workspace_id else "claim_pending"
     for installation_repository in installation_repositories:
         repository = db.scalar(
             select(Repository).where(

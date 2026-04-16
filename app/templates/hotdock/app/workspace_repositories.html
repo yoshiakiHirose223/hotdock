@@ -34,7 +34,13 @@
                     <td>
                         {{ repository.sync_status }}
                         {% if not repository.is_active %}
-                        <div class="muted-copy">現在は監視対象外です。GitHub App の再連携または repository 再追加で戻せます。</div>
+                        <div class="muted-copy">
+                            {% if repository.sync_status == "repository_limit_exceeded" %}
+                            GitHub 側で複数 repository が選択されています。1 件に絞ってから再同期してください。
+                            {% else %}
+                            現在は監視対象外です。GitHub App の再連携または repository 再追加で戻せます。
+                            {% endif %}
+                        </div>
                         {% endif %}
                     </td>
                 </tr>
