@@ -26,11 +26,11 @@
         <ul class="stack-list">
             <li>
                 <strong>Repositories</strong>
-                <span>installation_repositories webhook が届くと反映されます。</span>
+                <span>installation_repositories webhook と手動同期で候補一覧を更新します。</span>
             </li>
             <li>
                 <strong>Branches / Conflicts</strong>
-                <span>claim 後に対象 repository へ push が入ると更新されます。</span>
+                <span>監視対象に選んだ repository へ push が入ると更新されます。</span>
             </li>
         </ul>
     </article>
@@ -56,7 +56,7 @@
             <li>
                 <strong>{{ repository.display_name }}</strong>
                 <span>{{ repository.full_name }}</span>
-                <p>{{ repository.sync_status }}</p>
+                <p>{{ repository.selection_status }} / {{ repository.detail_sync_status }}</p>
             </li>
             {% endfor %}
         </ul>

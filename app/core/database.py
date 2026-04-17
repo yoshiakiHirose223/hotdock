@@ -66,7 +66,16 @@ def _execute_upgrade_sql(sql: str) -> None:
 def apply_runtime_schema_upgrades() -> None:
     repository_columns = [
         ("default_branch", "default_branch VARCHAR(255)"),
+        ("is_available", "is_available BOOLEAN NOT NULL DEFAULT TRUE"),
         ("is_active", "is_active BOOLEAN NOT NULL DEFAULT TRUE"),
+        ("selection_status", "selection_status VARCHAR(32) DEFAULT 'unselected'"),
+        ("activated_at", "activated_at TIMESTAMP"),
+        ("deactivated_at", "deactivated_at TIMESTAMP"),
+        ("inaccessible_reason", "inaccessible_reason VARCHAR(64)"),
+        ("detail_sync_status", "detail_sync_status VARCHAR(32) DEFAULT 'not_started'"),
+        ("detail_sync_error_message", "detail_sync_error_message VARCHAR(2048)"),
+        ("last_detail_sync_started_at", "last_detail_sync_started_at TIMESTAMP"),
+        ("last_detail_sync_completed_at", "last_detail_sync_completed_at TIMESTAMP"),
     ]
     branch_columns = [
         ("current_head_sha", "current_head_sha VARCHAR(64)"),
@@ -111,7 +120,20 @@ def apply_runtime_schema_upgrades() -> None:
         _ensure_column("github_installations", column_name, ddl)
 
     _execute_upgrade_sql(
-        "UPDATE repositories SET is_active = TRUE WHERE is_active IS NULL"
+        "UPDATE repositories SET "
+        "is_available = COALESCE(is_available, TRUE), "
+        "is_active = COALESCE(is_active, TRUE), "
+        "selection_status = COALESCE(selection_status, CASE WHEN COALESCE(is_active, TRUE) THEN 'active' ELSE 'unselected' END), "
+        "detail_sync_status = COALESCE(detail_sync_status, CASE WHEN COALESCE(is_active, TRUE) AND last_synced_at IS NOT NULL THEN 'completed' ELSE 'not_started' END)"
+    )
+    _execute_upgrade_sql(
+        "UPDATE repositories SET "
+        "activated_at = COALESCE(activated_at, CASE WHEN selection_status = 'active' THEN last_synced_at ELSE NULL END), "
+        "deactivated_at = COALESCE(deactivated_at, CASE WHEN selection_status IN ('inactive', 'inaccessible') THEN last_synced_at ELSE NULL END)"
+    )
+    _execute_upgrade_sql(
+        "UPDATE repositories SET "
+        "is_active = CASE WHEN selection_status = 'active' THEN TRUE ELSE FALSE END"
     )
     _execute_upgrade_sql(
         "UPDATE branches SET current_head_sha = COALESCE(current_head_sha, last_commit_sha), "
@@ -130,6 +152,9 @@ def apply_runtime_schema_upgrades() -> None:
 
     index_statements = [
         "CREATE INDEX IF NOT EXISTS ix_repositories_is_active ON repositories (is_active)",
+        "CREATE INDEX IF NOT EXISTS ix_repositories_is_available ON repositories (is_available)",
+        "CREATE INDEX IF NOT EXISTS ix_repositories_selection_status ON repositories (selection_status)",
+        "CREATE INDEX IF NOT EXISTS ix_repositories_detail_sync_status ON repositories (detail_sync_status)",
         "CREATE INDEX IF NOT EXISTS ix_branches_is_deleted ON branches (is_deleted)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_repository_id ON branch_files (repository_id)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_normalized_path ON branch_files (normalized_path)",

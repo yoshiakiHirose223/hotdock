@@ -4,58 +4,125 @@
 <section class="panel">
     <div class="panel-head">
         <div>
-            <p class="panel-title">Repositories</p>
+            <p class="panel-title">Repository Catalog</p>
             <h2>{{ workspace.name }}</h2>
         </div>
         {% if current_membership and current_membership.role in ["owner", "admin"] %}
         <form method="post" action="/workspaces/{{ workspace.slug }}/repositories/sync">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="button button-secondary" type="submit">リポジトリを同期</button>
+            <button class="button button-secondary" type="submit">repository 候補を再同期</button>
         </form>
         {% endif %}
     </div>
-    {% if repositories %}
+    <div class="inline-alert">
+        連携された repository は候補一覧として取り込みます。実際に監視する repository は {{ repository_limit }} 件だけ選択してください。
+    </div>
+    <div class="inline-alert">
+        切り替えると現在の監視対象は停止します。GitHub 側で削除・権限変更された repository は自動で監視停止されます。
+    </div>
+    {% if active_repository %}
+    <div class="summary-strip">
+        <strong>現在監視中:</strong>
+        <span>{{ active_repository.display_name }}</span>
+        <span class="muted-copy">{{ active_repository.full_name }}</span>
+    </div>
+    {% else %}
+    <div class="summary-strip">
+        <strong>現在監視中:</strong>
+        <span>未選択</span>
+    </div>
+    {% endif %}
+</section>
+
+<section class="panel">
     <div class="table-wrap">
         <table class="app-table">
             <thead>
                 <tr>
-                    <th>Name</th>
-                    <th>Full name</th>
+                    <th>Repository</th>
                     <th>Visibility</th>
-                    <th>Sync</th>
+                    <th>Default Branch</th>
+                    <th>Status</th>
+                    <th>Detail Sync</th>
+                    <th>Last Sync</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
                 {% for repository in repositories %}
                 <tr>
-                    <td>{{ repository.display_name }}</td>
-                    <td>{{ repository.full_name }}</td>
-                    <td>{{ repository.visibility }}</td>
                     <td>
-                        {{ repository.sync_status }}
-                        {% if not repository.is_active %}
-                        <div class="muted-copy">
-                            {% if repository.sync_status == "repository_limit_exceeded" %}
-                            GitHub 側で複数 repository が選択されています。1 件に絞ってから再同期してください。
+                        <strong>{{ repository.display_name }}</strong>
+                        <div class="muted-copy">{{ repository.full_name }}</div>
+                        {% if repository.inaccessible_reason %}
+                        <div class="muted-copy">reason: {{ repository.inaccessible_reason }}</div>
+                        {% endif %}
+                    </td>
+                    <td>{{ repository.visibility }}</td>
+                    <td>{{ repository.default_branch or "-" }}</td>
+                    <td>
+                        <span class="badge {% if repository.selection_status == 'active' %}badge-success{% elif repository.selection_status == 'inaccessible' %}badge-danger{% elif repository.selection_status == 'inactive' %}badge-warning{% else %}badge-muted{% endif %}">
+                            {{ selection_status_labels.get(repository.selection_status, repository.selection_status) }}
+                        </span>
+                        {% if not repository.is_available %}
+                        <div class="muted-copy">GitHub App から現在アクセスできません</div>
+                        {% elif repository.selection_status == 'unselected' %}
+                        <div class="muted-copy">候補一覧にはありますが、まだ監視していません</div>
+                        {% elif repository.selection_status == 'inactive' %}
+                        <div class="muted-copy">以前の監視対象です。再度選ぶと切り替わります</div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="badge {% if repository.detail_sync_status == 'completed' %}badge-success{% elif repository.detail_sync_status == 'error' %}badge-danger{% elif repository.detail_sync_status == 'syncing' %}badge-warning{% else %}badge-muted{% endif %}">
+                            {{ detail_sync_labels.get(repository.detail_sync_status, repository.detail_sync_status) }}
+                        </span>
+                        {% if repository.detail_sync_error_message %}
+                        <div class="muted-copy">{{ repository.detail_sync_error_message }}</div>
+                        {% endif %}
+                    </td>
+                    <td>{{ repository.last_synced_at or "-" }}</td>
+                    <td>
+                        <div class="button-stack">
+                            {% if current_membership and current_membership.role in ["owner", "admin"] %}
+                                {% if repository.selection_status == 'active' %}
+                                <span class="button button-ghost is-disabled">監視中</span>
+                                <form method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ repository.id }}/detail-sync">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button class="button button-secondary" type="submit">詳細を再同期</button>
+                                </form>
+                                {% elif repository.selection_status in ['unselected', 'inactive'] and repository.is_available %}
+                                <form method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ repository.id }}/activate">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button class="button button-primary" type="submit">
+                                        {% if repository.selection_status == 'inactive' %}
+                                        この repository に切り替える
+                                        {% else %}
+                                        この repository を監視対象にする
+                                        {% endif %}
+                                    </button>
+                                </form>
+                                {% else %}
+                                <span class="button button-ghost is-disabled">GitHub App からアクセスできません</span>
+                                {% endif %}
                             {% else %}
-                            現在は監視対象外です。GitHub App の再連携または repository 再追加で戻せます。
+                            <span class="muted-copy">owner / admin が操作できます</span>
                             {% endif %}
                         </div>
-                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
-    {% else %}
+
+    {% if not repositories %}
     <div class="empty-state">
-        <h3>repository はまだありません</h3>
-        <p>GitHub App installation の claim 完了後、同期を実行すると repository と branch 一覧を取得します。branch の touched files や conflict は、その後の push webhook で更新されます。</p>
+        <h3>repository 候補はまだありません</h3>
+        <p>GitHub App installation を claim したあと、候補一覧を同期すると利用可能な repository が表示されます。詳細同期は監視対象に選んだ repository だけ実行します。</p>
         {% if current_membership and current_membership.role in ["owner", "admin"] %}
         <form class="empty-state-actions" method="post" action="/workspaces/{{ workspace.slug }}/repositories/sync">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="button button-primary" type="submit">リポジトリを今すぐ反映する</button>
+            <button class="button button-primary" type="submit">repository 候補を今すぐ反映する</button>
         </form>
         {% endif %}
     </div>

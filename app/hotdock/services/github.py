@@ -34,10 +34,15 @@ from app.models.workspace import Workspace
 
 settings = get_settings()
 
-SINGLE_REPOSITORY_INSTALLATION_ERROR = (
-    "GitHub App 連携は 1 installation につき 1 repository のみ対応しています。"
-    "GitHub 側で対象 repository を 1 件に絞ってから、もう一度 claim または同期を実行してください。"
-)
+MAX_ACTIVE_REPOSITORIES_PER_WORKSPACE = 1
+REPOSITORY_SELECTION_UNSELECTED = "unselected"
+REPOSITORY_SELECTION_ACTIVE = "active"
+REPOSITORY_SELECTION_INACTIVE = "inactive"
+REPOSITORY_SELECTION_INACCESSIBLE = "inaccessible"
+DETAIL_SYNC_NOT_STARTED = "not_started"
+DETAIL_SYNC_SYNCING = "syncing"
+DETAIL_SYNC_COMPLETED = "completed"
+DETAIL_SYNC_ERROR = "error"
 
 
 @dataclass
@@ -115,6 +120,27 @@ def pending_claim_has_verified_github_identity(pending_claim: GithubPendingClaim
         pending_claim.github_user_id is not None
         and bool(pending_claim.github_user_login)
         and bool(metadata.get("authorization_verified_at"))
+    )
+
+
+def active_repository_limit() -> int:
+    return MAX_ACTIVE_REPOSITORIES_PER_WORKSPACE
+
+
+def repository_detail_sync_allowed(repository: Repository) -> bool:
+    return (
+        repository.is_active
+        and repository.is_available
+        and repository.selection_status == REPOSITORY_SELECTION_ACTIVE
+        and repository.deleted_at is None
+    )
+
+
+def repository_selection_allowed(repository: Repository) -> bool:
+    return (
+        repository.deleted_at is None
+        and repository.is_available
+        and repository.selection_status != REPOSITORY_SELECTION_INACCESSIBLE
     )
 
 
@@ -956,6 +982,10 @@ def unlink_github_installation(
     ).all()
     for repository in repositories:
         repository.is_active = False
+        repository.is_available = False
+        repository.selection_status = REPOSITORY_SELECTION_INACCESSIBLE
+        repository.inaccessible_reason = "permission_lost"
+        repository.deactivated_at = repository.deactivated_at or now
         repository.sync_status = "unlinked"
         repository.last_synced_at = now
 
@@ -1119,6 +1149,10 @@ def sync_installation_repositories_event(db: Session, payload: dict[str, Any]) -
             db.add(record)
         else:
             record.workspace_id = workspace_id
+            record.full_name = repository_payload.get("full_name") or record.full_name
+            record.name = repository_payload.get("name") or record.name
+            record.private = repository_payload.get("private", record.private)
+            record.default_branch = repository_payload.get("default_branch") or record.default_branch
             record.status = "active"
             record.removed_at = None
     for repository_payload in payload.get("repositories_removed") or []:
@@ -1131,15 +1165,6 @@ def sync_installation_repositories_event(db: Session, payload: dict[str, Any]) -
         if record is not None:
             record.status = "removed"
             record.removed_at = utcnow()
-        repository = db.scalar(
-            select(Repository).where(
-                Repository.workspace_id == installation.claimed_workspace_id,
-                Repository.github_repository_id == repository_payload["id"],
-            )
-        )
-        if repository is not None:
-            repository.is_active = False
-            repository.sync_status = "removed"
     db.commit()
     if installation.claimed_workspace_id is not None:
         sync_claimed_installation_repositories(db, installation)
@@ -1148,40 +1173,46 @@ def sync_installation_repositories_event(db: Session, payload: dict[str, Any]) -
 def sync_claimed_installation_repositories(db: Session, installation: GithubInstallation) -> None:
     if installation.claimed_workspace_id is None:
         return
+    workspace_id = installation.claimed_workspace_id
+    now = utcnow()
+    if installation.installation_status in {"uninstalled", "suspended", "unlinked"}:
+        repositories = db.scalars(
+            select(Repository).where(
+                Repository.workspace_id == workspace_id,
+                Repository.github_installation_id == installation.id,
+                Repository.deleted_at.is_(None),
+            )
+        ).all()
+        for repository in repositories:
+            if repository.selection_status == REPOSITORY_SELECTION_ACTIVE and repository.deactivated_at is None:
+                repository.deactivated_at = now
+            repository.is_available = False
+            repository.is_active = False
+            repository.selection_status = REPOSITORY_SELECTION_INACCESSIBLE
+            repository.inaccessible_reason = "permission_lost"
+            repository.sync_status = "inaccessible"
+            repository.last_synced_at = now
+        db.commit()
+        return
+
     installation_repositories = db.scalars(
         select(GithubInstallationRepository).where(
             GithubInstallationRepository.installation_ref_id == installation.id,
             GithubInstallationRepository.status == "active",
         )
     ).all()
-    if len(installation_repositories) > 1:
-        installation.installation_status = "repository_limit_exceeded"
-        installation.updated_at = utcnow()
-        repositories = db.scalars(
-            select(Repository).where(
-                Repository.workspace_id == installation.claimed_workspace_id,
-                Repository.github_installation_id == installation.id,
-                Repository.deleted_at.is_(None),
-            )
-        ).all()
-        for repository in repositories:
-            repository.is_active = False
-            repository.sync_status = "repository_limit_exceeded"
-            repository.last_synced_at = utcnow()
-        db.commit()
-        raise HTTPException(status_code=409, detail=SINGLE_REPOSITORY_INSTALLATION_ERROR)
-    if len(installation_repositories) <= 1 and installation.installation_status == "repository_limit_exceeded":
-        installation.installation_status = "active" if installation.claimed_workspace_id else "claim_pending"
+    seen_repository_ids = {row.github_repository_id for row in installation_repositories}
+
     for installation_repository in installation_repositories:
         repository = db.scalar(
             select(Repository).where(
-                Repository.workspace_id == installation.claimed_workspace_id,
+                Repository.workspace_id == workspace_id,
                 Repository.github_repository_id == installation_repository.github_repository_id,
             )
         )
         if repository is None:
             repository = Repository(
-                workspace_id=installation.claimed_workspace_id,
+                workspace_id=workspace_id,
                 github_installation_id=installation.id,
                 github_repository_id=installation_repository.github_repository_id,
                 full_name=installation_repository.full_name,
@@ -1189,16 +1220,54 @@ def sync_claimed_installation_repositories(db: Session, installation: GithubInst
                 default_branch=installation_repository.default_branch,
                 provider="github",
                 visibility="private" if installation_repository.private else "public",
-                is_active=True,
-                sync_status="active",
-                last_synced_at=utcnow(),
+                is_available=True,
+                is_active=False,
+                selection_status=REPOSITORY_SELECTION_UNSELECTED,
+                sync_status="catalog_synced",
+                detail_sync_status=DETAIL_SYNC_NOT_STARTED,
+                last_synced_at=now,
             )
             db.add(repository)
         else:
+            repository.github_installation_id = installation.id
+            repository.full_name = installation_repository.full_name
+            repository.display_name = installation_repository.name
             repository.default_branch = installation_repository.default_branch or repository.default_branch
+            repository.visibility = "private" if installation_repository.private else "public"
+            repository.is_available = True
+            repository.inaccessible_reason = None
+            if repository.selection_status == REPOSITORY_SELECTION_INACCESSIBLE:
+                repository.selection_status = REPOSITORY_SELECTION_INACTIVE
+            elif not repository.selection_status:
+                repository.selection_status = REPOSITORY_SELECTION_UNSELECTED
+            repository.is_active = repository.selection_status == REPOSITORY_SELECTION_ACTIVE
+            repository.sync_status = "catalog_synced"
+            repository.last_synced_at = now
+
+        if repository.selection_status == REPOSITORY_SELECTION_ACTIVE:
             repository.is_active = True
-            repository.sync_status = "active"
-            repository.last_synced_at = utcnow()
+        elif repository.selection_status in {REPOSITORY_SELECTION_UNSELECTED, REPOSITORY_SELECTION_INACTIVE, REPOSITORY_SELECTION_INACCESSIBLE}:
+            repository.is_active = False
+
+    existing_repositories = db.scalars(
+        select(Repository).where(
+            Repository.workspace_id == workspace_id,
+            Repository.github_installation_id == installation.id,
+            Repository.deleted_at.is_(None),
+        )
+    ).all()
+    for repository in existing_repositories:
+        if repository.github_repository_id in seen_repository_ids:
+            continue
+        was_active = repository.selection_status == REPOSITORY_SELECTION_ACTIVE
+        repository.is_available = False
+        repository.selection_status = REPOSITORY_SELECTION_INACCESSIBLE
+        repository.inaccessible_reason = "removed_from_installation"
+        repository.is_active = False
+        repository.sync_status = "inaccessible"
+        if was_active and repository.deactivated_at is None:
+            repository.deactivated_at = now
+        repository.last_synced_at = now
     db.commit()
 
 
@@ -1210,6 +1279,7 @@ def _upsert_installation_repositories_from_api(
 ) -> int:
     seen_repository_ids: set[int] = set()
     synced_count = 0
+    now = utcnow()
     for repository_payload in repositories_payload:
         github_repository_id = repository_payload.get("id")
         if github_repository_id is None:
@@ -1251,17 +1321,7 @@ def _upsert_installation_repositories_from_api(
     for record in existing_records:
         if record.github_repository_id not in seen_repository_ids:
             record.status = "removed"
-            record.removed_at = utcnow()
-            if installation.claimed_workspace_id is not None:
-                repository = db.scalar(
-                    select(Repository).where(
-                        Repository.workspace_id == installation.claimed_workspace_id,
-                        Repository.github_repository_id == record.github_repository_id,
-                    )
-                )
-                if repository is not None:
-                    repository.is_active = False
-                    repository.sync_status = "removed"
+            record.removed_at = now
 
     db.commit()
     sync_claimed_installation_repositories(db, installation)
@@ -1327,6 +1387,143 @@ def _upsert_repository_branches_from_api(
     return synced_count
 
 
+def _mark_repository_detail_sync_state(
+    db: Session,
+    *,
+    repository: Repository,
+    status_value: str,
+    error_message: str | None = None,
+    started_at: datetime | None = None,
+    completed_at: datetime | None = None,
+) -> None:
+    repository.detail_sync_status = status_value
+    repository.detail_sync_error_message = error_message[:2048] if error_message else None
+    if started_at is not None:
+        repository.last_detail_sync_started_at = started_at
+    if completed_at is not None:
+        repository.last_detail_sync_completed_at = completed_at
+
+
+def _locked_workspace_repositories(db: Session, workspace_id: str) -> list[Repository]:
+    return db.scalars(
+        select(Repository)
+        .where(Repository.workspace_id == workspace_id, Repository.deleted_at.is_(None))
+        .with_for_update()
+    ).all()
+
+
+def activate_workspace_repository_selection(
+    db: Session,
+    *,
+    workspace: Workspace,
+    repository: Repository,
+) -> Repository:
+    if repository.workspace_id != workspace.id or repository.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if not repository_selection_allowed(repository):
+        raise HTTPException(status_code=409, detail="Repository is not selectable")
+
+    now = utcnow()
+    repositories = _locked_workspace_repositories(db, workspace.id)
+    active_repositories = [
+        item
+        for item in repositories
+        if item.selection_status == REPOSITORY_SELECTION_ACTIVE and item.id != repository.id
+    ]
+
+    for current in active_repositories:
+        current.is_active = False
+        current.selection_status = REPOSITORY_SELECTION_INACTIVE
+        current.deactivated_at = now
+        current.sync_status = "inactive"
+
+    target = next((item for item in repositories if item.id == repository.id), repository)
+    target.is_available = True
+    target.is_active = True
+    target.selection_status = REPOSITORY_SELECTION_ACTIVE
+    target.activated_at = now
+    target.inaccessible_reason = None
+    target.sync_status = "detail_syncing"
+    _mark_repository_detail_sync_state(
+        db,
+        repository=target,
+        status_value=DETAIL_SYNC_SYNCING,
+        error_message=None,
+        started_at=now,
+    )
+    db.commit()
+    db.refresh(target)
+    return target
+
+
+async def sync_repository_details(
+    db: Session,
+    *,
+    repository: Repository,
+) -> dict[str, int]:
+    if not repository_detail_sync_allowed(repository):
+        raise HTTPException(status_code=409, detail="Repository detail sync is only allowed for active repositories")
+
+    installation = db.get(GithubInstallation, repository.github_installation_id)
+    if installation is None or installation.claimed_workspace_id != repository.workspace_id:
+        raise HTTPException(status_code=409, detail="Repository installation is not available")
+    if installation.installation_status in {"uninstalled", "suspended", "unlinked"}:
+        raise HTTPException(status_code=409, detail="Installation is not active")
+
+    started_at = utcnow()
+    repository = db.scalar(select(Repository).where(Repository.id == repository.id).with_for_update())
+    if repository is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    _mark_repository_detail_sync_state(
+        db,
+        repository=repository,
+        status_value=DETAIL_SYNC_SYNCING,
+        error_message=None,
+        started_at=started_at,
+    )
+    repository.sync_status = "detail_syncing"
+    db.commit()
+
+    app_client = GithubAppClient()
+    try:
+        token_payload = await app_client.create_installation_token(installation.installation_id)
+        installation_token = token_payload["token"]
+        branches_payload = await app_client.fetch_repository_branches(installation_token, repository.full_name)
+        branches_synced = _upsert_repository_branches_from_api(
+            db,
+            workspace_id=repository.workspace_id,
+            repository=repository,
+            branches_payload=branches_payload,
+        )
+        repository = db.scalar(select(Repository).where(Repository.id == repository.id).with_for_update())
+        if repository is None:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        completed_at = utcnow()
+        repository.last_synced_at = completed_at
+        repository.sync_status = "active" if repository.is_active else "catalog_synced"
+        _mark_repository_detail_sync_state(
+            db,
+            repository=repository,
+            status_value=DETAIL_SYNC_COMPLETED,
+            error_message=None,
+            completed_at=completed_at,
+        )
+        db.commit()
+        return {"branches_synced": branches_synced}
+    except (httpx.HTTPError, HTTPException, KeyError) as exc:
+        repository = db.scalar(select(Repository).where(Repository.id == repository.id).with_for_update())
+        if repository is not None:
+            repository.sync_status = "detail_sync_error"
+            _mark_repository_detail_sync_state(
+                db,
+                repository=repository,
+                status_value=DETAIL_SYNC_ERROR,
+                error_message=str(getattr(exc, "detail", None) or exc),
+            )
+            db.commit()
+        raise
+
+
 class GenerateInstallationTokenService:
     async def __call__(self, installation: GithubInstallation) -> str:
         payload = await GithubAppClient().create_installation_token(installation.installation_id)
@@ -1338,6 +1535,8 @@ class GenerateInstallationTokenService:
 
 class CompareBranchRangeService:
     async def __call__(self, installation_token: str, repository: Repository, before_sha: str, after_sha: str) -> dict[str, Any]:
+        if not repository_detail_sync_allowed(repository):
+            raise HTTPException(status_code=409, detail="Repository is not active for compare")
         return await GithubAppClient().compare_commits(
             installation_token,
             repository.full_name,
@@ -1699,8 +1898,12 @@ class HandleGithubPushWebhookService:
                 Repository.deleted_at.is_(None),
             )
         )
-        if repository is None or not repository.is_active:
-            return {"status": "ignored", "reason": "repository_not_monitored"}
+        if repository is None:
+            return {"status": "ignored", "reason": "repository_not_found"}
+        if not repository.is_available:
+            return {"status": "ignored", "reason": "repository_not_available"}
+        if not repository.is_active or repository.selection_status != REPOSITORY_SELECTION_ACTIVE:
+            return {"status": "ignored", "reason": "repository_not_active"}
 
         branch_name = _extract_branch_name(payload.get("ref"))
         if not branch_name:
@@ -1846,7 +2049,7 @@ async def manual_sync_workspace_installation_repositories(
     installations = db.scalars(
         select(GithubInstallation).where(
             GithubInstallation.claimed_workspace_id == workspace.id,
-            GithubInstallation.installation_status.not_in(["uninstalled", "suspended"]),
+            GithubInstallation.installation_status.not_in(["uninstalled", "suspended", "unlinked"]),
         )
     ).all()
     if not installations:
@@ -1855,7 +2058,6 @@ async def manual_sync_workspace_installation_repositories(
     app_client = GithubAppClient()
     installations_synced = 0
     repositories_synced = 0
-    branches_synced = 0
     skipped_installations = 0
 
     for installation in installations:
@@ -1877,24 +2079,6 @@ async def manual_sync_workspace_installation_repositories(
             sync_claimed_installation_repositories(db, installation)
             installations_synced += 1
             repositories_synced += len(cached_installation_repositories)
-            workspace_repositories = db.scalars(
-                select(Repository).where(
-                    Repository.workspace_id == workspace.id,
-                    Repository.github_installation_id == installation.id,
-                    Repository.deleted_at.is_(None),
-                )
-            ).all()
-            for repository in workspace_repositories:
-                try:
-                    branches_payload = await app_client.fetch_repository_branches(installation_token, repository.full_name)
-                except httpx.HTTPError:
-                    continue
-                branches_synced += _upsert_repository_branches_from_api(
-                    db,
-                    workspace_id=workspace.id,
-                    repository=repository,
-                    branches_payload=branches_payload,
-                )
             continue
 
         try:
@@ -1908,24 +2092,6 @@ async def manual_sync_workspace_installation_repositories(
             installation=installation,
             repositories_payload=repositories_payload,
         )
-        workspace_repositories = db.scalars(
-            select(Repository).where(
-                Repository.workspace_id == workspace.id,
-                Repository.github_installation_id == installation.id,
-                Repository.deleted_at.is_(None),
-            )
-        ).all()
-        for repository in workspace_repositories:
-            try:
-                branches_payload = await app_client.fetch_repository_branches(installation_token, repository.full_name)
-            except httpx.HTTPError:
-                continue
-            branches_synced += _upsert_repository_branches_from_api(
-                db,
-                workspace_id=workspace.id,
-                repository=repository,
-                branches_payload=branches_payload,
-            )
         installations_synced += 1
 
     record_audit_log(
@@ -1940,7 +2106,7 @@ async def manual_sync_workspace_installation_repositories(
         metadata={
             "installations_synced": installations_synced,
             "repositories_synced": repositories_synced,
-            "branches_synced": branches_synced,
+            "branches_synced": 0,
             "skipped_installations": skipped_installations,
         },
     )
@@ -1948,7 +2114,7 @@ async def manual_sync_workspace_installation_repositories(
     return {
         "installations_synced": installations_synced,
         "repositories_synced": repositories_synced,
-        "branches_synced": branches_synced,
+        "branches_synced": 0,
         "skipped_installations": skipped_installations,
     }
 

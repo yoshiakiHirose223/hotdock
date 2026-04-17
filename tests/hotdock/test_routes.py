@@ -5,6 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from app.hotdock.services.github import sync_claimed_installation_repositories
 from app.main import app
 from app.core.database import SessionLocal
 from app.models.branch import Branch
@@ -13,6 +14,7 @@ from app.models.branch_file import BranchFile
 from app.models.file_collision import FileCollision
 from app.models.audit_log import AuditLog
 from app.models.github_installation import GithubInstallation
+from app.models.github_installation_repository import GithubInstallationRepository
 from app.models.repository import Repository
 from app.models.workspace import Workspace
 from app.models.workspace_invitation import WorkspaceInvitation
@@ -282,7 +284,10 @@ def test_push_webhook_uses_compare_and_creates_collisions(client):
         default_branch="main",
         provider="github",
         visibility="private",
+        is_available=True,
         is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
         sync_status="active",
     )
     db.add(repository)
@@ -433,7 +438,10 @@ def test_owner_can_unlink_installation(client):
         default_branch="main",
         provider="github",
         visibility="private",
+        is_available=True,
         is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
         sync_status="active",
     )
     db.add(repository)
@@ -456,6 +464,8 @@ def test_owner_can_unlink_installation(client):
     assert installation.installation_status == "unlinked"
     assert repository.sync_status == "unlinked"
     assert repository.is_active is False
+    assert repository.is_available is False
+    assert repository.selection_status == "inaccessible"
     db.close()
 
 
@@ -729,3 +739,638 @@ def test_unlinked_installation_push_webhook_is_ignored(client):
     assert response.status_code == 200
     assert response.json()["status"] == "ignored"
     assert response.json()["reason"] == "installation_unlinked"
+
+
+def test_repository_catalog_sync_creates_unselected_candidates_without_branch_fetch(client, monkeypatch):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Catalog Owner",
+            "email": "catalog-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Catalog Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="catalog-team").one()
+    installation = GithubInstallation(
+        installation_id=5001,
+        github_account_id=99101,
+        github_account_login="catalog-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.commit()
+    db.close()
+
+    async def fake_create_installation_token(self, installation_id):
+        assert installation_id == 5001
+        return {"token": "installation-token"}
+
+    async def fake_fetch_installation_repositories(self, installation_token):
+        assert installation_token == "installation-token"
+        return [
+            {
+                "id": 91001,
+                "name": "repo-a",
+                "full_name": "catalog-org/repo-a",
+                "private": True,
+                "default_branch": "main",
+            },
+            {
+                "id": 91002,
+                "name": "repo-b",
+                "full_name": "catalog-org/repo-b",
+                "private": False,
+                "default_branch": "develop",
+            },
+        ]
+
+    async def fail_fetch_repository_branches(self, installation_token, full_name):
+        raise AssertionError(f"branch fetch should not run during catalog sync: {full_name}")
+
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.create_installation_token", fake_create_installation_token)
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.fetch_installation_repositories", fake_fetch_installation_repositories)
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.fetch_repository_branches", fail_fetch_repository_branches)
+
+    response = client.post(
+        "/workspaces/catalog-team/repositories/sync",
+        data={"csrf_token": owner_csrf},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "2 件の repository 候補を反映しました。" in response.text
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="catalog-team").one()
+    repositories = db.query(Repository).filter_by(workspace_id=workspace.id).order_by(Repository.github_repository_id.asc()).all()
+    installation = db.query(GithubInstallation).filter_by(installation_id=5001).one()
+    assert len(repositories) == 2
+    assert [repository.selection_status for repository in repositories] == ["unselected", "unselected"]
+    assert all(repository.is_active is False for repository in repositories)
+    assert all(repository.is_available is True for repository in repositories)
+    assert all(repository.detail_sync_status == "not_started" for repository in repositories)
+    assert db.query(Branch).filter(Branch.workspace_id == workspace.id).count() == 0
+    raw_catalog = db.query(GithubInstallationRepository).filter_by(installation_ref_id=installation.id).count()
+    assert raw_catalog == 2
+    db.close()
+
+
+def test_repository_activation_switches_active_target(client, monkeypatch):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Switch Owner",
+            "email": "switch-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Switch Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="switch-team").one()
+    installation = GithubInstallation(
+        installation_id=6001,
+        github_account_id=99201,
+        github_account_login="switch-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repo_a = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=92001,
+        full_name="switch-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=False,
+        selection_status="unselected",
+        detail_sync_status="not_started",
+        sync_status="catalog_synced",
+    )
+    repo_b = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=92002,
+        full_name="switch-org/repo-b",
+        display_name="repo-b",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=False,
+        selection_status="unselected",
+        detail_sync_status="not_started",
+        sync_status="catalog_synced",
+    )
+    db.add_all([repo_a, repo_b])
+    db.commit()
+    db.refresh(repo_a)
+    db.refresh(repo_b)
+    repo_a_id = repo_a.id
+    repo_b_id = repo_b.id
+    db.close()
+
+    async def fake_create_installation_token(self, installation_id):
+        assert installation_id == 6001
+        return {"token": "installation-token"}
+
+    async def fake_fetch_repository_branches(self, installation_token, full_name):
+        return [{"name": "main", "commit": {"sha": f"sha-{full_name}"}}]
+
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.create_installation_token", fake_create_installation_token)
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.fetch_repository_branches", fake_fetch_repository_branches)
+
+    first = client.post(
+        f"/workspaces/switch-team/repositories/{repo_a_id}/activate",
+        data={"csrf_token": owner_csrf},
+        follow_redirects=True,
+    )
+    assert first.status_code == 200
+    assert "監視対象を切り替え、詳細同期を実行しました。" in first.text
+
+    second = client.post(
+        f"/workspaces/switch-team/repositories/{repo_b_id}/activate",
+        data={"csrf_token": owner_csrf},
+        follow_redirects=True,
+    )
+    assert second.status_code == 200
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="switch-team").one()
+    repo_a = db.query(Repository).filter_by(id=repo_a_id).one()
+    repo_b = db.query(Repository).filter_by(id=repo_b_id).one()
+    assert repo_a.selection_status == "inactive"
+    assert repo_a.is_active is False
+    assert repo_b.selection_status == "active"
+    assert repo_b.is_active is True
+    assert repo_b.detail_sync_status == "completed"
+    assert db.query(Repository).filter_by(workspace_id=workspace.id, selection_status="active").count() == 1
+    db.close()
+
+
+def test_push_webhook_for_unselected_repository_is_skipped(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Push Owner",
+            "email": "push-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Push Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="push-team").one()
+    installation = GithubInstallation(
+        installation_id=7001,
+        github_account_id=99301,
+        github_account_login="push-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=93001,
+        full_name="push-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=False,
+        selection_status="unselected",
+        detail_sync_status="not_started",
+        sync_status="catalog_synced",
+    )
+    db.add(repository)
+    db.commit()
+    db.close()
+
+    payload = {
+        "installation": {"id": 7001},
+        "repository": {"id": 93001, "full_name": "push-org/repo-a", "default_branch": "main"},
+        "ref": "refs/heads/feature/test",
+        "before": "0000000000000000000000000000000000000001",
+        "after": "0000000000000000000000000000000000000002",
+        "created": False,
+        "deleted": False,
+        "forced": False,
+        "head_commit": {"id": "0000000000000000000000000000000000000002"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(b"test-webhook-secret", body, hashlib.sha256).hexdigest()
+
+    response = client.post(
+        "/webhooks/github",
+        data=body,
+        headers={
+            "X-GitHub-Delivery": "delivery-unselected-1",
+            "X-GitHub-Event": "push",
+            "X-Hub-Signature-256": signature,
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+    assert response.json()["reason"] == "repository_not_active"
+
+    db = SessionLocal()
+    assert db.query(BranchEvent).count() == 0
+    assert db.query(Branch).count() == 0
+    db.close()
+
+
+def test_catalog_sync_marks_removed_active_repository_inaccessible_and_keeps_history(client):
+    db = SessionLocal()
+    workspace = Workspace(name="History Team", slug="history-team")
+    db.add(workspace)
+    db.flush()
+    installation = GithubInstallation(
+        installation_id=8001,
+        github_account_id=99401,
+        github_account_login="history-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=94001,
+        full_name="history-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.flush()
+    branch = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/a",
+        current_head_sha="abc123",
+        last_after_sha="abc123",
+        branch_status="normal",
+        is_active=True,
+        is_deleted=False,
+    )
+    db.add(branch)
+    db.flush()
+    branch_file = BranchFile(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        branch_id=branch.id,
+        path="src/app.py",
+        normalized_path="src/app.py",
+        change_type="modified",
+        last_change_type="modified",
+        last_seen_commit_sha="abc123",
+        is_active=True,
+    )
+    db.add(branch_file)
+    raw_repo = GithubInstallationRepository(
+        installation_ref_id=installation.id,
+        workspace_id=workspace.id,
+        github_repository_id=94001,
+        full_name="history-org/repo-a",
+        name="repo-a",
+        private=True,
+        default_branch="main",
+        status="removed",
+    )
+    db.add(raw_repo)
+    db.commit()
+
+    sync_claimed_installation_repositories(db, installation)
+
+    repository = db.query(Repository).filter_by(id=repository.id).one()
+    assert repository.selection_status == "inaccessible"
+    assert repository.is_active is False
+    assert repository.is_available is False
+    assert repository.inaccessible_reason == "removed_from_installation"
+    assert db.query(Branch).filter_by(repository_id=repository.id).count() == 1
+    assert db.query(BranchFile).filter_by(repository_id=repository.id).count() == 1
+    db.close()
+
+
+def test_repository_catalog_sync_creates_unselected_candidates_without_branch_fetch(client, monkeypatch):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Catalog Owner",
+            "email": "catalog-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Catalog Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="catalog-team").one()
+    installation = GithubInstallation(
+        installation_id=5001,
+        github_account_id=99101,
+        github_account_login="catalog-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.commit()
+    db.close()
+
+    async def fake_create_installation_token(self, installation_id):
+        assert installation_id == 5001
+        return {"token": "installation-token"}
+
+    async def fake_fetch_installation_repositories(self, installation_token):
+        assert installation_token == "installation-token"
+        return [
+            {
+                "id": 91001,
+                "name": "repo-a",
+                "full_name": "catalog-org/repo-a",
+                "private": True,
+                "default_branch": "main",
+            },
+            {
+                "id": 91002,
+                "name": "repo-b",
+                "full_name": "catalog-org/repo-b",
+                "private": False,
+                "default_branch": "develop",
+            },
+        ]
+
+    async def fail_fetch_repository_branches(self, installation_token, full_name):
+        raise AssertionError(f"branch fetch should not run during catalog sync: {full_name}")
+
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.create_installation_token", fake_create_installation_token)
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.fetch_installation_repositories", fake_fetch_installation_repositories)
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.fetch_repository_branches", fail_fetch_repository_branches)
+
+    response = client.post(
+        "/workspaces/catalog-team/repositories/sync",
+        data={"csrf_token": owner_csrf},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "2 件の repository 候補を反映しました。" in response.text
+
+    db = SessionLocal()
+    repositories = db.query(Repository).filter_by(workspace_id=workspace.id).order_by(Repository.github_repository_id.asc()).all()
+    assert len(repositories) == 2
+    assert [repository.selection_status for repository in repositories] == ["unselected", "unselected"]
+    assert all(repository.is_active is False for repository in repositories)
+    assert all(repository.is_available is True for repository in repositories)
+    assert all(repository.detail_sync_status == "not_started" for repository in repositories)
+    assert db.query(Branch).filter(Branch.workspace_id == workspace.id).count() == 0
+    raw_catalog = db.query(GithubInstallationRepository).filter_by(installation_ref_id=installation.id).count()
+    assert raw_catalog == 2
+    db.close()
+
+
+def test_repository_activation_switches_active_target(client, monkeypatch):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Switch Owner",
+            "email": "switch-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Switch Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="switch-team").one()
+    installation = GithubInstallation(
+        installation_id=6001,
+        github_account_id=99201,
+        github_account_login="switch-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repo_a = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=92001,
+        full_name="switch-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=False,
+        selection_status="unselected",
+        detail_sync_status="not_started",
+        sync_status="catalog_synced",
+    )
+    repo_b = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=92002,
+        full_name="switch-org/repo-b",
+        display_name="repo-b",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=False,
+        selection_status="unselected",
+        detail_sync_status="not_started",
+        sync_status="catalog_synced",
+    )
+    db.add_all([repo_a, repo_b])
+    db.commit()
+    db.refresh(repo_a)
+    db.refresh(repo_b)
+    repo_a_id = repo_a.id
+    repo_b_id = repo_b.id
+    db.close()
+
+    async def fake_create_installation_token(self, installation_id):
+        assert installation_id == 6001
+        return {"token": "installation-token"}
+
+    async def fake_fetch_repository_branches(self, installation_token, full_name):
+        return [{"name": "main", "commit": {"sha": f"sha-{full_name}"}}]
+
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.create_installation_token", fake_create_installation_token)
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.fetch_repository_branches", fake_fetch_repository_branches)
+
+    first = client.post(
+        f"/workspaces/switch-team/repositories/{repo_a_id}/activate",
+        data={"csrf_token": owner_csrf},
+        follow_redirects=True,
+    )
+    assert first.status_code == 200
+    assert "監視対象を切り替え、詳細同期を実行しました。" in first.text
+
+    second = client.post(
+        f"/workspaces/switch-team/repositories/{repo_b_id}/activate",
+        data={"csrf_token": owner_csrf},
+        follow_redirects=True,
+    )
+    assert second.status_code == 200
+
+    db = SessionLocal()
+    repo_a = db.query(Repository).filter_by(id=repo_a_id).one()
+    repo_b = db.query(Repository).filter_by(id=repo_b_id).one()
+    assert repo_a.selection_status == "inactive"
+    assert repo_a.is_active is False
+    assert repo_b.selection_status == "active"
+    assert repo_b.is_active is True
+    assert repo_b.detail_sync_status == "completed"
+    assert db.query(Repository).filter_by(workspace_id=workspace.id, selection_status="active").count() == 1
+    db.close()
+
+
+def test_push_webhook_for_unselected_repository_is_skipped(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Push Owner",
+            "email": "push-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Push Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="push-team").one()
+    installation = GithubInstallation(
+        installation_id=7001,
+        github_account_id=99301,
+        github_account_login="push-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=93001,
+        full_name="push-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=False,
+        selection_status="unselected",
+        detail_sync_status="not_started",
+        sync_status="catalog_synced",
+    )
+    db.add(repository)
+    db.commit()
+    db.close()
+
+    payload = {
+        "installation": {"id": 7001},
+        "repository": {"id": 93001, "full_name": "push-org/repo-a", "default_branch": "main"},
+        "ref": "refs/heads/feature/test",
+        "before": "0000000000000000000000000000000000000001",
+        "after": "0000000000000000000000000000000000000002",
+        "created": False,
+        "deleted": False,
+        "forced": False,
+        "head_commit": {"id": "0000000000000000000000000000000000000002"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(b"test-webhook-secret", body, hashlib.sha256).hexdigest()
+
+    response = client.post(
+        "/webhooks/github",
+        data=body,
+        headers={
+            "X-GitHub-Delivery": "delivery-unselected-1",
+            "X-GitHub-Event": "push",
+            "X-Hub-Signature-256": signature,
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+    assert response.json()["reason"] == "repository_not_active"
+
+    db = SessionLocal()
+    assert db.query(BranchEvent).count() == 0
+    assert db.query(Branch).count() == 0
+    db.close()

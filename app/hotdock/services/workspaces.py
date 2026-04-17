@@ -24,6 +24,7 @@ from app.models.github_pending_claim import GithubPendingClaim
 from app.models.repository import Repository
 from app.models.branch import Branch
 from app.models.file_collision import FileCollision
+from app.hotdock.services.github import REPOSITORY_SELECTION_ACTIVE, active_repository_limit
 
 
 @dataclass
@@ -559,6 +560,7 @@ def workspace_dashboard_data(db: Session, workspace: Workspace) -> dict[str, obj
     repositories = db.scalars(
         select(Repository).where(Repository.workspace_id == workspace.id, Repository.deleted_at.is_(None))
     ).all()
+    active_repositories = [repository for repository in repositories if repository.selection_status == REPOSITORY_SELECTION_ACTIVE]
     branches = db.scalars(select(Branch).where(Branch.workspace_id == workspace.id)).all()
     conflicts = db.scalars(
         select(FileCollision)
@@ -578,11 +580,13 @@ def workspace_dashboard_data(db: Session, workspace: Workspace) -> dict[str, obj
     return {
         "summary_cards": [
             {"label": "Installations", "value": str(len(installations)), "meta": "GitHub App 連携数"},
-            {"label": "Repositories", "value": str(len(repositories)), "meta": "監視対象 repository"},
+            {"label": "Repository Candidates", "value": str(len(repositories)), "meta": "利用可能な候補一覧"},
+            {"label": "Active Repositories", "value": str(len(active_repositories)), "meta": f"現在の監視対象 / 上限 {active_repository_limit()}"},
             {"label": "Branches", "value": str(len(branches)), "meta": "同期済み branch"},
             {"label": "Open conflicts", "value": str(len(conflicts)), "meta": "競合候補"},
         ],
         "recent_repositories": repositories[:5],
+        "active_repositories": active_repositories,
         "member_count": len(members),
         "installations": installations,
     }

@@ -20,7 +20,20 @@ from app.hotdock.services.auth import (
     set_flash,
 )
 from app.hotdock.services.context import build_app_context
-from app.hotdock.services.github import SINGLE_REPOSITORY_INSTALLATION_ERROR, manual_sync_workspace_installation_repositories
+from app.hotdock.services.github import (
+    DETAIL_SYNC_COMPLETED,
+    DETAIL_SYNC_ERROR,
+    DETAIL_SYNC_NOT_STARTED,
+    DETAIL_SYNC_SYNCING,
+    REPOSITORY_SELECTION_ACTIVE,
+    REPOSITORY_SELECTION_INACCESSIBLE,
+    REPOSITORY_SELECTION_INACTIVE,
+    REPOSITORY_SELECTION_UNSELECTED,
+    activate_workspace_repository_selection,
+    active_repository_limit,
+    manual_sync_workspace_installation_repositories,
+    sync_repository_details,
+)
 from app.hotdock.services.workspaces import (
     build_workspace_navigation,
     resolve_workspace_access,
@@ -148,7 +161,29 @@ async def workspace_repositories(workspace_slug: str, request: Request, db: Sess
     repositories = db.scalars(
         select(Repository).where(Repository.workspace_id == access.workspace.id, Repository.deleted_at.is_(None))
     ).all()
+    repositories.sort(
+        key=lambda repository: (
+            0 if repository.selection_status == REPOSITORY_SELECTION_ACTIVE else 1,
+            0 if repository.is_available else 1,
+            repository.display_name.lower(),
+        )
+    )
+    active_repository = next((repository for repository in repositories if repository.selection_status == REPOSITORY_SELECTION_ACTIVE), None)
     context["repositories"] = repositories
+    context["repository_limit"] = active_repository_limit()
+    context["active_repository"] = active_repository
+    context["selection_status_labels"] = {
+        REPOSITORY_SELECTION_UNSELECTED: "候補",
+        REPOSITORY_SELECTION_ACTIVE: "監視中",
+        REPOSITORY_SELECTION_INACTIVE: "監視停止",
+        REPOSITORY_SELECTION_INACCESSIBLE: "アクセス不可",
+    }
+    context["detail_sync_labels"] = {
+        DETAIL_SYNC_NOT_STARTED: "未開始",
+        DETAIL_SYNC_SYNCING: "同期中",
+        DETAIL_SYNC_COMPLETED: "完了",
+        DETAIL_SYNC_ERROR: "エラー",
+    }
     return render_app("hotdock/app/workspace_repositories.html", context)
 
 
@@ -184,10 +219,8 @@ async def workspace_repositories_sync(
         message = "repository 同期に失敗しました。"
         if getattr(exc, "detail", None) == "No claimed installations":
             message = "先に GitHub App installation を claim してください。"
-        elif getattr(exc, "detail", None) == SINGLE_REPOSITORY_INSTALLATION_ERROR:
-            message = SINGLE_REPOSITORY_INSTALLATION_ERROR
         else:
-            message = "GitHub 側の認証または installation 状態を確認してください。"
+            message = "GitHub 側の repository 候補一覧を取得できませんでした。installation 状態を確認して再試行してください。"
         record_audit_log(
             db,
             request,
@@ -213,7 +246,7 @@ async def workspace_repositories_sync(
         set_flash(
             request,
             "success",
-            f"{result['repositories_synced']} 件の repository と {result['branches_synced']} 件の branch を反映しました。",
+            f"{result['repositories_synced']} 件の repository 候補を反映しました。",
         )
     elif result["skipped_installations"] > 0:
         set_flash(
@@ -222,11 +255,136 @@ async def workspace_repositories_sync(
             "GitHub App credentials または installation 状態を確認できず、repository を取得できませんでした。GitHub App 設定と installation 状態を確認してください。",
         )
     else:
-        set_flash(request, "error", "repository は取得できませんでした。GitHub 側の repository 権限と installation 状態を確認してください。")
+        set_flash(request, "error", "repository 候補は取得できませんでした。GitHub 側の repository 権限と installation 状態を確認してください。")
     return RedirectResponse(
         url=f"/workspaces/{workspace_slug}/repositories",
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+@router.post("/workspaces/{workspace_slug}/repositories/{repository_id}/activate", name="hotdock-workspace-repository-activate")
+async def workspace_repository_activate(
+    workspace_slug: str,
+    repository_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    csrf_token: str = Form(...),
+):
+    auth = attach_auth_context(request, db)
+    if auth.user is None:
+        return RedirectResponse(
+            url=build_login_redirect(f"/workspaces/{workspace_slug}/repositories"),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/repositories", status_code=status.HTTP_303_SEE_OTHER)
+
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="admin")
+    repository = db.scalar(
+        select(Repository).where(
+            Repository.id == repository_id,
+            Repository.workspace_id == access.workspace.id,
+            Repository.deleted_at.is_(None),
+        )
+    )
+    if repository is None:
+        set_flash(request, "error", "repository が見つかりません。")
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/repositories", status_code=status.HTTP_303_SEE_OTHER)
+
+    try:
+        repository = activate_workspace_repository_selection(db, workspace=access.workspace, repository=repository)
+        detail_result = await sync_repository_details(db, repository=repository)
+        record_audit_log(
+            db,
+            request,
+            actor_type="user",
+            actor_id=auth.user.id,
+            workspace_id=access.workspace.id,
+            target_type="repository",
+            target_id=repository.id,
+            action="workspace_repository_activated",
+            metadata={"github_repository_id": repository.github_repository_id, "branches_synced": detail_result["branches_synced"]},
+        )
+        db.commit()
+        set_flash(request, "success", "監視対象を切り替え、詳細同期を実行しました。")
+    except Exception as exc:
+        record_audit_log(
+            db,
+            request,
+            actor_type="user",
+            actor_id=auth.user.id,
+            workspace_id=access.workspace.id,
+            target_type="repository",
+            target_id=repository.id,
+            action="workspace_repository_activate_failed",
+            metadata={"error": str(getattr(exc, "detail", None) or exc)},
+        )
+        db.commit()
+        set_flash(request, "error", str(getattr(exc, "detail", None) or "repository の切り替えに失敗しました。"))
+    return RedirectResponse(url=f"/workspaces/{workspace_slug}/repositories", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/workspaces/{workspace_slug}/repositories/{repository_id}/detail-sync", name="hotdock-workspace-repository-detail-sync")
+async def workspace_repository_detail_sync(
+    workspace_slug: str,
+    repository_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    csrf_token: str = Form(...),
+):
+    auth = attach_auth_context(request, db)
+    if auth.user is None:
+        return RedirectResponse(
+            url=build_login_redirect(f"/workspaces/{workspace_slug}/repositories"),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/repositories", status_code=status.HTTP_303_SEE_OTHER)
+
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="admin")
+    repository = db.scalar(
+        select(Repository).where(
+            Repository.id == repository_id,
+            Repository.workspace_id == access.workspace.id,
+            Repository.deleted_at.is_(None),
+        )
+    )
+    if repository is None:
+        set_flash(request, "error", "repository が見つかりません。")
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/repositories", status_code=status.HTTP_303_SEE_OTHER)
+
+    try:
+        result = await sync_repository_details(db, repository=repository)
+        record_audit_log(
+            db,
+            request,
+            actor_type="user",
+            actor_id=auth.user.id,
+            workspace_id=access.workspace.id,
+            target_type="repository",
+            target_id=repository.id,
+            action="workspace_repository_detail_sync_requested",
+            metadata={"github_repository_id": repository.github_repository_id, "branches_synced": result["branches_synced"]},
+        )
+        db.commit()
+        set_flash(request, "success", f"詳細同期を実行しました。{result['branches_synced']} 件の branch を更新しました。")
+    except Exception as exc:
+        record_audit_log(
+            db,
+            request,
+            actor_type="user",
+            actor_id=auth.user.id,
+            workspace_id=access.workspace.id,
+            target_type="repository",
+            target_id=repository.id,
+            action="workspace_repository_detail_sync_failed",
+            metadata={"error": str(getattr(exc, "detail", None) or exc)},
+        )
+        db.commit()
+        set_flash(request, "error", str(getattr(exc, "detail", None) or "詳細同期に失敗しました。"))
+    return RedirectResponse(url=f"/workspaces/{workspace_slug}/repositories", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/workspaces/{workspace_slug}/branches", name="hotdock-workspace-branches")
@@ -277,6 +435,8 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
             "branch_status": branch.branch_status,
             "is_deleted": branch.is_deleted,
             "repository_name": repositories.get(branch.repository_id).display_name if repositories.get(branch.repository_id) else "-",
+            "repository_selection_status": repositories.get(branch.repository_id).selection_status if repositories.get(branch.repository_id) else None,
+            "repository_is_available": repositories.get(branch.repository_id).is_available if repositories.get(branch.repository_id) else False,
             "files": files_by_branch.get(branch.id, []),
         }
         for branch in branches

@@ -35,7 +35,6 @@ from app.hotdock.services.auth import (
 from app.hotdock.services.context import build_auth_context
 from app.hotdock.services.github import (
     GithubOAuthClient,
-    SINGLE_REPOSITORY_INSTALLATION_ERROR,
     complete_github_claim,
     consume_github_install_intent,
     create_callback_pending_claim,
@@ -616,11 +615,8 @@ async def github_claim_workspace(
         try:
             installation = finalize_github_claim(db, request, pending_claim=pending_claim, user=auth.user)
             sync_claimed_installation_repositories(db, installation)
-        except Exception as exc:
-            if getattr(exc, "detail", None) == SINGLE_REPOSITORY_INSTALLATION_ERROR:
-                set_flash(request, "error", SINGLE_REPOSITORY_INSTALLATION_ERROR)
-            else:
-                set_flash(request, "error", "installation の claim 完了に失敗しました。")
+        except Exception:
+            set_flash(request, "error", "installation の claim 完了に失敗しました。")
             return RedirectResponse(url=f"/integrations/github/claim/{claim_token}", status_code=status.HTTP_303_SEE_OTHER)
         workspace = db.get(Workspace, installation.claimed_workspace_id)
         return RedirectResponse(url=f"/workspaces/{workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
@@ -770,11 +766,8 @@ async def github_callback(
                 token_payload=token_payload,
             )
             sync_claimed_installation_repositories(db, installation)
-        except Exception as exc:
-            if getattr(exc, "detail", None) == SINGLE_REPOSITORY_INSTALLATION_ERROR:
-                set_flash(request, "error", SINGLE_REPOSITORY_INSTALLATION_ERROR)
-            else:
-                set_flash(request, "error", "GitHub authorization の完了に失敗しました。")
+        except Exception:
+            set_flash(request, "error", "GitHub authorization の完了に失敗しました。")
             return RedirectResponse(
                 url=f"/integrations/github/claim/{legacy_oauth_state['claim_token']}",
                 status_code=status.HTTP_303_SEE_OTHER,
@@ -1046,11 +1039,8 @@ async def github_callback(
                 installation = finalize_github_claim(db, request, pending_claim=pending_claim, user=auth.user)
                 sync_claimed_installation_repositories(db, installation)
                 return RedirectResponse(url=f"/workspaces/{workspace.slug}/dashboard", status_code=status.HTTP_303_SEE_OTHER)
-            except Exception as exc:
-                if getattr(exc, "detail", None) == SINGLE_REPOSITORY_INSTALLATION_ERROR:
-                    set_flash(request, "error", SINGLE_REPOSITORY_INSTALLATION_ERROR)
-                else:
-                    set_flash(request, "error", "workspace への自動紐付けに失敗しました。workspace を選択して再開してください。")
+            except Exception:
+                set_flash(request, "error", "workspace への自動紐付けに失敗しました。workspace を選択して再開してください。")
 
     if state_verified:
         set_flash(
