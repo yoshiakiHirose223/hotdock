@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.hotdock.services.audit import record_audit_log
+from app.hotdock.services.audit import AUDIT_STREAM_PATH, record_audit_log
 from app.hotdock.services.security import future_claim_expiry, generate_token, hash_token, utcnow, verify_token_hash
 from app.models import Base
 from app.models.branch import Branch
@@ -79,10 +79,19 @@ def delete_all_non_article_data(
             deleted_tables.append(table.name)
 
         db.commit()
+        audit_stream_deleted = 0
+        try:
+            if AUDIT_STREAM_PATH.exists():
+                AUDIT_STREAM_PATH.unlink()
+                audit_stream_deleted = 1
+        except OSError:
+            audit_stream_deleted = 0
         return {
             "deleted_tables": len(deleted_tables),
             "deleted_rows": sum(table_counts.values()),
             "table_counts": table_counts,
+            "deleted_table_names": deleted_tables,
+            "deleted_audit_streams": audit_stream_deleted,
             "actor_type": actor_type,
             "actor_id": actor_id,
             "actor_label": actor_label,
