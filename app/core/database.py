@@ -87,10 +87,16 @@ def apply_runtime_schema_upgrades() -> None:
         ("observed_via", "observed_via VARCHAR(32)"),
         ("touch_seed_source", "touch_seed_source VARCHAR(32)"),
         ("touch_seeded_at", "touch_seeded_at TIMESTAMP"),
+        ("touch_seed_status", "touch_seed_status VARCHAR(32)"),
+        ("touch_seed_warning", "touch_seed_warning VARCHAR(2048)"),
+        ("has_authoritative_compare_history", "has_authoritative_compare_history BOOLEAN NOT NULL DEFAULT FALSE"),
         ("has_webhook_history", "has_webhook_history BOOLEAN NOT NULL DEFAULT FALSE"),
         ("last_delivery_id", "last_delivery_id VARCHAR(128)"),
         ("last_processed_compare_base", "last_processed_compare_base VARCHAR(64)"),
         ("last_processed_compare_head", "last_processed_compare_head VARCHAR(64)"),
+    ]
+    branch_event_columns = [
+        ("reason", "reason VARCHAR(128)"),
     ]
     branch_file_columns = [
         ("repository_id", "repository_id VARCHAR(36)"),
@@ -116,6 +122,8 @@ def apply_runtime_schema_upgrades() -> None:
         _ensure_column("repositories", column_name, ddl)
     for column_name, ddl in branch_columns:
         _ensure_column("branches", column_name, ddl)
+    for column_name, ddl in branch_event_columns:
+        _ensure_column("branch_events", column_name, ddl)
     for column_name, ddl in branch_file_columns:
         _ensure_column("branch_files", column_name, ddl)
     for column_name, ddl in pending_claim_columns:
@@ -145,6 +153,7 @@ def apply_runtime_schema_upgrades() -> None:
         "is_deleted = COALESCE(is_deleted, FALSE), "
         "was_created_observed = COALESCE(was_created_observed, FALSE), "
         "was_force_pushed_observed = COALESCE(was_force_pushed_observed, FALSE), "
+        "has_authoritative_compare_history = COALESCE(has_authoritative_compare_history, FALSE), "
         "has_webhook_history = COALESCE(has_webhook_history, FALSE), "
         "observed_via = COALESCE(observed_via, CASE WHEN COALESCE(has_webhook_history, FALSE) THEN 'webhook' ELSE NULL END)"
     )
@@ -163,7 +172,10 @@ def apply_runtime_schema_upgrades() -> None:
         "CREATE INDEX IF NOT EXISTS ix_repositories_detail_sync_status ON repositories (detail_sync_status)",
         "CREATE INDEX IF NOT EXISTS ix_branches_is_deleted ON branches (is_deleted)",
         "CREATE INDEX IF NOT EXISTS ix_branches_observed_via ON branches (observed_via)",
+        "CREATE INDEX IF NOT EXISTS ix_branches_touch_seed_status ON branches (touch_seed_status)",
+        "CREATE INDEX IF NOT EXISTS ix_branches_has_authoritative_compare_history ON branches (has_authoritative_compare_history)",
         "CREATE INDEX IF NOT EXISTS ix_branches_has_webhook_history ON branches (has_webhook_history)",
+        "CREATE INDEX IF NOT EXISTS ix_branch_events_reason ON branch_events (reason)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_repository_id ON branch_files (repository_id)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_normalized_path ON branch_files (normalized_path)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_last_seen_at ON branch_files (last_seen_at)",

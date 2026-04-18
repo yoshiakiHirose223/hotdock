@@ -56,6 +56,10 @@
                     <td>
                         {% if branch.is_deleted %}
                         <span class="badge badge-muted">deleted</span>
+                        {% elif branch.touch_seed_status == "api_error" %}
+                        <span class="badge badge-danger">APIエラー</span>
+                        {% elif branch.touch_seed_status == "seeded_from_payload" and not branch.has_authoritative_compare_history %}
+                        <span class="badge badge-info">初回seed済み</span>
                         {% elif branch.conflict_files_count %}
                         <span class="badge badge-danger">collision</span>
                         {% else %}
@@ -81,9 +85,17 @@
                             <div>
                                 <strong>{{ branch.name }}</strong>
                                 <span class="muted">{{ branch.repository_name }}</span>
+                                {% if branch.touch_seed_status == "seeded_from_payload" and not branch.has_authoritative_compare_history %}
+                                <div class="muted-copy">初回 push の commits payload から touched files を取り込みました。次回以降の compare が正本です。</div>
+                                {% elif branch.touch_seed_status == "api_error" %}
+                                <div class="muted-copy">APIエラー: 初回 push の touched files 取り込みが不完全な可能性があります。</div>
+                                {% endif %}
                             </div>
                             <a class="text-link" href="/workspaces/{{ workspace.slug }}/branches/{{ branch.id }}">詳細ページを見る</a>
                         </div>
+                        {% if branch.touch_seed_warning %}
+                        <div class="inline-alert is-warning">{{ branch.touch_seed_warning }}</div>
+                        {% endif %}
                         {% if branch.files %}
                         <div class="branch-files-grid">
                             {% for file in branch.files %}

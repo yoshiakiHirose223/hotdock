@@ -15,6 +15,16 @@
         <div><strong>After:</strong> <code>{{ branch_detail.last_after_sha or '-' }}</code></div>
         <div><strong>Last Push:</strong> {{ branch_detail.last_push_at or '-' }}</div>
         <div><strong>Observed Flags:</strong> created={{ branch_detail.was_created_observed }}, forced={{ branch_detail.was_force_pushed_observed }}, deleted={{ branch_detail.is_deleted }}</div>
+        <div><strong>Observed Via:</strong> {{ branch_detail.observed_via or '-' }}</div>
+        <div><strong>Compare History:</strong> {{ "authoritative" if branch_detail.has_authoritative_compare_history else "seed-only" }}</div>
+        {% if branch_detail.touch_seed_status == "seeded_from_payload" and not branch_detail.has_authoritative_compare_history %}
+        <div><strong>初回状態:</strong> 初回pushからファイルを取り込みました</div>
+        {% elif branch_detail.touch_seed_status == "api_error" %}
+        <div><strong>初回状態:</strong> APIエラー（初回seed不完全）</div>
+        {% endif %}
+        {% if branch_detail.touch_seed_warning %}
+        <div><strong>Warning:</strong> {{ branch_detail.touch_seed_warning }}</div>
+        {% endif %}
     </div>
 </section>
 
@@ -65,7 +75,7 @@
     {% else %}
     <div class="empty-state">
         <h3>touched files はまだありません</h3>
-        <p>この branch への push を compare API で処理すると、ここに touched files が表示されます。</p>
+        <p>この branch への push を処理すると、ここに touched files が表示されます。初回 branch 作成 push では commits payload から seed し、2回目以降は compare API を正本として使います。</p>
     </div>
     {% endif %}
 </section>

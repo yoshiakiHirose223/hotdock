@@ -24,6 +24,7 @@ class BranchEvent(Base):
     compare_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     compare_error: Mapped[bool] = mapped_column(Boolean, default=False)
     compare_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

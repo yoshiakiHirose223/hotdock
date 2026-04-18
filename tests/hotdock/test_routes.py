@@ -344,6 +344,334 @@ def test_push_webhook_uses_compare_and_creates_collisions(client):
     db.close()
 
 
+def test_initial_branch_push_seeds_files_from_commits_payload_without_compare(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Seed User",
+            "email": "seed@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Seed Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="seed-team").one()
+    installation = GithubInstallation(
+        installation_id=1002,
+        github_account_id=9002,
+        github_account_login="mock-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=502,
+        full_name="mock-org/repository-1002",
+        display_name="repository-1002",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.commit()
+    db.close()
+
+    payload = {
+        "installation": {"id": 1002},
+        "repository": {
+            "id": 502,
+            "full_name": "mock-org/repository-1002",
+            "name": "repository-1002",
+            "default_branch": "main",
+            "private": True,
+            "pushed_at": 1776239000,
+        },
+        "ref": "refs/heads/feature/hokkaido-test",
+        "before": "0" * 40,
+        "after": "1" * 40,
+        "created": True,
+        "deleted": False,
+        "forced": False,
+        "head_commit": {"id": "1" * 40},
+        "commits": [
+            {
+                "id": "1" * 40,
+                "added": ["test_manual/hokkaido.txt", "test_manual/tohoku.txt", "test_manual/aomori.txt"],
+                "modified": [],
+                "removed": [],
+            }
+        ],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(
+        b"test-webhook-secret",
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    response = client.post(
+        "/webhooks/github",
+        data=body,
+        headers={
+            "content-type": "application/json",
+            "x-hub-signature-256": signature,
+            "x-github-delivery": "delivery-seed-1",
+            "x-github-event": "push",
+        },
+    )
+
+    assert response.status_code == 200
+
+    db = SessionLocal()
+    branch = db.query(Branch).filter_by(name="feature/hokkaido-test").one()
+    event = db.query(BranchEvent).filter_by(webhook_delivery_id="delivery-seed-1").one()
+    files = db.query(BranchFile).filter_by(branch_id=branch.id).all()
+    file_paths = {item.path for item in files}
+    assert event.compare_requested is False
+    assert event.reason == "initial_branch_push_seeded_from_commits_payload"
+    assert file_paths == {"test_manual/hokkaido.txt", "test_manual/tohoku.txt", "test_manual/aomori.txt"}
+    assert branch.touch_seed_status == "seeded_from_payload"
+    assert branch.has_authoritative_compare_history is False
+    db.close()
+
+
+def test_initial_branch_push_with_missing_commit_files_marks_branch_api_error(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Seed Error User",
+            "email": "seed-error@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Seed Error Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="seed-error-team").one()
+    installation = GithubInstallation(
+        installation_id=1003,
+        github_account_id=9003,
+        github_account_login="mock-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=503,
+        full_name="mock-org/repository-1003",
+        display_name="repository-1003",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.commit()
+    db.close()
+
+    payload = {
+        "installation": {"id": 1003},
+        "repository": {
+            "id": 503,
+            "full_name": "mock-org/repository-1003",
+            "name": "repository-1003",
+            "default_branch": "main",
+            "private": True,
+            "pushed_at": 1776239000,
+        },
+        "ref": "refs/heads/feature/error-seed",
+        "before": "0" * 40,
+        "after": "2" * 40,
+        "created": True,
+        "deleted": False,
+        "forced": False,
+        "head_commit": {"id": "2" * 40},
+        "commits": [],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(
+        b"test-webhook-secret",
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    response = client.post(
+        "/webhooks/github",
+        data=body,
+        headers={
+            "content-type": "application/json",
+            "x-hub-signature-256": signature,
+            "x-github-delivery": "delivery-seed-2",
+            "x-github-event": "push",
+        },
+    )
+
+    assert response.status_code == 200
+
+    db = SessionLocal()
+    branch = db.query(Branch).filter_by(name="feature/error-seed").one()
+    event = db.query(BranchEvent).filter_by(webhook_delivery_id="delivery-seed-2").one()
+    assert event.compare_requested is False
+    assert event.reason == "initial_branch_push_seeded_from_commits_payload_partial"
+    assert branch.touch_seed_status == "api_error"
+    assert branch.branch_status == "api_error"
+    assert branch.touch_seed_warning is not None
+    db.close()
+
+
+def test_followup_push_after_initial_seed_uses_compare_as_authoritative_source(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Seed Followup User",
+            "email": "seed-followup@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Seed Followup Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="seed-followup-team").one()
+    installation = GithubInstallation(
+        installation_id=1004,
+        github_account_id=9004,
+        github_account_login="mock-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=504,
+        full_name="mock-org/repository-1004",
+        display_name="repository-1004",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.commit()
+    db.close()
+
+    def sign_and_post(delivery_id: str, payload: dict[str, object]):
+        body = json.dumps(payload).encode("utf-8")
+        signature = "sha256=" + hmac.new(
+            b"test-webhook-secret",
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        return client.post(
+            "/webhooks/github",
+            data=body,
+            headers={
+                "content-type": "application/json",
+                "x-hub-signature-256": signature,
+                "x-github-delivery": delivery_id,
+                "x-github-event": "push",
+            },
+        )
+
+    first_payload = {
+        "installation": {"id": 1004},
+        "repository": {
+            "id": 504,
+            "full_name": "mock-org/repository-1004",
+            "name": "repository-1004",
+            "default_branch": "main",
+            "private": True,
+            "pushed_at": 1776239000,
+        },
+        "ref": "refs/heads/feature/followup",
+        "before": "0" * 40,
+        "after": "3" * 40,
+        "created": True,
+        "deleted": False,
+        "forced": False,
+        "head_commit": {"id": "3" * 40},
+        "commits": [{"id": "3" * 40, "added": ["test_manual/seeded.txt"], "modified": [], "removed": []}],
+    }
+    second_payload = {
+        "installation": {"id": 1004},
+        "repository": {
+            "id": 504,
+            "full_name": "mock-org/repository-1004",
+            "name": "repository-1004",
+            "default_branch": "main",
+            "private": True,
+            "pushed_at": 1776239010,
+        },
+        "ref": "refs/heads/feature/followup",
+        "before": "3" * 40,
+        "after": "4" * 40,
+        "created": False,
+        "deleted": False,
+        "forced": False,
+        "head_commit": {"id": "4" * 40},
+    }
+
+    first = sign_and_post("delivery-seed-3", first_payload)
+    second = sign_and_post("delivery-seed-4", second_payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    db = SessionLocal()
+    branch = db.query(Branch).filter_by(name="feature/followup").one()
+    second_event = db.query(BranchEvent).filter_by(webhook_delivery_id="delivery-seed-4").one()
+    assert second_event.compare_requested is True
+    assert second_event.reason == "compare_completed"
+    assert branch.has_authoritative_compare_history is True
+    assert branch.touch_seed_status is None
+    db.close()
+
+
 def test_workspace_invitation_accept_flow(client):
     register_page = client.get("/register")
     anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]

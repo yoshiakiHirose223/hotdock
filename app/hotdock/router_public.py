@@ -400,6 +400,7 @@ async def logs(request: Request, db: Session = Depends(get_db)):
                     "compare_completed": item.compare_completed,
                     "compare_error": item.compare_error,
                     "compare_error_message": item.compare_error_message,
+                    "reason": item.reason,
                     }
                 ),
             }

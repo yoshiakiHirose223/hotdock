@@ -45,6 +45,8 @@ DETAIL_SYNC_NOT_STARTED = "not_started"
 DETAIL_SYNC_SYNCING = "syncing"
 DETAIL_SYNC_COMPLETED = "completed"
 DETAIL_SYNC_ERROR = "error"
+BRANCH_TOUCH_SEED_STATUS_PAYLOAD = "seeded_from_payload"
+BRANCH_TOUCH_SEED_STATUS_API_ERROR = "api_error"
 MANUAL_BRANCH_INPUT_MAX_CHARS = 100_000
 MANUAL_BRANCH_INPUT_MAX_LINES = 5_000
 MANUAL_BRANCH_PREFIX = "BRANCH:"
@@ -164,6 +166,75 @@ def _normalize_path(path: str) -> str:
 
 def _all_zero_sha(sha: str | None) -> bool:
     return bool(sha) and set(sha) == {"0"}
+
+
+def _build_changes_from_push_commits_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    commits = payload.get("commits")
+    if not isinstance(commits, list) or not commits:
+        return {
+            "changes": [],
+            "partial": True,
+            "warning": "初回 push の commits payload にファイル一覧が含まれていないため、touched files を完全には復元できませんでした。",
+        }
+
+    change_map: dict[str, dict[str, str | None]] = {}
+    partial = False
+    warnings: list[str] = []
+    size_value = payload.get("size")
+    if isinstance(size_value, int) and size_value > len(commits):
+        partial = True
+        warnings.append("push payload の commits 一覧が省略されている可能性があります。")
+    if len(commits) >= 2048:
+        partial = True
+        warnings.append("push payload の commits 件数が上限に達しているため、初回 seed が不完全な可能性があります。")
+
+    for commit in commits:
+        if not isinstance(commit, dict):
+            partial = True
+            continue
+        for payload_key, change_type in (("added", "added"), ("modified", "modified"), ("removed", "removed")):
+            paths = commit.get(payload_key)
+            if paths is None:
+                continue
+            if not isinstance(paths, list):
+                partial = True
+                warnings.append(f"commit payload の {payload_key} 形式が不正でした。")
+                continue
+            for raw_path in paths:
+                path = str(raw_path or "").strip()
+                if not path:
+                    partial = True
+                    continue
+                change_map[path] = {
+                    "path": path,
+                    "change_type": change_type,
+                    "previous_path": None,
+                }
+
+    if not change_map:
+        partial = True
+        warnings.append("初回 push payload から touched files を取り出せませんでした。")
+
+    warning_text = " ".join(dict.fromkeys(warnings)) if warnings else None
+    return {
+        "changes": list(change_map.values()),
+        "partial": partial,
+        "warning": warning_text,
+    }
+
+
+def _set_branch_touch_seed_state(
+    branch: Branch,
+    *,
+    source: str | None,
+    seeded_at: datetime | None,
+    status_value: str | None,
+    warning: str | None,
+) -> None:
+    branch.touch_seed_source = source
+    branch.touch_seeded_at = seeded_at
+    branch.touch_seed_status = status_value
+    branch.touch_seed_warning = warning
 
 
 def _extract_branch_name(ref: str | None) -> str | None:
@@ -1607,6 +1678,9 @@ class UpsertBranchStateService:
                 branch_status="normal",
                 is_active=not deleted,
                 is_deleted=deleted,
+                touch_seed_status=None,
+                touch_seed_warning=None,
+                has_authoritative_compare_history=False,
             )
             db.add(branch)
             db.flush()
@@ -1761,6 +1835,32 @@ class UpsertBranchFilesFromCompareService:
         return result
 
 
+class UpsertBranchFilesFromPushPayloadSeedService:
+    def __call__(
+        self,
+        db: Session,
+        *,
+        repository: Repository,
+        branch: Branch,
+        payload: dict[str, Any],
+        head_sha: str,
+        occurred_at: datetime,
+    ) -> dict[str, Any]:
+        seed_result = _build_changes_from_push_commits_payload(payload)
+        apply_result = _apply_branch_file_changes(
+            db,
+            repository=repository,
+            branch=branch,
+            changes=seed_result["changes"],
+            head_sha=head_sha,
+            occurred_at=occurred_at,
+            reset_existing_active=False,
+        )
+        apply_result["partial"] = bool(seed_result["partial"])
+        apply_result["warning"] = seed_result["warning"]
+        return apply_result
+
+
 async def manually_register_branch_snapshot(
     db: Session,
     request: Request,
@@ -1819,6 +1919,9 @@ async def manually_register_branch_snapshot(
             observed_via="manual",
             touch_seed_source="manual_diff",
             touch_seeded_at=occurred_at,
+            touch_seed_status=None,
+            touch_seed_warning=None,
+            has_authoritative_compare_history=False,
             has_webhook_history=False,
             current_head_sha=head_sha or None,
             last_commit_sha=head_sha or None,
@@ -1838,6 +1941,8 @@ async def manually_register_branch_snapshot(
         branch.observed_via = "manual"
         branch.touch_seed_source = "manual_diff"
         branch.touch_seeded_at = occurred_at
+        branch.touch_seed_status = None
+        branch.touch_seed_warning = None
         branch.current_head_sha = head_sha or branch.current_head_sha
         branch.last_commit_sha = head_sha or branch.last_commit_sha
         branch.last_after_sha = head_sha or branch.last_after_sha
@@ -2050,6 +2155,8 @@ class RecalculateFileCollisionsService:
                 branch.branch_status = "deleted"
             elif branch.conflict_files_count > 0:
                 branch.branch_status = "has_conflict"
+            elif branch.touch_seed_status == BRANCH_TOUCH_SEED_STATUS_API_ERROR:
+                branch.branch_status = "api_error"
             else:
                 branch.branch_status = "normal"
 
@@ -2172,6 +2279,7 @@ class HandleGithubPushWebhookService:
         )
 
         if deleted:
+            branch_event.reason = "branch_deleted"
             impacted_paths = {
                 item.normalized_path or _normalize_path(item.path)
                 for item in db.scalars(
@@ -2206,8 +2314,71 @@ class HandleGithubPushWebhookService:
         if branch.last_processed_compare_head == after_sha or branch.current_head_sha == after_sha and branch.last_delivery_id != delivery_id:
             branch_event.compare_requested = False
             branch_event.compare_completed = False
+            branch_event.reason = "after_sha_already_processed"
             db.commit()
             return {"status": "ignored", "reason": "after_sha_already_processed"}
+
+        if created or _all_zero_sha(before_sha):
+            branch_event.compare_requested = False
+            branch_event.compare_completed = False
+            seed_result = UpsertBranchFilesFromPushPayloadSeedService()(
+                db,
+                repository=repository,
+                branch=branch,
+                payload=payload,
+                head_sha=after_sha,
+                occurred_at=occurred_at,
+            )
+            branch.has_authoritative_compare_history = False
+            if seed_result["partial"]:
+                branch.branch_status = "api_error"
+                _set_branch_touch_seed_state(
+                    branch,
+                    source="push_payload_commits",
+                    seeded_at=occurred_at,
+                    status_value=BRANCH_TOUCH_SEED_STATUS_API_ERROR,
+                    warning=seed_result["warning"],
+                )
+                branch_event.reason = "initial_branch_push_seeded_from_commits_payload_partial"
+            else:
+                _set_branch_touch_seed_state(
+                    branch,
+                    source="push_payload_commits",
+                    seeded_at=occurred_at,
+                    status_value=BRANCH_TOUCH_SEED_STATUS_PAYLOAD,
+                    warning=None,
+                )
+                branch_event.reason = "initial_branch_push_seeded_from_commits_payload"
+            collision_result = RecalculateFileCollisionsService()(
+                db,
+                repository=repository,
+                impacted_paths=seed_result["impacted_paths"],
+                occurred_at=occurred_at,
+            )
+            NotifyFileCollisionsService()(
+                db,
+                request,
+                repository=repository,
+                new_collisions=collision_result["new_collisions"],
+                resolved_collisions=collision_result["resolved_collisions"],
+            )
+            repository.last_synced_at = occurred_at
+            repository.sync_status = "active"
+            _mark_repository_detail_sync_state(
+                db,
+                repository=repository,
+                status_value=DETAIL_SYNC_COMPLETED,
+                error_message=seed_result["warning"] if seed_result["partial"] else None,
+                completed_at=occurred_at,
+            )
+            db.commit()
+            return {
+                "status": "processed",
+                "reason": branch_event.reason,
+                "files_seen": seed_result["files_seen"],
+                "new_collisions": len(collision_result["new_collisions"]),
+                "resolved_collisions": len(collision_result["resolved_collisions"]),
+            }
 
         branch_event.compare_requested = True
         try:
@@ -2226,6 +2397,10 @@ class HandleGithubPushWebhookService:
             branch.last_processed_compare_head = compare_head_sha
             branch.current_head_sha = compare_head_sha
             branch.last_commit_sha = compare_head_sha
+            branch.has_authoritative_compare_history = True
+            branch.touch_seed_status = None
+            branch.touch_seed_warning = None
+            branch_event.reason = "compare_completed"
             collision_result = RecalculateFileCollisionsService()(
                 db,
                 repository=repository,
@@ -2260,6 +2435,7 @@ class HandleGithubPushWebhookService:
         except (httpx.HTTPError, HTTPException) as exc:
             branch_event.compare_error = True
             branch_event.compare_error_message = str(getattr(exc, "detail", None) or exc)
+            branch_event.reason = "compare_failed"
             branch.branch_status = "compare_error"
             repository.last_synced_at = occurred_at
             repository.sync_status = "detail_sync_error"
