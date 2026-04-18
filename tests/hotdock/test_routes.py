@@ -894,10 +894,16 @@ def test_initial_branch_push_can_create_collision_from_payload_seed(client):
     collision = db.query(FileCollision).filter_by(repository_id=repository.id, normalized_path="test_manual/shared.txt").one()
     assert collision.collision_status == "open"
     assert collision.active_branch_count == 2
+    assert branch_a.branch_status == "has_conflict"
+    assert branch_b.branch_status == "has_conflict"
     assert branch_a.conflict_files_count == 1
     assert branch_b.conflict_files_count == 1
     assert db.query(BranchFile).filter_by(branch_id=branch_a.id, path="test_manual/shared.txt").one().is_conflict is True
     assert db.query(BranchFile).filter_by(branch_id=branch_b.id, path="test_manual/shared.txt").one().is_conflict is True
+    collision_audit = db.query(AuditLog).filter_by(action="file_collision_detected").all()
+    assert len(collision_audit) == 1
+    assert collision_audit[0].workspace_id == workspace.id
+    assert collision_audit[0].event_metadata["path"] == "test_manual/shared.txt"
     db.close()
 
 
