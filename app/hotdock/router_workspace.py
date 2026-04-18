@@ -468,6 +468,7 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
             "branch_status": branch.branch_status,
             "touch_seed_status": branch.touch_seed_status,
             "touch_seed_warning": branch.touch_seed_warning,
+            "touch_seed_error_message": branch.touch_seed_error_message,
             "has_authoritative_compare_history": branch.has_authoritative_compare_history,
             "observed_via": branch.observed_via,
             "touch_seed_source": branch.touch_seed_source,

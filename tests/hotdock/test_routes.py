@@ -445,10 +445,11 @@ def test_initial_branch_push_seeds_files_from_commits_payload_without_compare(cl
     files = db.query(BranchFile).filter_by(branch_id=branch.id).all()
     file_paths = {item.path for item in files}
     assert event.compare_requested is False
-    assert event.reason == "initial_branch_push_seeded_from_commits_payload"
+    assert event.reason == "initial_branch_push_seeded_from_payload_commits"
     assert file_paths == {"test_manual/hokkaido.txt", "test_manual/tohoku.txt", "test_manual/aomori.txt"}
     assert branch.touch_seed_status == "seeded_from_payload"
     assert branch.has_authoritative_compare_history is False
+    assert branch.touched_files_count == 3
     db.close()
 
 
@@ -544,10 +545,10 @@ def test_initial_branch_push_with_missing_commit_files_marks_branch_api_error(cl
     branch = db.query(Branch).filter_by(name="feature/error-seed").one()
     event = db.query(BranchEvent).filter_by(webhook_delivery_id="delivery-seed-2").one()
     assert event.compare_requested is False
-    assert event.reason == "initial_branch_push_seeded_from_commits_payload_partial"
+    assert event.reason == "initial_branch_push_seeded_from_payload_commits_partial"
     assert branch.touch_seed_status == "api_error"
     assert branch.branch_status == "api_error"
-    assert branch.touch_seed_warning is not None
+    assert branch.touch_seed_error_message is not None
     db.close()
 
 
@@ -669,6 +670,119 @@ def test_followup_push_after_initial_seed_uses_compare_as_authoritative_source(c
     assert second_event.reason == "compare_completed"
     assert branch.has_authoritative_compare_history is True
     assert branch.touch_seed_status is None
+    db.close()
+
+
+def test_initial_branch_push_deduplicates_paths_and_uses_last_change_type(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name=\"csrf_token\" value=\"')[1].split('\"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Seed Dedup User",
+            "email": "seed-dedup@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Seed Dedup Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="seed-dedup-team").one()
+    installation = GithubInstallation(
+        installation_id=1005,
+        github_account_id=9005,
+        github_account_login="mock-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=505,
+        full_name="mock-org/repository-1005",
+        display_name="repository-1005",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.commit()
+    db.close()
+
+    payload = {
+        "installation": {"id": 1005},
+        "repository": {
+            "id": 505,
+            "full_name": "mock-org/repository-1005",
+            "name": "repository-1005",
+            "default_branch": "main",
+            "private": True,
+            "pushed_at": 1776239000,
+        },
+        "ref": "refs/heads/feature/dedup",
+        "before": "0" * 40,
+        "after": "5" * 40,
+        "created": True,
+        "deleted": False,
+        "forced": False,
+        "head_commit": {"id": "5" * 40},
+        "commits": [
+            {
+                "id": "5" * 40,
+                "added": ["test_manual/california.txt", "test_manual/texas.txt"],
+                "modified": [],
+                "removed": [],
+            },
+            {
+                "id": "6" * 40,
+                "added": [],
+                "modified": ["test_manual/california.txt", "test_manual/florida.txt"],
+                "removed": ["test_manual/texas.txt", "test_manual/new-york.txt"],
+            },
+        ],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signature = "sha256=" + hmac.new(
+        b"test-webhook-secret",
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    response = client.post(
+        "/webhooks/github",
+        data=body,
+        headers={
+            "content-type": "application/json",
+            "x-hub-signature-256": signature,
+            "x-github-delivery": "delivery-seed-5",
+            "x-github-event": "push",
+        },
+    )
+
+    assert response.status_code == 200
+
+    db = SessionLocal()
+    branch = db.query(Branch).filter_by(name="feature/dedup").one()
+    files = {item.path: item for item in db.query(BranchFile).filter_by(branch_id=branch.id).all()}
+    assert branch.touched_files_count == 4
+    assert files["test_manual/california.txt"].last_change_type == "modified"
+    assert files["test_manual/texas.txt"].last_change_type == "removed"
+    assert files["test_manual/texas.txt"].is_active is True
+    assert "test_manual/florida.txt" in files
+    assert "test_manual/new-york.txt" in files
     db.close()
 
 

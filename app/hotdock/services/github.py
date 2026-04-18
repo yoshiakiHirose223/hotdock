@@ -46,6 +46,7 @@ DETAIL_SYNC_SYNCING = "syncing"
 DETAIL_SYNC_COMPLETED = "completed"
 DETAIL_SYNC_ERROR = "error"
 BRANCH_TOUCH_SEED_STATUS_PAYLOAD = "seeded_from_payload"
+BRANCH_TOUCH_SEED_STATUS_PARTIAL = "partial"
 BRANCH_TOUCH_SEED_STATUS_API_ERROR = "api_error"
 MANUAL_BRANCH_INPUT_MAX_CHARS = 100_000
 MANUAL_BRANCH_INPUT_MAX_LINES = 5_000
@@ -168,13 +169,13 @@ def _all_zero_sha(sha: str | None) -> bool:
     return bool(sha) and set(sha) == {"0"}
 
 
-def _build_changes_from_push_commits_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _build_initial_branch_changes_from_push_commits(payload: dict[str, Any]) -> dict[str, Any]:
     commits = payload.get("commits")
     if not isinstance(commits, list) or not commits:
         return {
             "changes": [],
-            "partial": True,
-            "warning": "初回 push の commits payload にファイル一覧が含まれていないため、touched files を完全には復元できませんでした。",
+            "status": BRANCH_TOUCH_SEED_STATUS_API_ERROR,
+            "error_message": "初回 push の commits payload にファイル一覧が含まれていないため、touched files を復元できませんでした。",
         }
 
     change_map: dict[str, dict[str, str | None]] = {}
@@ -205,21 +206,26 @@ def _build_changes_from_push_commits_payload(payload: dict[str, Any]) -> dict[st
                 if not path:
                     partial = True
                     continue
-                change_map[path] = {
+                normalized_path = _normalize_path(path)
+                change_map[normalized_path] = {
                     "path": path,
+                    "normalized_path": normalized_path,
                     "change_type": change_type,
                     "previous_path": None,
                 }
 
     if not change_map:
-        partial = True
-        warnings.append("初回 push payload から touched files を取り出せませんでした。")
+        return {
+            "changes": [],
+            "status": BRANCH_TOUCH_SEED_STATUS_API_ERROR,
+            "error_message": "初回 push payload から touched files を取り出せませんでした。",
+        }
 
     warning_text = " ".join(dict.fromkeys(warnings)) if warnings else None
     return {
         "changes": list(change_map.values()),
-        "partial": partial,
-        "warning": warning_text,
+        "status": BRANCH_TOUCH_SEED_STATUS_PARTIAL if partial else BRANCH_TOUCH_SEED_STATUS_PAYLOAD,
+        "error_message": warning_text,
     }
 
 
@@ -229,12 +235,13 @@ def _set_branch_touch_seed_state(
     source: str | None,
     seeded_at: datetime | None,
     status_value: str | None,
-    warning: str | None,
+    error_message: str | None,
 ) -> None:
     branch.touch_seed_source = source
     branch.touch_seeded_at = seeded_at
     branch.touch_seed_status = status_value
-    branch.touch_seed_warning = warning
+    branch.touch_seed_warning = error_message
+    branch.touch_seed_error_message = error_message
 
 
 def _extract_branch_name(ref: str | None) -> str | None:
@@ -1680,6 +1687,7 @@ class UpsertBranchStateService:
                 is_deleted=deleted,
                 touch_seed_status=None,
                 touch_seed_warning=None,
+                touch_seed_error_message=None,
                 has_authoritative_compare_history=False,
             )
             db.add(branch)
@@ -1846,7 +1854,7 @@ class UpsertBranchFilesFromPushPayloadSeedService:
         head_sha: str,
         occurred_at: datetime,
     ) -> dict[str, Any]:
-        seed_result = _build_changes_from_push_commits_payload(payload)
+        seed_result = _build_initial_branch_changes_from_push_commits(payload)
         apply_result = _apply_branch_file_changes(
             db,
             repository=repository,
@@ -1856,8 +1864,8 @@ class UpsertBranchFilesFromPushPayloadSeedService:
             occurred_at=occurred_at,
             reset_existing_active=False,
         )
-        apply_result["partial"] = bool(seed_result["partial"])
-        apply_result["warning"] = seed_result["warning"]
+        apply_result["seed_status"] = seed_result["status"]
+        apply_result["error_message"] = seed_result["error_message"]
         return apply_result
 
 
@@ -1921,6 +1929,7 @@ async def manually_register_branch_snapshot(
             touch_seeded_at=occurred_at,
             touch_seed_status=None,
             touch_seed_warning=None,
+            touch_seed_error_message=None,
             has_authoritative_compare_history=False,
             has_webhook_history=False,
             current_head_sha=head_sha or None,
@@ -1943,6 +1952,7 @@ async def manually_register_branch_snapshot(
         branch.touch_seeded_at = occurred_at
         branch.touch_seed_status = None
         branch.touch_seed_warning = None
+        branch.touch_seed_error_message = None
         branch.current_head_sha = head_sha or branch.current_head_sha
         branch.last_commit_sha = head_sha or branch.last_commit_sha
         branch.last_after_sha = head_sha or branch.last_after_sha
@@ -2330,25 +2340,34 @@ class HandleGithubPushWebhookService:
                 occurred_at=occurred_at,
             )
             branch.has_authoritative_compare_history = False
-            if seed_result["partial"]:
+            if seed_result["seed_status"] == BRANCH_TOUCH_SEED_STATUS_API_ERROR:
                 branch.branch_status = "api_error"
                 _set_branch_touch_seed_state(
                     branch,
-                    source="push_payload_commits",
+                    source="payload_commits",
                     seeded_at=occurred_at,
                     status_value=BRANCH_TOUCH_SEED_STATUS_API_ERROR,
-                    warning=seed_result["warning"],
+                    error_message=seed_result["error_message"],
                 )
-                branch_event.reason = "initial_branch_push_seeded_from_commits_payload_partial"
+                branch_event.reason = "initial_branch_push_seeded_from_payload_commits_partial"
+            elif seed_result["seed_status"] == BRANCH_TOUCH_SEED_STATUS_PARTIAL:
+                _set_branch_touch_seed_state(
+                    branch,
+                    source="payload_commits",
+                    seeded_at=occurred_at,
+                    status_value=BRANCH_TOUCH_SEED_STATUS_PARTIAL,
+                    error_message=seed_result["error_message"],
+                )
+                branch_event.reason = "initial_branch_push_seeded_from_payload_commits_partial"
             else:
                 _set_branch_touch_seed_state(
                     branch,
-                    source="push_payload_commits",
+                    source="payload_commits",
                     seeded_at=occurred_at,
                     status_value=BRANCH_TOUCH_SEED_STATUS_PAYLOAD,
-                    warning=None,
+                    error_message=None,
                 )
-                branch_event.reason = "initial_branch_push_seeded_from_commits_payload"
+                branch_event.reason = "initial_branch_push_seeded_from_payload_commits"
             collision_result = RecalculateFileCollisionsService()(
                 db,
                 repository=repository,
@@ -2368,7 +2387,7 @@ class HandleGithubPushWebhookService:
                 db,
                 repository=repository,
                 status_value=DETAIL_SYNC_COMPLETED,
-                error_message=seed_result["warning"] if seed_result["partial"] else None,
+                error_message=seed_result["error_message"] if seed_result["seed_status"] != BRANCH_TOUCH_SEED_STATUS_PAYLOAD else None,
                 completed_at=occurred_at,
             )
             db.commit()
@@ -2400,6 +2419,7 @@ class HandleGithubPushWebhookService:
             branch.has_authoritative_compare_history = True
             branch.touch_seed_status = None
             branch.touch_seed_warning = None
+            branch.touch_seed_error_message = None
             branch_event.reason = "compare_completed"
             collision_result = RecalculateFileCollisionsService()(
                 db,

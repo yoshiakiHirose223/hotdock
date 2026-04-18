@@ -34,6 +34,7 @@ class Branch(Base):
     touch_seeded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     touch_seed_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     touch_seed_warning: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    touch_seed_error_message: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     has_authoritative_compare_history: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     has_webhook_history: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     last_delivery_id: Mapped[str | None] = mapped_column(String(128), nullable=True)

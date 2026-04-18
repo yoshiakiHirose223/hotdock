@@ -19,11 +19,13 @@
         <div><strong>Compare History:</strong> {{ "authoritative" if branch_detail.has_authoritative_compare_history else "seed-only" }}</div>
         {% if branch_detail.touch_seed_status == "seeded_from_payload" and not branch_detail.has_authoritative_compare_history %}
         <div><strong>初回状態:</strong> 初回pushからファイルを取り込みました</div>
+        {% elif branch_detail.touch_seed_status == "partial" %}
+        <div><strong>初回状態:</strong> 初回seed不完全</div>
         {% elif branch_detail.touch_seed_status == "api_error" %}
         <div><strong>初回状態:</strong> APIエラー（初回seed不完全）</div>
         {% endif %}
-        {% if branch_detail.touch_seed_warning %}
-        <div><strong>Warning:</strong> {{ branch_detail.touch_seed_warning }}</div>
+        {% if branch_detail.touch_seed_error_message %}
+        <div><strong>Warning:</strong> {{ branch_detail.touch_seed_error_message }}</div>
         {% endif %}
     </div>
 </section>

@@ -89,6 +89,7 @@ def apply_runtime_schema_upgrades() -> None:
         ("touch_seeded_at", "touch_seeded_at TIMESTAMP"),
         ("touch_seed_status", "touch_seed_status VARCHAR(32)"),
         ("touch_seed_warning", "touch_seed_warning VARCHAR(2048)"),
+        ("touch_seed_error_message", "touch_seed_error_message VARCHAR(2048)"),
         ("has_authoritative_compare_history", "has_authoritative_compare_history BOOLEAN NOT NULL DEFAULT FALSE"),
         ("has_webhook_history", "has_webhook_history BOOLEAN NOT NULL DEFAULT FALSE"),
         ("last_delivery_id", "last_delivery_id VARCHAR(128)"),
