@@ -1821,6 +1821,11 @@ def _apply_branch_file_changes(
             file_record.is_conflict = False
             file_record.observed_at = occurred_at
 
+    # Sessions are configured with autoflush=False, so the writes above must be
+    # flushed before downstream count/collision queries can see the current
+    # path set for this branch.
+    db.flush()
+
     branch.touched_files_count = db.scalar(
         select(func.count(BranchFile.id)).where(
             BranchFile.branch_id == branch.id,
