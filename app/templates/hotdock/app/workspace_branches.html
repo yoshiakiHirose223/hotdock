@@ -106,9 +106,12 @@
                             <article class="branch-file-item {% if file.is_conflict %}is-conflict{% endif %}">
                                 <div class="branch-file-main">
                                     <strong>{{ file.path }}</strong>
-                                    <div class="branch-file-meta">
+                                <div class="branch-file-meta">
+                                        <span class="mini-badge {% if (file.first_seen_change_type or file.change_type) == 'added' %}is-added{% elif (file.last_change_type or file.change_type) == 'removed' %}is-removed{% elif file.is_conflict %}is-conflict{% endif %}">
+                                            first {{ file.first_seen_change_type or file.change_type or '-' }}
+                                        </span>
                                         <span class="mini-badge {% if (file.last_change_type or file.change_type) == 'added' %}is-added{% elif (file.last_change_type or file.change_type) == 'removed' %}is-removed{% elif file.is_conflict %}is-conflict{% endif %}">
-                                            {{ file.last_change_type or file.change_type }}
+                                            last {{ file.last_change_type or file.change_type or '-' }}
                                         </span>
                                         {% if file.previous_path %}
                                         <span class="mini-badge">from {{ file.previous_path }}</span>

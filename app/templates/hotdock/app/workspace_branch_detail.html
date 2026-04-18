@@ -43,7 +43,8 @@
             <thead>
                 <tr>
                     <th>Path</th>
-                    <th>Change</th>
+                    <th>First Seen</th>
+                    <th>Last Seen Change</th>
                     <th>Previous Path</th>
                     <th>Last Seen</th>
                     <th>Status</th>
@@ -53,7 +54,8 @@
                 {% for file in branch_files %}
                 <tr>
                     <td><code>{{ file.path }}</code></td>
-                    <td>{{ file.last_change_type or file.change_type }}</td>
+                    <td>{{ file.first_seen_change_type or file.change_type or '-' }}</td>
+                    <td>{{ file.last_change_type or file.change_type or '-' }}</td>
                     <td>{% if file.previous_path %}<code>{{ file.previous_path }} -> {{ file.path }}</code>{% else %}-{% endif %}</td>
                     <td>{{ file.last_seen_at or file.observed_at }}</td>
                     <td>
@@ -77,7 +79,7 @@
     {% else %}
     <div class="empty-state">
         <h3>touched files はまだありません</h3>
-        <p>この branch への push を処理すると、ここに touched files が表示されます。初回 branch 作成 push では commits payload から seed し、2回目以降は compare API を正本として使います。</p>
+        <p>この branch への push を処理すると、ここに現在の touched path 集合が表示されます。初回 branch 作成 push では commits payload から seed し、2回目以降は compare API を正本として使います。</p>
     </div>
     {% endif %}
 </section>

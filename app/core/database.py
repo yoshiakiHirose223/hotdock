@@ -102,10 +102,13 @@ def apply_runtime_schema_upgrades() -> None:
     branch_file_columns = [
         ("repository_id", "repository_id VARCHAR(36)"),
         ("normalized_path", "normalized_path VARCHAR(2048)"),
+        ("first_seen_change_type", "first_seen_change_type VARCHAR(32)"),
         ("last_change_type", "last_change_type VARCHAR(32)"),
         ("previous_path", "previous_path VARCHAR(2048)"),
         ("last_seen_commit_sha", "last_seen_commit_sha VARCHAR(64)"),
+        ("first_seen_at", "first_seen_at TIMESTAMP"),
         ("last_seen_at", "last_seen_at TIMESTAMP"),
+        ("source_kind", "source_kind VARCHAR(32)"),
         ("is_active", "is_active BOOLEAN NOT NULL DEFAULT TRUE"),
     ]
     pending_claim_columns = [
@@ -160,7 +163,9 @@ def apply_runtime_schema_upgrades() -> None:
     )
     _execute_upgrade_sql(
         "UPDATE branch_files SET normalized_path = COALESCE(normalized_path, path), "
+        "first_seen_change_type = COALESCE(first_seen_change_type, change_type, last_change_type), "
         "last_change_type = COALESCE(last_change_type, change_type), "
+        "first_seen_at = COALESCE(first_seen_at, observed_at, last_seen_at, created_at), "
         "last_seen_at = COALESCE(last_seen_at, observed_at), "
         "is_active = COALESCE(is_active, TRUE), "
         "repository_id = COALESCE(repository_id, (SELECT repository_id FROM branches WHERE branches.id = branch_files.branch_id))"
@@ -179,6 +184,7 @@ def apply_runtime_schema_upgrades() -> None:
         "CREATE INDEX IF NOT EXISTS ix_branch_events_reason ON branch_events (reason)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_repository_id ON branch_files (repository_id)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_normalized_path ON branch_files (normalized_path)",
+        "CREATE INDEX IF NOT EXISTS ix_branch_files_source_kind ON branch_files (source_kind)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_last_seen_at ON branch_files (last_seen_at)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_is_active ON branch_files (is_active)",
         "CREATE INDEX IF NOT EXISTS ix_github_pending_claims_last_resume_at ON github_pending_claims (last_resume_at)",

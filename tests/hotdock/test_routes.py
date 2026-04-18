@@ -778,7 +778,10 @@ def test_initial_branch_push_deduplicates_paths_and_uses_last_change_type(client
     branch = db.query(Branch).filter_by(name="feature/dedup").one()
     files = {item.path: item for item in db.query(BranchFile).filter_by(branch_id=branch.id).all()}
     assert branch.touched_files_count == 4
+    assert files["test_manual/california.txt"].first_seen_change_type == "added"
     assert files["test_manual/california.txt"].last_change_type == "modified"
+    assert files["test_manual/california.txt"].source_kind == "initial_payload_seed"
+    assert files["test_manual/texas.txt"].first_seen_change_type == "added"
     assert files["test_manual/texas.txt"].last_change_type == "removed"
     assert files["test_manual/texas.txt"].is_active is True
     assert "test_manual/florida.txt" in files

@@ -1720,6 +1720,7 @@ def _apply_branch_file_changes(
     changes: list[dict[str, str | None]],
     head_sha: str,
     occurred_at: datetime,
+    source_kind: str,
     reset_existing_active: bool = False,
 ) -> dict[str, Any]:
     impacted_paths: set[str] = set()
@@ -1743,7 +1744,7 @@ def _apply_branch_file_changes(
             continue
         change_type = str(change.get("change_type") or "modified")
         previous_path = str(change.get("previous_path") or "").strip() or None
-        normalized_path = _normalize_path(path)
+        normalized_path = str(change.get("normalized_path") or "").strip() or _normalize_path(path)
         impacted_paths.add(normalized_path)
         if previous_path:
             impacted_paths.add(_normalize_path(previous_path))
@@ -1774,11 +1775,14 @@ def _apply_branch_file_changes(
                 branch_id=branch.id,
                 path=path,
                 normalized_path=normalized_path,
+                first_seen_change_type=change_type,
                 change_type=change_type,
                 last_change_type=change_type,
                 previous_path=previous_path,
                 last_seen_commit_sha=head_sha,
+                first_seen_at=occurred_at,
                 last_seen_at=occurred_at,
+                source_kind=source_kind,
                 is_active=True,
                 is_conflict=False,
                 observed_at=occurred_at,
@@ -1788,11 +1792,17 @@ def _apply_branch_file_changes(
             file_record.repository_id = repository.id
             file_record.path = path
             file_record.normalized_path = normalized_path
-            file_record.change_type = change_type
+            if not file_record.first_seen_change_type:
+                file_record.first_seen_change_type = file_record.change_type or change_type
+            if not file_record.first_seen_at:
+                file_record.first_seen_at = file_record.observed_at or occurred_at
+            if not file_record.change_type:
+                file_record.change_type = file_record.first_seen_change_type or change_type
             file_record.last_change_type = change_type
             file_record.previous_path = previous_path
             file_record.last_seen_commit_sha = head_sha
             file_record.last_seen_at = occurred_at
+            file_record.source_kind = source_kind
             file_record.is_active = True
             file_record.is_conflict = False
             file_record.observed_at = occurred_at
@@ -1837,6 +1847,7 @@ class UpsertBranchFilesFromCompareService:
             changes=changed_files,
             head_sha=head_sha,
             occurred_at=occurred_at,
+            source_kind="compare",
             reset_existing_active=False,
         )
         result["merge_base_sha"] = ((compare_payload.get("merge_base_commit") or {}).get("sha"))
@@ -1862,6 +1873,7 @@ class UpsertBranchFilesFromPushPayloadSeedService:
             changes=seed_result["changes"],
             head_sha=head_sha,
             occurred_at=occurred_at,
+            source_kind="initial_payload_seed",
             reset_existing_active=False,
         )
         apply_result["seed_status"] = seed_result["status"]
@@ -1965,6 +1977,7 @@ async def manually_register_branch_snapshot(
         changes=changes,
         head_sha=head_sha,
         occurred_at=occurred_at,
+        source_kind="manual_input",
         reset_existing_active=True,
     )
     collision_result = RecalculateFileCollisionsService()(
