@@ -9,7 +9,7 @@
         </div>
     </div>
     <div class="inline-alert">
-        branch 一覧と touched files は、現在または過去に監視対象だった repository の履歴です。新しい branch 取得と compare 更新は、現在監視中の repository に対してのみ実行されます。
+        branch 一覧と touched files は、現在監視中の repository に対する push webhook から作られます。GitHub API で branch 一覧を先取りせず、push を観測した branch だけ表示します。
     </div>
     {% if branches %}
     <div class="table-wrap">
@@ -121,7 +121,7 @@
     {% else %}
     <div class="empty-state">
         <h3>branch はまだありません</h3>
-        <p>repository 候補を同期したあと、監視対象に選んだ repository に対して詳細同期を実行すると branch 一覧を取得します。touched files と collision は active repository への push 処理で更新されます。</p>
+        <p>監視対象 repository を選んだあと、その repository への push webhook が届くと branch が作成されます。touched files と collision も同じ push 処理で更新されます。</p>
     </div>
     {% endif %}
 </section>

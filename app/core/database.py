@@ -84,6 +84,10 @@ def apply_runtime_schema_upgrades() -> None:
         ("is_deleted", "is_deleted BOOLEAN NOT NULL DEFAULT FALSE"),
         ("was_created_observed", "was_created_observed BOOLEAN NOT NULL DEFAULT FALSE"),
         ("was_force_pushed_observed", "was_force_pushed_observed BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("observed_via", "observed_via VARCHAR(32)"),
+        ("touch_seed_source", "touch_seed_source VARCHAR(32)"),
+        ("touch_seeded_at", "touch_seeded_at TIMESTAMP"),
+        ("has_webhook_history", "has_webhook_history BOOLEAN NOT NULL DEFAULT FALSE"),
         ("last_delivery_id", "last_delivery_id VARCHAR(128)"),
         ("last_processed_compare_base", "last_processed_compare_base VARCHAR(64)"),
         ("last_processed_compare_head", "last_processed_compare_head VARCHAR(64)"),
@@ -140,7 +144,9 @@ def apply_runtime_schema_upgrades() -> None:
         "last_after_sha = COALESCE(last_after_sha, last_commit_sha), "
         "is_deleted = COALESCE(is_deleted, FALSE), "
         "was_created_observed = COALESCE(was_created_observed, FALSE), "
-        "was_force_pushed_observed = COALESCE(was_force_pushed_observed, FALSE)"
+        "was_force_pushed_observed = COALESCE(was_force_pushed_observed, FALSE), "
+        "has_webhook_history = COALESCE(has_webhook_history, FALSE), "
+        "observed_via = COALESCE(observed_via, CASE WHEN COALESCE(has_webhook_history, FALSE) THEN 'webhook' ELSE NULL END)"
     )
     _execute_upgrade_sql(
         "UPDATE branch_files SET normalized_path = COALESCE(normalized_path, path), "
@@ -156,6 +162,8 @@ def apply_runtime_schema_upgrades() -> None:
         "CREATE INDEX IF NOT EXISTS ix_repositories_selection_status ON repositories (selection_status)",
         "CREATE INDEX IF NOT EXISTS ix_repositories_detail_sync_status ON repositories (detail_sync_status)",
         "CREATE INDEX IF NOT EXISTS ix_branches_is_deleted ON branches (is_deleted)",
+        "CREATE INDEX IF NOT EXISTS ix_branches_observed_via ON branches (observed_via)",
+        "CREATE INDEX IF NOT EXISTS ix_branches_has_webhook_history ON branches (has_webhook_history)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_repository_id ON branch_files (repository_id)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_normalized_path ON branch_files (normalized_path)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_last_seen_at ON branch_files (last_seen_at)",

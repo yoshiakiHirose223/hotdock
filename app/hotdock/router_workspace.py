@@ -31,8 +31,8 @@ from app.hotdock.services.github import (
     REPOSITORY_SELECTION_UNSELECTED,
     activate_workspace_repository_selection,
     active_repository_limit,
+    manually_register_branch_snapshot,
     manual_sync_workspace_installation_repositories,
-    sync_repository_details,
 )
 from app.hotdock.services.workspaces import (
     build_workspace_navigation,
@@ -144,6 +144,18 @@ async def workspace_repositories(workspace_slug: str, request: Request, db: Sess
             status_code=status.HTTP_303_SEE_OTHER,
         )
     access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="viewer")
+    catalog_sync_error = None
+    if access.membership.role in {"owner", "admin"}:
+        try:
+            await manual_sync_workspace_installation_repositories(
+                db,
+                request,
+                workspace=access.workspace,
+                actor=auth.user,
+                record_audit_event=False,
+            )
+        except Exception as exc:
+            catalog_sync_error = str(getattr(exc, "detail", None) or exc)
     context = workspace_page_context(
         request,
         db,
@@ -184,6 +196,9 @@ async def workspace_repositories(workspace_slug: str, request: Request, db: Sess
         DETAIL_SYNC_COMPLETED: "完了",
         DETAIL_SYNC_ERROR: "エラー",
     }
+    context["manual_branch_command_example"] = 'BRANCH="feature/login-form"\necho "BRANCH:$BRANCH"\ngit diff --name-status origin/master..."$BRANCH"'
+    context["manual_branch_output_example"] = "BRANCH:feature/login-form\nM\tapp/controllers/login_controller.rb\nA\tapp/views/login/new.html.erb\nR100\tapp/models/user_old.rb\tapp/models/user.rb\nD\tapp/tmp/old_login.txt"
+    context["catalog_sync_error"] = catalog_sync_error
     return render_app("hotdock/app/workspace_repositories.html", context)
 
 
@@ -294,7 +309,6 @@ async def workspace_repository_activate(
 
     try:
         repository = activate_workspace_repository_selection(db, workspace=access.workspace, repository=repository)
-        detail_result = await sync_repository_details(db, repository=repository)
         record_audit_log(
             db,
             request,
@@ -304,10 +318,10 @@ async def workspace_repository_activate(
             target_type="repository",
             target_id=repository.id,
             action="workspace_repository_activated",
-            metadata={"github_repository_id": repository.github_repository_id, "branches_synced": detail_result["branches_synced"]},
+            metadata={"github_repository_id": repository.github_repository_id, "activation_mode": "webhook_driven"},
         )
         db.commit()
-        set_flash(request, "success", "監視対象を切り替え、詳細同期を実行しました。")
+        set_flash(request, "success", "監視対象を切り替えました。以後はこの repository への push webhook を受けた branch だけを表示します。")
     except Exception as exc:
         record_audit_log(
             db,
@@ -325,13 +339,14 @@ async def workspace_repository_activate(
     return RedirectResponse(url=f"/workspaces/{workspace_slug}/repositories", status_code=status.HTTP_303_SEE_OTHER)
 
 
-@router.post("/workspaces/{workspace_slug}/repositories/{repository_id}/detail-sync", name="hotdock-workspace-repository-detail-sync")
-async def workspace_repository_detail_sync(
+@router.post("/workspaces/{workspace_slug}/repositories/{repository_id}/branches/manual-register", name="hotdock-workspace-branch-manual-register")
+async def workspace_branch_manual_register(
     workspace_slug: str,
     repository_id: str,
     request: Request,
     db: Session = Depends(get_db),
     csrf_token: str = Form(...),
+    manual_branch_input: str = Form(...),
 ):
     auth = attach_auth_context(request, db)
     if auth.user is None:
@@ -356,21 +371,21 @@ async def workspace_repository_detail_sync(
         return RedirectResponse(url=f"/workspaces/{workspace_slug}/repositories", status_code=status.HTTP_303_SEE_OTHER)
 
     try:
-        result = await sync_repository_details(db, repository=repository)
-        record_audit_log(
+        result = await manually_register_branch_snapshot(
             db,
             request,
-            actor_type="user",
-            actor_id=auth.user.id,
-            workspace_id=access.workspace.id,
-            target_type="repository",
-            target_id=repository.id,
-            action="workspace_repository_detail_sync_requested",
-            metadata={"github_repository_id": repository.github_repository_id, "branches_synced": result["branches_synced"]},
+            workspace=access.workspace,
+            repository=repository,
+            actor=auth.user,
+            raw_text=manual_branch_input,
         )
-        db.commit()
-        set_flash(request, "success", f"詳細同期を実行しました。{result['branches_synced']} 件の branch を更新しました。")
+        set_flash(
+            request,
+            "success",
+            f"ブランチを手動登録しました。touched files を {result['applied_file_count']} 件反映し、衝突判定対象に追加しました。",
+        )
     except Exception as exc:
+        detail = str(getattr(exc, "detail", None) or "手動登録に失敗しました。")
         record_audit_log(
             db,
             request,
@@ -379,11 +394,11 @@ async def workspace_repository_detail_sync(
             workspace_id=access.workspace.id,
             target_type="repository",
             target_id=repository.id,
-            action="workspace_repository_detail_sync_failed",
-            metadata={"error": str(getattr(exc, "detail", None) or exc)},
+            action="workspace_branch_manual_register_failed",
+            metadata={"branch_name": (manual_branch_input.splitlines()[0] if manual_branch_input else None), "error": detail},
         )
         db.commit()
-        set_flash(request, "error", str(getattr(exc, "detail", None) or "詳細同期に失敗しました。"))
+        set_flash(request, "error", detail)
     return RedirectResponse(url=f"/workspaces/{workspace_slug}/repositories", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -410,8 +425,26 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
         ],
         current_membership=access.membership,
     )
-    repositories = {repository.id: repository for repository in db.scalars(select(Repository).where(Repository.workspace_id == access.workspace.id)).all()}
-    branches = db.scalars(select(Branch).where(Branch.workspace_id == access.workspace.id).order_by(Branch.last_push_at.desc().nullslast())).all()
+    repositories = {
+        repository.id: repository
+        for repository in db.scalars(
+            select(Repository).where(
+                Repository.workspace_id == access.workspace.id,
+                Repository.deleted_at.is_(None),
+                Repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
+                Repository.is_active.is_(True),
+                Repository.is_available.is_(True),
+            )
+        ).all()
+    }
+    active_repository_ids = list(repositories.keys())
+    branches = []
+    if active_repository_ids:
+        branches = db.scalars(
+            select(Branch)
+            .where(Branch.workspace_id == access.workspace.id, Branch.repository_id.in_(active_repository_ids))
+            .order_by(Branch.last_push_at.desc().nullslast())
+        ).all()
     branch_ids = [branch.id for branch in branches]
     branch_files = []
     if branch_ids:
@@ -462,6 +495,15 @@ async def workspace_branch_detail(workspace_slug: str, branch_id: str, request: 
     if branch is None:
         return RedirectResponse(url=f"/workspaces/{workspace_slug}/branches", status_code=status.HTTP_303_SEE_OTHER)
     repository = db.get(Repository, branch.repository_id)
+    if (
+        repository is None
+        or repository.workspace_id != access.workspace.id
+        or repository.deleted_at is not None
+        or not repository.is_active
+        or not repository.is_available
+        or repository.selection_status != REPOSITORY_SELECTION_ACTIVE
+    ):
+        return RedirectResponse(url=f"/workspaces/{workspace_slug}/branches", status_code=status.HTTP_303_SEE_OTHER)
     context = workspace_page_context(
         request,
         db,
@@ -530,6 +572,9 @@ async def workspace_conflicts(workspace_slug: str, request: Request, db: Session
         .join(Repository, Repository.id == FileCollision.repository_id)
         .where(
             Repository.workspace_id == access.workspace.id,
+            Repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
+            Repository.is_active.is_(True),
+            Repository.is_available.is_(True),
             FileCollision.collision_status == "open",
         )
         .order_by(FileCollision.last_detected_at.desc())

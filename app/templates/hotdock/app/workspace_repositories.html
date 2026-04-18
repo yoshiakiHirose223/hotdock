@@ -7,20 +7,19 @@
             <p class="panel-title">Repository Catalog</p>
             <h2>{{ workspace.name }}</h2>
         </div>
-        {% if current_membership and current_membership.role in ["owner", "admin"] %}
-        <form method="post" action="/workspaces/{{ workspace.slug }}/repositories/sync">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="button button-secondary" type="submit">repository 候補を再同期</button>
-        </form>
-        {% endif %}
     </div>
     <div class="inline-alert">
-        連携された repository は候補一覧として取り込みます。実際に監視する repository は {{ repository_limit }} 件だけ選択してください。
+        連携された repository はページ表示時に候補一覧として同期します。実際に監視する repository は {{ repository_limit }} 件だけ選択してください。
     </div>
     <div class="inline-alert">
-        切り替えると現在の監視対象は停止します。GitHub 側で削除・権限変更された repository は自動で監視停止されます。
+        repository を選択したあと、その repository への push webhook を受けた branch だけが Hotdock に作成されます。切り替えると現在の監視対象は停止し、GitHub 側で削除・権限変更された repository は自動で監視停止されます。
     </div>
-    {% if active_repository %}
+    {% if catalog_sync_error %}
+    <div class="inline-alert inline-alert-error">
+        repository 候補一覧の自動同期に失敗しました。{{ catalog_sync_error }}
+    </div>
+    {% endif %}
+{% if active_repository %}
     <div class="summary-strip">
         <strong>現在監視中:</strong>
         <span>{{ active_repository.display_name }}</span>
@@ -35,6 +34,51 @@
 </section>
 
 <section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="panel-title">Git手動登録</p>
+            <h2>既存ブランチを手動登録</h2>
+        </div>
+    </div>
+    {% if active_repository and active_repository.is_available and active_repository.selection_status == "active" and current_membership and current_membership.role in ["owner", "admin"] %}
+    <div class="inline-alert">
+        連携後に push webhook がまだ来ていない既存ブランチは自動では一覧に出ません。必要な既存ブランチだけを手動で登録でき、登録時に GitHub 上の branch 実在確認と touched files の反映を行います。
+    </div>
+    <div class="form-grid two-col">
+        <div class="panel panel-muted">
+            <p class="panel-title">コマンド例</p>
+            <p class="muted-copy">このコマンド例を使って出力結果を貼り付けてください。`feature/login-form` は登録したい branch 名に置き換えてください。比較元は `origin/master` です。</p>
+            <pre class="code-block">{{ manual_branch_command_example }}</pre>
+        </div>
+        <div class="panel panel-muted">
+            <p class="panel-title">受け入れ可能な出力例</p>
+            <p class="muted-copy">1行目は必ず `BRANCH:&lt;branch_name&gt;` 形式にし、2行目以降に `git diff --name-status` の出力をそのまま貼り付けてください。A / M / D / R のみ受け付けます。</p>
+            <pre class="code-block">{{ manual_branch_output_example }}</pre>
+        </div>
+    </div>
+    <form class="form-stack manual-branch-form" method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ active_repository.id }}/branches/manual-register">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="manual_branch_input">貼り付け入力</label>
+        <textarea
+            id="manual_branch_input"
+            name="manual_branch_input"
+            rows="12"
+            placeholder="{{ manual_branch_output_example }}"
+            required
+        ></textarea>
+        <div class="button-row">
+            <button class="button button-primary" type="submit">登録する</button>
+        </div>
+        <p class="muted-copy">成功すると branch が一覧に追加され、touched files と collision 判定対象が更新されます。</p>
+    </form>
+    {% elif active_repository and active_repository.is_available and active_repository.selection_status == "active" %}
+    <div class="empty-inline">この操作は owner / admin のみ実行できます。</div>
+    {% else %}
+    <div class="empty-inline">この repository は現在監視対象ではないため、手動登録できません。</div>
+    {% endif %}
+</section>
+
+<section class="panel">
     <div class="table-wrap">
         <table class="app-table">
             <thead>
@@ -43,7 +87,7 @@
                     <th>Visibility</th>
                     <th>Default Branch</th>
                     <th>Status</th>
-                    <th>Detail Sync</th>
+                    <th>Webhook Sync</th>
                     <th>Last Sync</th>
                     <th>Actions</th>
                 </tr>
@@ -86,10 +130,6 @@
                             {% if current_membership and current_membership.role in ["owner", "admin"] %}
                                 {% if repository.selection_status == 'active' %}
                                 <span class="button button-ghost is-disabled">監視中</span>
-                                <form method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ repository.id }}/detail-sync">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                    <button class="button button-secondary" type="submit">詳細を再同期</button>
-                                </form>
                                 {% elif repository.selection_status in ['unselected', 'inactive'] and repository.is_available %}
                                 <form method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ repository.id }}/activate">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -118,13 +158,7 @@
     {% if not repositories %}
     <div class="empty-state">
         <h3>repository 候補はまだありません</h3>
-        <p>GitHub App installation を claim したあと、候補一覧を同期すると利用可能な repository が表示されます。詳細同期は監視対象に選んだ repository だけ実行します。</p>
-        {% if current_membership and current_membership.role in ["owner", "admin"] %}
-        <form class="empty-state-actions" method="post" action="/workspaces/{{ workspace.slug }}/repositories/sync">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="button button-primary" type="submit">repository 候補を今すぐ反映する</button>
-        </form>
-        {% endif %}
+        <p>GitHub App installation を claim すると、利用可能な repository 候補が自動同期されます。表示された repository を選ぶと、その repository への push webhook で branch 一覧が育ち始めます。</p>
     </div>
     {% endif %}
 </section>

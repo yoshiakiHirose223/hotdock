@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import jwt
@@ -43,6 +45,9 @@ DETAIL_SYNC_NOT_STARTED = "not_started"
 DETAIL_SYNC_SYNCING = "syncing"
 DETAIL_SYNC_COMPLETED = "completed"
 DETAIL_SYNC_ERROR = "error"
+MANUAL_BRANCH_INPUT_MAX_CHARS = 100_000
+MANUAL_BRANCH_INPUT_MAX_LINES = 5_000
+MANUAL_BRANCH_PREFIX = "BRANCH:"
 
 
 @dataclass
@@ -167,6 +172,73 @@ def _extract_branch_name(ref: str | None) -> str | None:
     return ref.removeprefix("refs/heads/")
 
 
+def _manual_change_type(status_token: str) -> str:
+    if status_token == "A":
+        return "added"
+    if status_token == "M":
+        return "modified"
+    if status_token == "D":
+        return "removed"
+    if status_token.startswith("R"):
+        return "renamed"
+    raise HTTPException(status_code=422, detail=f"未対応のステータスです: {status_token}")
+
+
+def _split_diff_columns(line: str) -> list[str]:
+    if "\t" in line:
+        return [column.strip() for column in line.split("\t") if column.strip()]
+    return [column.strip() for column in re.split(r"\s+", line.strip()) if column.strip()]
+
+
+def parse_manual_branch_registration_input(raw_text: str) -> tuple[str, list[dict[str, str | None]]]:
+    if len(raw_text) > MANUAL_BRANCH_INPUT_MAX_CHARS:
+        raise HTTPException(status_code=422, detail=f"入力は {MANUAL_BRANCH_INPUT_MAX_CHARS} 文字以内にしてください")
+
+    lines = raw_text.splitlines()
+    if len(lines) > MANUAL_BRANCH_INPUT_MAX_LINES:
+        raise HTTPException(status_code=422, detail=f"入力行数は {MANUAL_BRANCH_INPUT_MAX_LINES} 行以内にしてください")
+
+    if not lines:
+        raise HTTPException(status_code=422, detail="1行目は BRANCH:<branch_name> 形式で入力してください")
+
+    branch_line = lines[0].strip()
+    if not branch_line.startswith(MANUAL_BRANCH_PREFIX):
+        raise HTTPException(status_code=422, detail="1行目は BRANCH:<branch_name> 形式で入力してください")
+    branch_name = branch_line.removeprefix(MANUAL_BRANCH_PREFIX).strip()
+    if not branch_name:
+        raise HTTPException(status_code=422, detail="1行目は BRANCH:<branch_name> 形式で入力してください")
+
+    changes: list[dict[str, str | None]] = []
+    for line_number, raw_line in enumerate(lines[1:], start=2):
+        line = raw_line.strip()
+        if not line:
+            continue
+        columns = _split_diff_columns(line)
+        if not columns:
+            continue
+        status_token = columns[0]
+        change_type = _manual_change_type(status_token)
+        if change_type == "renamed":
+            if len(columns) != 3:
+                raise HTTPException(status_code=422, detail=f"{line_number}行目の rename 行の形式が不正です")
+            previous_path, path = columns[1], columns[2]
+            if not previous_path or not path:
+                raise HTTPException(status_code=422, detail=f"{line_number}行目の rename 行の形式が不正です")
+            changes.append({"path": path, "change_type": change_type, "previous_path": previous_path})
+            continue
+        if len(columns) != 2:
+            raise HTTPException(status_code=422, detail=f"{line_number}行目の diff 形式が不正です")
+        path = columns[1]
+        if not path:
+            raise HTTPException(status_code=422, detail=f"{line_number}行目の path が空です")
+        changes.append({"path": path, "change_type": change_type, "previous_path": None})
+
+    if not changes:
+        raise HTTPException(status_code=422, detail="2行目以降に git diff --name-status の出力を貼り付けてください")
+
+    return branch_name, changes
+
+
 def _payload_occurred_at(payload: dict[str, Any]) -> datetime:
     repository_payload = payload.get("repository") or {}
     pushed_at = repository_payload.get("pushed_at")
@@ -284,6 +356,25 @@ class GithubAppClient:
                 },
                 params={"per_page": 100},
             )
+        response.raise_for_status()
+        return response.json()
+
+    async def fetch_repository_branch(self, installation_token: str, repository_full_name: str, branch_name: str) -> dict[str, Any]:
+        if settings.github_mock_oauth_enabled and installation_token.startswith("mock-installation-token-"):
+            if not branch_name.strip():
+                raise HTTPException(status_code=404, detail="Branch not found")
+            repo_key = repository_full_name.replace("/", "-")
+            return {"name": branch_name, "commit": {"sha": f"mock-{repo_key}-{branch_name.replace('/', '-')}"}} 
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{settings.github_api_base_url}/repos/{repository_full_name}/branches/{quote(branch_name, safe='')}",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {installation_token}",
+                },
+            )
+        if response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Branch not found")
         response.raise_for_status()
         return response.json()
 
@@ -1452,85 +1543,19 @@ def activate_workspace_repository_selection(
     target.selection_status = REPOSITORY_SELECTION_ACTIVE
     target.activated_at = now
     target.inaccessible_reason = None
-    target.sync_status = "detail_syncing"
-    _mark_repository_detail_sync_state(
-        db,
-        repository=target,
-        status_value=DETAIL_SYNC_SYNCING,
-        error_message=None,
-        started_at=now,
-    )
+    target.sync_status = "active"
+    if not target.detail_sync_status:
+        _mark_repository_detail_sync_state(
+            db,
+            repository=target,
+            status_value=DETAIL_SYNC_NOT_STARTED,
+            error_message=None,
+        )
+    else:
+        target.detail_sync_error_message = None
     db.commit()
     db.refresh(target)
     return target
-
-
-async def sync_repository_details(
-    db: Session,
-    *,
-    repository: Repository,
-) -> dict[str, int]:
-    if not repository_detail_sync_allowed(repository):
-        raise HTTPException(status_code=409, detail="Repository detail sync is only allowed for active repositories")
-
-    installation = db.get(GithubInstallation, repository.github_installation_id)
-    if installation is None or installation.claimed_workspace_id != repository.workspace_id:
-        raise HTTPException(status_code=409, detail="Repository installation is not available")
-    if installation.installation_status in {"uninstalled", "suspended", "unlinked"}:
-        raise HTTPException(status_code=409, detail="Installation is not active")
-
-    started_at = utcnow()
-    repository = db.scalar(select(Repository).where(Repository.id == repository.id).with_for_update())
-    if repository is None:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    _mark_repository_detail_sync_state(
-        db,
-        repository=repository,
-        status_value=DETAIL_SYNC_SYNCING,
-        error_message=None,
-        started_at=started_at,
-    )
-    repository.sync_status = "detail_syncing"
-    db.commit()
-
-    app_client = GithubAppClient()
-    try:
-        token_payload = await app_client.create_installation_token(installation.installation_id)
-        installation_token = token_payload["token"]
-        branches_payload = await app_client.fetch_repository_branches(installation_token, repository.full_name)
-        branches_synced = _upsert_repository_branches_from_api(
-            db,
-            workspace_id=repository.workspace_id,
-            repository=repository,
-            branches_payload=branches_payload,
-        )
-        repository = db.scalar(select(Repository).where(Repository.id == repository.id).with_for_update())
-        if repository is None:
-            raise HTTPException(status_code=404, detail="Repository not found")
-        completed_at = utcnow()
-        repository.last_synced_at = completed_at
-        repository.sync_status = "active" if repository.is_active else "catalog_synced"
-        _mark_repository_detail_sync_state(
-            db,
-            repository=repository,
-            status_value=DETAIL_SYNC_COMPLETED,
-            error_message=None,
-            completed_at=completed_at,
-        )
-        db.commit()
-        return {"branches_synced": branches_synced}
-    except (httpx.HTTPError, HTTPException, KeyError) as exc:
-        repository = db.scalar(select(Repository).where(Repository.id == repository.id).with_for_update())
-        if repository is not None:
-            repository.sync_status = "detail_sync_error"
-            _mark_repository_detail_sync_state(
-                db,
-                repository=repository,
-                status_value=DETAIL_SYNC_ERROR,
-                error_message=str(getattr(exc, "detail", None) or exc),
-            )
-            db.commit()
-        raise
 
 
 class GenerateInstallationTokenService:
@@ -1591,6 +1616,8 @@ class UpsertBranchStateService:
         branch.last_delivery_id = delivery_id
         branch.was_created_observed = branch.was_created_observed or bool(created)
         branch.was_force_pushed_observed = branch.was_force_pushed_observed or bool(forced)
+        branch.observed_via = "webhook"
+        branch.has_webhook_history = True
         branch.is_deleted = bool(deleted)
         branch.is_active = not deleted
         if not deleted:
@@ -1601,6 +1628,104 @@ class UpsertBranchStateService:
         else:
             branch.branch_status = "deleted"
         return branch
+
+
+def _apply_branch_file_changes(
+    db: Session,
+    *,
+    repository: Repository,
+    branch: Branch,
+    changes: list[dict[str, str | None]],
+    head_sha: str,
+    occurred_at: datetime,
+    reset_existing_active: bool = False,
+) -> dict[str, Any]:
+    impacted_paths: set[str] = set()
+    if reset_existing_active:
+        existing_active_files = db.scalars(
+            select(BranchFile).where(
+                BranchFile.branch_id == branch.id,
+                BranchFile.is_active.is_(True),
+            )
+        ).all()
+        for file_item in existing_active_files:
+            impacted_paths.add(file_item.normalized_path or _normalize_path(file_item.path))
+            file_item.is_active = False
+            file_item.is_conflict = False
+            file_item.last_seen_at = occurred_at
+            file_item.observed_at = occurred_at
+
+    for change in changes:
+        path = str(change.get("path") or "").strip()
+        if not path:
+            continue
+        change_type = str(change.get("change_type") or "modified")
+        previous_path = str(change.get("previous_path") or "").strip() or None
+        normalized_path = _normalize_path(path)
+        impacted_paths.add(normalized_path)
+        if previous_path:
+            impacted_paths.add(_normalize_path(previous_path))
+
+        if change_type == "renamed" and previous_path:
+            previous_record = db.scalar(
+                select(BranchFile).where(
+                    BranchFile.branch_id == branch.id,
+                    BranchFile.path == previous_path,
+                )
+            )
+            if previous_record is not None:
+                previous_record.is_active = False
+                previous_record.is_conflict = False
+                previous_record.last_seen_at = occurred_at
+                previous_record.observed_at = occurred_at
+
+        file_record = db.scalar(
+            select(BranchFile).where(
+                BranchFile.branch_id == branch.id,
+                BranchFile.path == path,
+            )
+        )
+        if file_record is None:
+            file_record = BranchFile(
+                workspace_id=repository.workspace_id,
+                repository_id=repository.id,
+                branch_id=branch.id,
+                path=path,
+                normalized_path=normalized_path,
+                change_type=change_type,
+                last_change_type=change_type,
+                previous_path=previous_path,
+                last_seen_commit_sha=head_sha,
+                last_seen_at=occurred_at,
+                is_active=True,
+                is_conflict=False,
+                observed_at=occurred_at,
+            )
+            db.add(file_record)
+        else:
+            file_record.repository_id = repository.id
+            file_record.path = path
+            file_record.normalized_path = normalized_path
+            file_record.change_type = change_type
+            file_record.last_change_type = change_type
+            file_record.previous_path = previous_path
+            file_record.last_seen_commit_sha = head_sha
+            file_record.last_seen_at = occurred_at
+            file_record.is_active = True
+            file_record.is_conflict = False
+            file_record.observed_at = occurred_at
+
+    branch.touched_files_count = db.scalar(
+        select(func.count(BranchFile.id)).where(
+            BranchFile.branch_id == branch.id,
+            BranchFile.is_active.is_(True),
+        )
+    ) or 0
+    return {
+        "impacted_paths": impacted_paths,
+        "files_seen": len(changes),
+        "head_commit_sha": head_sha,
+    }
 
 
 class UpsertBranchFilesFromCompareService:
@@ -1614,79 +1739,164 @@ class UpsertBranchFilesFromCompareService:
         head_sha: str,
         occurred_at: datetime,
     ) -> dict[str, Any]:
-        impacted_paths: set[str] = set()
-        changed_files = compare_payload.get("files") or []
-        for file_payload in changed_files:
-            path = file_payload.get("filename")
-            if not path:
-                continue
-            change_type = file_payload.get("status") or "modified"
-            previous_path = file_payload.get("previous_filename")
-            normalized_path = _normalize_path(path)
-            impacted_paths.add(normalized_path)
-            if previous_path:
-                impacted_paths.add(_normalize_path(previous_path))
+        changed_files = [
+            {
+                "path": file_payload.get("filename"),
+                "change_type": file_payload.get("status") or "modified",
+                "previous_path": file_payload.get("previous_filename"),
+            }
+            for file_payload in (compare_payload.get("files") or [])
+            if file_payload.get("filename")
+        ]
+        result = _apply_branch_file_changes(
+            db,
+            repository=repository,
+            branch=branch,
+            changes=changed_files,
+            head_sha=head_sha,
+            occurred_at=occurred_at,
+            reset_existing_active=False,
+        )
+        result["merge_base_sha"] = ((compare_payload.get("merge_base_commit") or {}).get("sha"))
+        return result
 
-            if change_type == "renamed" and previous_path:
-                previous_record = db.scalar(
-                    select(BranchFile).where(
-                        BranchFile.branch_id == branch.id,
-                        BranchFile.path == previous_path,
-                    )
-                )
-                if previous_record is not None:
-                    previous_record.is_active = False
-                    previous_record.is_conflict = False
-                    previous_record.last_seen_at = occurred_at
-                    previous_record.observed_at = occurred_at
 
-            file_record = db.scalar(
-                select(BranchFile).where(
-                    BranchFile.branch_id == branch.id,
-                    BranchFile.path == path,
-                )
-            )
-            if file_record is None:
-                file_record = BranchFile(
-                    workspace_id=repository.workspace_id,
-                    repository_id=repository.id,
-                    branch_id=branch.id,
-                    path=path,
-                    normalized_path=normalized_path,
-                    change_type=change_type,
-                    last_change_type=change_type,
-                    previous_path=previous_path,
-                    last_seen_commit_sha=head_sha,
-                    last_seen_at=occurred_at,
-                    is_active=True,
-                    is_conflict=False,
-                    observed_at=occurred_at,
-                )
-                db.add(file_record)
-            else:
-                file_record.repository_id = repository.id
-                file_record.path = path
-                file_record.normalized_path = normalized_path
-                file_record.change_type = change_type
-                file_record.last_change_type = change_type
-                file_record.previous_path = previous_path
-                file_record.last_seen_commit_sha = head_sha
-                file_record.last_seen_at = occurred_at
-                file_record.is_active = True
-                file_record.observed_at = occurred_at
+async def manually_register_branch_snapshot(
+    db: Session,
+    request: Request,
+    *,
+    workspace: Workspace,
+    repository: Repository,
+    actor: User,
+    raw_text: str,
+) -> dict[str, Any]:
+    if repository.workspace_id != workspace.id or repository.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if not repository_detail_sync_allowed(repository):
+        raise HTTPException(status_code=409, detail="現在この repository は監視対象ではありません")
 
-        branch.touched_files_count = db.scalar(
-            select(func.count(BranchFile.id)).where(
-                BranchFile.branch_id == branch.id,
-                BranchFile.is_active.is_(True),
-            )
-        ) or 0
-        return {
-            "impacted_paths": impacted_paths,
-            "files_seen": len(changed_files),
-            "merge_base_sha": ((compare_payload.get("merge_base_commit") or {}).get("sha")),
-            "head_commit_sha": head_sha,
-        }
+    branch_name, changes = parse_manual_branch_registration_input(raw_text)
+    installation = db.get(GithubInstallation, repository.github_installation_id)
+    if installation is None or installation.claimed_workspace_id != workspace.id:
+        raise HTTPException(status_code=409, detail="Repository installation is not available")
+    if installation.installation_status in {"uninstalled", "suspended", "unlinked"}:
+        raise HTTPException(status_code=409, detail="Installation is not active")
+
+    installation_token = await GenerateInstallationTokenService()(installation)
+    try:
+        branch_payload = await GithubAppClient().fetch_repository_branch(
+            installation_token,
+            repository.full_name,
+            branch_name,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=422, detail="指定されたブランチは GitHub 上に存在しません")
+        raise
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail="GitHub 上のブランチ確認に失敗しました") from exc
+
+    occurred_at = utcnow()
+    head_sha = str(((branch_payload.get("commit") or {}).get("sha")) or "")
+    branch = db.scalar(
+        select(Branch).where(
+            Branch.repository_id == repository.id,
+            Branch.name == branch_name,
+        ).with_for_update()
+    )
+    created = False
+    reactivated = False
+    if branch is None:
+        branch = Branch(
+            workspace_id=workspace.id,
+            repository_id=repository.id,
+            name=branch_name,
+            touched_files_count=0,
+            conflict_files_count=0,
+            branch_status="tracked",
+            is_active=True,
+            is_deleted=False,
+            observed_via="manual",
+            touch_seed_source="manual_diff",
+            touch_seeded_at=occurred_at,
+            has_webhook_history=False,
+            current_head_sha=head_sha or None,
+            last_commit_sha=head_sha or None,
+            last_after_sha=head_sha or None,
+            last_push_at=occurred_at,
+        )
+        db.add(branch)
+        db.flush()
+        created = True
+    else:
+        if branch.has_webhook_history:
+            raise HTTPException(status_code=409, detail="webhook 観測済みの branch は手動再登録できません")
+        reactivated = branch.is_deleted or not branch.is_active
+        branch.is_active = True
+        branch.is_deleted = False
+        branch.branch_status = "tracked"
+        branch.observed_via = "manual"
+        branch.touch_seed_source = "manual_diff"
+        branch.touch_seeded_at = occurred_at
+        branch.current_head_sha = head_sha or branch.current_head_sha
+        branch.last_commit_sha = head_sha or branch.last_commit_sha
+        branch.last_after_sha = head_sha or branch.last_after_sha
+        branch.last_push_at = occurred_at
+
+    apply_result = _apply_branch_file_changes(
+        db,
+        repository=repository,
+        branch=branch,
+        changes=changes,
+        head_sha=head_sha,
+        occurred_at=occurred_at,
+        reset_existing_active=True,
+    )
+    collision_result = RecalculateFileCollisionsService()(
+        db,
+        repository=repository,
+        impacted_paths=apply_result["impacted_paths"],
+        occurred_at=occurred_at,
+    )
+    repository.last_synced_at = occurred_at
+    repository.sync_status = "active"
+    _mark_repository_detail_sync_state(
+        db,
+        repository=repository,
+        status_value=DETAIL_SYNC_COMPLETED,
+        error_message=None,
+        completed_at=occurred_at,
+    )
+    record_audit_log(
+        db,
+        request,
+        actor_type="user",
+        actor_id=actor.id,
+        workspace_id=workspace.id,
+        target_type="branch",
+        target_id=branch.id,
+        action="workspace_branch_manual_registered",
+        metadata={
+            "repository_id": repository.id,
+            "branch_name": branch_name,
+            "file_count": apply_result["files_seen"],
+            "created": created,
+            "reactivated": reactivated,
+            "observed_via": "manual",
+        },
+    )
+    db.commit()
+    return {
+        "branch_name": branch_name,
+        "created": created,
+        "reactivated": reactivated,
+        "parsed_file_count": len(changes),
+        "applied_file_count": apply_result["files_seen"],
+        "collision_recomputed": True,
+        "new_collisions": len(collision_result["new_collisions"]),
+        "resolved_collisions": len(collision_result["resolved_collisions"]),
+        "observed_via": "manual",
+    }
 
 
 class RecalculateFileCollisionsService:
@@ -1952,6 +2162,14 @@ class HandleGithubPushWebhookService:
         )
         db.add(branch_event)
         db.flush()
+        repository.sync_status = "webhook_processing"
+        _mark_repository_detail_sync_state(
+            db,
+            repository=repository,
+            status_value=DETAIL_SYNC_SYNCING,
+            error_message=None,
+            started_at=occurred_at,
+        )
 
         if deleted:
             impacted_paths = {
@@ -1974,6 +2192,14 @@ class HandleGithubPushWebhookService:
             branch.branch_status = "deleted"
             RecalculateFileCollisionsService()(db, repository=repository, impacted_paths=impacted_paths, occurred_at=occurred_at)
             repository.last_synced_at = occurred_at
+            repository.sync_status = "active"
+            _mark_repository_detail_sync_state(
+                db,
+                repository=repository,
+                status_value=DETAIL_SYNC_COMPLETED,
+                error_message=None,
+                completed_at=occurred_at,
+            )
             db.commit()
             return {"status": "processed", "reason": "branch_deleted", "compare_requested": False}
 
@@ -2015,6 +2241,14 @@ class HandleGithubPushWebhookService:
             )
             branch_event.compare_completed = True
             repository.last_synced_at = occurred_at
+            repository.sync_status = "active"
+            _mark_repository_detail_sync_state(
+                db,
+                repository=repository,
+                status_value=DETAIL_SYNC_COMPLETED,
+                error_message=None,
+                completed_at=occurred_at,
+            )
             db.commit()
             return {
                 "status": "processed",
@@ -2028,6 +2262,13 @@ class HandleGithubPushWebhookService:
             branch_event.compare_error_message = str(getattr(exc, "detail", None) or exc)
             branch.branch_status = "compare_error"
             repository.last_synced_at = occurred_at
+            repository.sync_status = "detail_sync_error"
+            _mark_repository_detail_sync_state(
+                db,
+                repository=repository,
+                status_value=DETAIL_SYNC_ERROR,
+                error_message=branch_event.compare_error_message,
+            )
             record_audit_log(
                 db,
                 request,
@@ -2054,6 +2295,7 @@ async def manual_sync_workspace_installation_repositories(
     *,
     workspace: Workspace,
     actor: User,
+    record_audit_event: bool = True,
 ) -> dict[str, int]:
     installations = db.scalars(
         select(GithubInstallation).where(
@@ -2103,22 +2345,23 @@ async def manual_sync_workspace_installation_repositories(
         )
         installations_synced += 1
 
-    record_audit_log(
-        db,
-        request,
-        actor_type="user",
-        actor_id=actor.id,
-        workspace_id=workspace.id,
-        target_type="workspace",
-        target_id=workspace.id,
-        action="workspace_repository_sync_requested",
-        metadata={
-            "installations_synced": installations_synced,
-            "repositories_synced": repositories_synced,
-            "branches_synced": 0,
-            "skipped_installations": skipped_installations,
-        },
-    )
+    if record_audit_event:
+        record_audit_log(
+            db,
+            request,
+            actor_type="user",
+            actor_id=actor.id,
+            workspace_id=workspace.id,
+            target_type="workspace",
+            target_id=workspace.id,
+            action="workspace_repository_sync_requested",
+            metadata={
+                "installations_synced": installations_synced,
+                "repositories_synced": repositories_synced,
+                "branches_synced": 0,
+                "skipped_installations": skipped_installations,
+            },
+        )
     db.commit()
     return {
         "installations_synced": installations_synced,

@@ -561,12 +561,18 @@ def workspace_dashboard_data(db: Session, workspace: Workspace) -> dict[str, obj
         select(Repository).where(Repository.workspace_id == workspace.id, Repository.deleted_at.is_(None))
     ).all()
     active_repositories = [repository for repository in repositories if repository.selection_status == REPOSITORY_SELECTION_ACTIVE]
-    branches = db.scalars(select(Branch).where(Branch.workspace_id == workspace.id)).all()
+    active_repository_ids = [repository.id for repository in active_repositories]
+    branches = db.scalars(
+        select(Branch).where(Branch.workspace_id == workspace.id, Branch.repository_id.in_(active_repository_ids) if active_repository_ids else False)
+    ).all()
     conflicts = db.scalars(
         select(FileCollision)
         .join(Repository, Repository.id == FileCollision.repository_id)
         .where(
             Repository.workspace_id == workspace.id,
+            Repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
+            Repository.is_active.is_(True),
+            Repository.is_available.is_(True),
             FileCollision.collision_status == "open",
         )
     ).all()

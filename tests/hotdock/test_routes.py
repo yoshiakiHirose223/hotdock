@@ -897,23 +897,13 @@ def test_repository_activation_switches_active_target(client, monkeypatch):
     repo_b_id = repo_b.id
     db.close()
 
-    async def fake_create_installation_token(self, installation_id):
-        assert installation_id == 6001
-        return {"token": "installation-token"}
-
-    async def fake_fetch_repository_branches(self, installation_token, full_name):
-        return [{"name": "main", "commit": {"sha": f"sha-{full_name}"}}]
-
-    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.create_installation_token", fake_create_installation_token)
-    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.fetch_repository_branches", fake_fetch_repository_branches)
-
     first = client.post(
         f"/workspaces/switch-team/repositories/{repo_a_id}/activate",
         data={"csrf_token": owner_csrf},
         follow_redirects=True,
     )
     assert first.status_code == 200
-    assert "監視対象を切り替え、詳細同期を実行しました。" in first.text
+    assert "監視対象を切り替えました。以後はこの repository への push webhook を受けた branch だけを表示します。" in first.text
 
     second = client.post(
         f"/workspaces/switch-team/repositories/{repo_b_id}/activate",
@@ -930,7 +920,7 @@ def test_repository_activation_switches_active_target(client, monkeypatch):
     assert repo_a.is_active is False
     assert repo_b.selection_status == "active"
     assert repo_b.is_active is True
-    assert repo_b.detail_sync_status == "completed"
+    assert repo_b.detail_sync_status == "not_started"
     assert db.query(Repository).filter_by(workspace_id=workspace.id, selection_status="active").count() == 1
     db.close()
 
@@ -1101,6 +1091,327 @@ def test_catalog_sync_marks_removed_active_repository_inaccessible_and_keeps_his
     db.close()
 
 
+def test_manual_branch_registration_creates_branch_files_and_collision(client, monkeypatch):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Manual Owner",
+            "email": "manual-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Manual Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="manual-team").one()
+    installation = GithubInstallation(
+        installation_id=8101,
+        github_account_id=99501,
+        github_account_login="manual-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=95001,
+        full_name="manual-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="not_started",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.flush()
+    existing_branch = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/existing",
+        branch_status="tracked",
+        is_active=True,
+        is_deleted=False,
+        observed_via="manual",
+        touch_seed_source="manual_diff",
+        has_webhook_history=False,
+    )
+    db.add(existing_branch)
+    db.flush()
+    existing_file = BranchFile(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        branch_id=existing_branch.id,
+        path="app/models/user.rb",
+        normalized_path="app/models/user.rb",
+        change_type="modified",
+        last_change_type="modified",
+        is_active=True,
+    )
+    db.add(existing_file)
+    db.commit()
+    repository_id = repository.id
+    db.close()
+
+    async def fake_create_installation_token(self, installation_id):
+        assert installation_id == 8101
+        return {"token": "installation-token"}
+
+    async def fake_fetch_repository_branch(self, installation_token, repository_full_name, branch_name):
+        assert installation_token == "installation-token"
+        assert repository_full_name == "manual-org/repo-a"
+        assert branch_name == "feature/login-form"
+        return {"name": branch_name, "commit": {"sha": "manual-head-sha"}}
+
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.create_installation_token", fake_create_installation_token)
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.fetch_repository_branch", fake_fetch_repository_branch)
+
+    response = client.post(
+        f"/workspaces/manual-team/repositories/{repository_id}/branches/manual-register",
+        data={
+            "csrf_token": owner_csrf,
+            "manual_branch_input": "BRANCH:feature/login-form\nM\tapp/models/user.rb\nA\tapp/views/login/new.html.erb\nR100\tapp/models/user_old.rb\tapp/models/user_profile.rb\nD\tapp/tmp/old_login.txt",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "ブランチを手動登録しました。" in response.text
+
+    db = SessionLocal()
+    branch = db.query(Branch).filter_by(repository_id=repository_id, name="feature/login-form").one()
+    assert branch.observed_via == "manual"
+    assert branch.touch_seed_source == "manual_diff"
+    assert branch.has_webhook_history is False
+    files = db.query(BranchFile).filter_by(branch_id=branch.id).all()
+    assert len(files) == 4
+    removed_file = db.query(BranchFile).filter_by(branch_id=branch.id, path="app/tmp/old_login.txt").one()
+    assert removed_file.is_active is True
+    renamed_file = db.query(BranchFile).filter_by(branch_id=branch.id, path="app/models/user_profile.rb").one()
+    assert renamed_file.previous_path == "app/models/user_old.rb"
+    collision = db.query(FileCollision).filter_by(repository_id=repository_id, normalized_path="app/models/user.rb", collision_status="open").one()
+    assert collision.active_branch_count == 2
+    db.close()
+
+
+def test_manual_branch_registration_rejects_invalid_first_line(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Manual Invalid",
+            "email": "manual-invalid@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Manual Invalid Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="manual-invalid-team").one()
+    installation = GithubInstallation(
+        installation_id=8201,
+        github_account_id=99601,
+        github_account_login="manual-invalid-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=96001,
+        full_name="manual-invalid-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="not_started",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.commit()
+    repository_id = repository.id
+    db.close()
+
+    response = client.post(
+        f"/workspaces/manual-invalid-team/repositories/{repository_id}/branches/manual-register",
+        data={"csrf_token": owner_csrf, "manual_branch_input": "branch:feature/login-form\nM\tapp/models/user.rb"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "1行目は BRANCH:&lt;branch_name&gt; 形式で入力してください" in response.text or "1行目は BRANCH:<branch_name> 形式で入力してください" in response.text
+
+
+def test_manual_branch_registration_rejects_non_active_repository(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Manual Inactive",
+            "email": "manual-inactive@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Manual Inactive Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="manual-inactive-team").one()
+    installation = GithubInstallation(
+        installation_id=8301,
+        github_account_id=99701,
+        github_account_login="manual-inactive-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=97001,
+        full_name="manual-inactive-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=False,
+        selection_status="inactive",
+        detail_sync_status="not_started",
+        sync_status="inactive",
+    )
+    db.add(repository)
+    db.commit()
+    repository_id = repository.id
+    db.close()
+
+    response = client.post(
+        f"/workspaces/manual-inactive-team/repositories/{repository_id}/branches/manual-register",
+        data={"csrf_token": owner_csrf, "manual_branch_input": "BRANCH:feature/login-form\nM\tapp/models/user.rb"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "現在この repository は監視対象ではありません" in response.text
+
+
+def test_manual_branch_registration_rejects_webhook_observed_branch(client, monkeypatch):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Manual Reject",
+            "email": "manual-reject@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Manual Reject Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="manual-reject-team").one()
+    installation = GithubInstallation(
+        installation_id=8401,
+        github_account_id=99801,
+        github_account_login="manual-reject-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=98001,
+        full_name="manual-reject-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.flush()
+    branch = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/login-form",
+        branch_status="normal",
+        is_active=True,
+        is_deleted=False,
+        observed_via="webhook",
+        has_webhook_history=True,
+    )
+    db.add(branch)
+    db.commit()
+    repository_id = repository.id
+    db.close()
+
+    async def fake_create_installation_token(self, installation_id):
+        return {"token": "installation-token"}
+
+    async def fake_fetch_repository_branch(self, installation_token, repository_full_name, branch_name):
+        return {"name": branch_name, "commit": {"sha": "manual-head-sha"}}
+
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.create_installation_token", fake_create_installation_token)
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.fetch_repository_branch", fake_fetch_repository_branch)
+
+    response = client.post(
+        f"/workspaces/manual-reject-team/repositories/{repository_id}/branches/manual-register",
+        data={"csrf_token": owner_csrf, "manual_branch_input": "BRANCH:feature/login-form\nM\tapp/models/user.rb"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "webhook 観測済みの branch は手動再登録できません" in response.text
+
+
 def test_repository_catalog_sync_creates_unselected_candidates_without_branch_fetch(client, monkeypatch):
     register_page = client.get("/register")
     anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
@@ -1255,23 +1566,13 @@ def test_repository_activation_switches_active_target(client, monkeypatch):
     repo_b_id = repo_b.id
     db.close()
 
-    async def fake_create_installation_token(self, installation_id):
-        assert installation_id == 6001
-        return {"token": "installation-token"}
-
-    async def fake_fetch_repository_branches(self, installation_token, full_name):
-        return [{"name": "main", "commit": {"sha": f"sha-{full_name}"}}]
-
-    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.create_installation_token", fake_create_installation_token)
-    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.fetch_repository_branches", fake_fetch_repository_branches)
-
     first = client.post(
         f"/workspaces/switch-team/repositories/{repo_a_id}/activate",
         data={"csrf_token": owner_csrf},
         follow_redirects=True,
     )
     assert first.status_code == 200
-    assert "監視対象を切り替え、詳細同期を実行しました。" in first.text
+    assert "監視対象を切り替えました。以後はこの repository への push webhook を受けた branch だけを表示します。" in first.text
 
     second = client.post(
         f"/workspaces/switch-team/repositories/{repo_b_id}/activate",
@@ -1287,7 +1588,7 @@ def test_repository_activation_switches_active_target(client, monkeypatch):
     assert repo_a.is_active is False
     assert repo_b.selection_status == "active"
     assert repo_b.is_active is True
-    assert repo_b.detail_sync_status == "completed"
+    assert repo_b.detail_sync_status == "not_started"
     assert db.query(Repository).filter_by(workspace_id=workspace.id, selection_status="active").count() == 1
     db.close()
 
