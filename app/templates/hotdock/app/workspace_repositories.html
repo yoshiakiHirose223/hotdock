@@ -33,50 +33,12 @@
     {% endif %}
 </section>
 
-<section class="panel">
-    <div class="panel-head">
-        <div>
-            <p class="panel-title">Git手動登録</p>
-            <h2>既存ブランチを手動登録</h2>
-        </div>
-    </div>
-    {% if active_repository and active_repository.is_available and active_repository.selection_status == "active" and current_membership and current_membership.role in ["owner", "admin"] %}
-    <div class="inline-alert">
-        連携後に push webhook がまだ来ていない既存ブランチは自動では一覧に出ません。必要な既存ブランチだけを手動で登録でき、登録時に GitHub 上の branch 実在確認と touched files の反映を行います。
-    </div>
-    <div class="form-grid two-col">
-        <div class="panel panel-muted">
-            <p class="panel-title">コマンド例</p>
-            <p class="muted-copy">このコマンド例を使って出力結果を貼り付けてください。`feature/login-form` は登録したい branch 名に置き換えてください。比較元は `origin/master` です。</p>
-            <pre class="code-block">{{ manual_branch_command_example }}</pre>
-        </div>
-        <div class="panel panel-muted">
-            <p class="panel-title">受け入れ可能な出力例</p>
-            <p class="muted-copy">1行目は必ず `BRANCH:&lt;branch_name&gt;` 形式にし、2行目以降に `git diff --name-status` の出力をそのまま貼り付けてください。A / M / D / R のみ受け付けます。</p>
-            <pre class="code-block">{{ manual_branch_output_example }}</pre>
-        </div>
-    </div>
-    <form class="form-stack manual-branch-form" method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ active_repository.id }}/branches/manual-register">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <label for="manual_branch_input">貼り付け入力</label>
-        <textarea
-            id="manual_branch_input"
-            name="manual_branch_input"
-            rows="12"
-            placeholder="{{ manual_branch_output_example }}"
-            required
-        ></textarea>
-        <div class="button-row">
-            <button class="button button-primary" type="submit">登録する</button>
-        </div>
-        <p class="muted-copy">成功すると branch が一覧に追加され、touched files と collision 判定対象が更新されます。</p>
-    </form>
-    {% elif active_repository and active_repository.is_available and active_repository.selection_status == "active" %}
-    <div class="empty-inline">この操作は owner / admin のみ実行できます。</div>
-    {% else %}
-    <div class="empty-inline">この repository は現在監視対象ではないため、手動登録できません。</div>
-    {% endif %}
+{% if active_repository and active_repository.is_available and active_repository.selection_status == "active" %}
+<section class="panel panel-muted">
+    <p class="panel-title">Branch補助導線</p>
+    <p class="muted-copy">既存ブランチの手動登録は <a class="text-link" href="/workspaces/{{ workspace.slug }}/branches">Branches</a> 画面から行えます。push webhook でまだ観測していない branch や、初回 seed が未確定の branch を補助的に取り込めます。</p>
 </section>
+{% endif %}
 
 <section class="panel">
     <div class="table-wrap">

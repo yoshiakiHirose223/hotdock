@@ -4,7 +4,7 @@ from typing import Any
 
 import hmac
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from app.hotdock.services.auth import (
     build_login_redirect,
     default_workspace_for_user,
     get_flash,
+    sanitize_next_path,
     set_flash,
 )
 from app.hotdock.services.context import build_app_context
@@ -50,6 +51,7 @@ from app.models.repository import Repository
 from app.models.workspace import Workspace
 
 router = APIRouter()
+MANUAL_BRANCH_RESULT_SESSION_KEY = "manual_branch_result"
 
 
 def render_app(template_name: str, context: dict[str, Any]):
@@ -196,8 +198,6 @@ async def workspace_repositories(workspace_slug: str, request: Request, db: Sess
         DETAIL_SYNC_COMPLETED: "完了",
         DETAIL_SYNC_ERROR: "エラー",
     }
-    context["manual_branch_command_example"] = 'BRANCH="feature/login-form"\necho "BRANCH:$BRANCH"\ngit diff --name-status origin/master..."$BRANCH"'
-    context["manual_branch_output_example"] = "BRANCH:feature/login-form\nM\tapp/controllers/login_controller.rb\nA\tapp/views/login/new.html.erb\nR100\tapp/models/user_old.rb\tapp/models/user.rb\nD\tapp/tmp/old_login.txt"
     context["catalog_sync_error"] = catalog_sync_error
     return render_app("hotdock/app/workspace_repositories.html", context)
 
@@ -347,6 +347,7 @@ async def workspace_branch_manual_register(
     db: Session = Depends(get_db),
     csrf_token: str = Form(...),
     manual_branch_input: str = Form(...),
+    next_path: str | None = Form(default=None),
 ):
     auth = attach_auth_context(request, db)
     if auth.user is None:
@@ -370,6 +371,8 @@ async def workspace_branch_manual_register(
         set_flash(request, "error", "repository が見つかりません。")
         return RedirectResponse(url=f"/workspaces/{workspace_slug}/repositories", status_code=status.HTTP_303_SEE_OTHER)
 
+    redirect_url = sanitize_next_path(next_path, f"/workspaces/{workspace_slug}/branches")
+
     try:
         result = await manually_register_branch_snapshot(
             db,
@@ -379,13 +382,38 @@ async def workspace_branch_manual_register(
             actor=auth.user,
             raw_text=manual_branch_input,
         )
+        request.session[MANUAL_BRANCH_RESULT_SESSION_KEY] = {
+            "status": "success",
+            "branch_name": result["branch_name"],
+            "created": bool(result["created"]),
+            "reactivated": bool(result["reactivated"]),
+            "parsed_file_count": int(result["parsed_file_count"]),
+            "applied_file_count": int(result["applied_file_count"]),
+            "collision_recomputed": bool(result["collision_recomputed"]),
+            "observed_via": result["observed_via"],
+            "touch_seed_source": result["touch_seed_source"],
+            "rescued_touch_seed": bool(result["rescued_touch_seed"]),
+        }
+        success_parts = [
+            "ブランチを手動登録しました。",
+            f"touched files を {result['applied_file_count']} 件反映しました。",
+        ]
+        if result["reactivated"]:
+            success_parts.append("既存ブランチを再活性化しました。")
+        if result["rescued_touch_seed"]:
+            success_parts.append("手動登録により touched files を確定しました。")
+        success_parts.append("このブランチは衝突判定対象になりました。")
         set_flash(
             request,
             "success",
-            f"ブランチを手動登録しました。touched files を {result['applied_file_count']} 件反映し、衝突判定対象に追加しました。",
+            " ".join(success_parts),
         )
     except Exception as exc:
         detail = str(getattr(exc, "detail", None) or "手動登録に失敗しました。")
+        request.session[MANUAL_BRANCH_RESULT_SESSION_KEY] = {
+            "status": "error",
+            "message": detail,
+        }
         record_audit_log(
             db,
             request,
@@ -395,11 +423,15 @@ async def workspace_branch_manual_register(
             target_type="repository",
             target_id=repository.id,
             action="workspace_branch_manual_register_failed",
-            metadata={"branch_name": (manual_branch_input.splitlines()[0] if manual_branch_input else None), "error": detail},
+            metadata={
+                "branch_name": (manual_branch_input.splitlines()[0] if manual_branch_input else None),
+                "error": detail,
+                "source": "manual_diff",
+            },
         )
         db.commit()
         set_flash(request, "error", detail)
-    return RedirectResponse(url=f"/workspaces/{workspace_slug}/repositories", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/workspaces/{workspace_slug}/branches", name="hotdock-workspace-branches")
@@ -437,6 +469,7 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
             )
         ).all()
     }
+    active_repository = next(iter(repositories.values()), None)
     active_repository_ids = list(repositories.keys())
     branches = []
     if active_repository_ids:
@@ -459,6 +492,7 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
     context["branches"] = [
         {
             "id": branch.id,
+            "repository_id": branch.repository_id,
             "details_id": f"branch-details-{branch.id}",
             "name": branch.name,
             "last_push_at": branch.last_push_at,
@@ -480,6 +514,11 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
         }
         for branch in branches
     ]
+    context["active_repository"] = active_repository
+    context["manual_branch_command_example"] = 'BRANCH="feature/login-form"\necho "BRANCH:$BRANCH"\ngit diff --name-status origin/master..."$BRANCH"'
+    context["manual_branch_output_example"] = "BRANCH:feature/login-form\nM\tapp/controllers/login_controller.rb\nA\tapp/views/login/new.html.erb\nR100\tapp/models/user_old.rb\tapp/models/user.rb\nD\tapp/tmp/old_login.txt"
+    manual_branch_result = request.session.pop(MANUAL_BRANCH_RESULT_SESSION_KEY, None)
+    context["manual_branch_result"] = manual_branch_result if isinstance(manual_branch_result, dict) else None
     return render_app("hotdock/app/workspace_branches.html", context)
 
 
@@ -549,7 +588,13 @@ async def workspace_branch_detail(workspace_slug: str, branch_id: str, request: 
 
 
 @router.get("/workspaces/{workspace_slug}/conflicts", name="hotdock-workspace-conflicts")
-async def workspace_conflicts(workspace_slug: str, request: Request, db: Session = Depends(get_db)):
+async def workspace_conflicts(
+    workspace_slug: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    path: str | None = Query(default=None),
+    repository_id: str | None = Query(default=None),
+):
     auth = attach_auth_context(request, db)
     if auth.user is None:
         return RedirectResponse(
@@ -585,9 +630,14 @@ async def workspace_conflicts(workspace_slug: str, request: Request, db: Session
         )
         .order_by(FileCollision.last_detected_at.desc())
     ).all()
+    if path:
+        collision_rows = [collision for collision in collision_rows if collision.normalized_path == path]
+    if repository_id:
+        collision_rows = [collision for collision in collision_rows if collision.repository_id == repository_id]
     context["conflicts"] = [
         {
             "repository_name": repositories.get(collision.repository_id).display_name if repositories.get(collision.repository_id) else "-",
+            "repository_id": collision.repository_id,
             "file_path": collision.normalized_path,
             "conflict_status": collision.collision_status,
             "active_branch_count": collision.active_branch_count,
@@ -605,6 +655,8 @@ async def workspace_conflicts(workspace_slug: str, request: Request, db: Session
         }
         for collision in collision_rows
     ]
+    context["conflicts_filter_path"] = path
+    context["conflicts_filter_repository_id"] = repository_id
     return render_app("hotdock/app/workspace_conflicts.html", context)
 
 

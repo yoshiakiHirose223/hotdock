@@ -789,6 +789,118 @@ def test_initial_branch_push_deduplicates_paths_and_uses_last_change_type(client
     db.close()
 
 
+def test_initial_branch_push_can_create_collision_from_payload_seed(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Seed Collision User",
+            "email": "seed-collision@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Seed Collision Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="seed-collision-team").one()
+    installation = GithubInstallation(
+        installation_id=1006,
+        github_account_id=9006,
+        github_account_login="mock-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=506,
+        full_name="mock-org/repository-1006",
+        display_name="repository-1006",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.commit()
+    db.close()
+
+    def post_seed_push(delivery_id: str, branch_name: str):
+        payload = {
+            "installation": {"id": 1006},
+            "repository": {
+                "id": 506,
+                "full_name": "mock-org/repository-1006",
+                "name": "repository-1006",
+                "default_branch": "main",
+                "private": True,
+                "pushed_at": 1776239000,
+            },
+            "ref": f"refs/heads/{branch_name}",
+            "before": "0" * 40,
+            "after": ("a" if branch_name.endswith("a") else "b") * 40,
+            "created": True,
+            "deleted": False,
+            "forced": False,
+            "head_commit": {"id": ("a" if branch_name.endswith("a") else "b") * 40},
+            "commits": [
+                {
+                    "id": ("a" if branch_name.endswith("a") else "b") * 40,
+                    "added": ["test_manual/shared.txt"],
+                    "modified": [],
+                    "removed": [],
+                }
+            ],
+        }
+        body = json.dumps(payload).encode("utf-8")
+        signature = "sha256=" + hmac.new(
+            b"test-webhook-secret",
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        return client.post(
+            "/webhooks/github",
+            data=body,
+            headers={
+                "content-type": "application/json",
+                "x-hub-signature-256": signature,
+                "x-github-delivery": delivery_id,
+                "x-github-event": "push",
+            },
+        )
+
+    first = post_seed_push("delivery-seed-collision-1", "feature/seed-a")
+    second = post_seed_push("delivery-seed-collision-2", "feature/seed-b")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    db = SessionLocal()
+    branch_a = db.query(Branch).filter_by(name="feature/seed-a").one()
+    branch_b = db.query(Branch).filter_by(name="feature/seed-b").one()
+    collision = db.query(FileCollision).filter_by(repository_id=repository.id, normalized_path="test_manual/shared.txt").one()
+    assert collision.collision_status == "open"
+    assert collision.active_branch_count == 2
+    assert branch_a.conflict_files_count == 1
+    assert branch_b.conflict_files_count == 1
+    assert db.query(BranchFile).filter_by(branch_id=branch_a.id, path="test_manual/shared.txt").one().is_conflict is True
+    assert db.query(BranchFile).filter_by(branch_id=branch_b.id, path="test_manual/shared.txt").one().is_conflict is True
+    db.close()
+
+
 def test_workspace_invitation_accept_flow(client):
     register_page = client.get("/register")
     anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
@@ -1653,6 +1765,134 @@ def test_manual_branch_registration_creates_branch_files_and_collision(client, m
     db.close()
 
 
+def test_manual_branch_registration_replaces_snapshot_and_counts_active_paths(client, monkeypatch):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Manual Snapshot",
+            "email": "manual-snapshot@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Manual Snapshot Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="manual-snapshot-team").one()
+    installation = GithubInstallation(
+        installation_id=8151,
+        github_account_id=99551,
+        github_account_login="manual-snapshot-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=95501,
+        full_name="manual-snapshot-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.flush()
+    branch = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/login-form",
+        branch_status="tracked",
+        is_active=True,
+        is_deleted=False,
+        observed_via="manual",
+        touch_seed_source="manual_diff",
+        has_webhook_history=False,
+    )
+    db.add(branch)
+    db.flush()
+    db.add_all(
+        [
+            BranchFile(
+                workspace_id=workspace.id,
+                repository_id=repository.id,
+                branch_id=branch.id,
+                path="app/models/user_old.rb",
+                normalized_path="app/models/user_old.rb",
+                change_type="modified",
+                last_change_type="modified",
+                is_active=True,
+            ),
+            BranchFile(
+                workspace_id=workspace.id,
+                repository_id=repository.id,
+                branch_id=branch.id,
+                path="app/obsolete.txt",
+                normalized_path="app/obsolete.txt",
+                change_type="modified",
+                last_change_type="modified",
+                is_active=True,
+            ),
+        ]
+    )
+    db.commit()
+    repository_id = repository.id
+    db.close()
+
+    async def fake_create_installation_token(self, installation_id):
+        assert installation_id == 8151
+        return {"token": "installation-token"}
+
+    async def fake_fetch_repository_branch(self, installation_token, repository_full_name, branch_name):
+        assert installation_token == "installation-token"
+        assert repository_full_name == "manual-snapshot-org/repo-a"
+        assert branch_name == "feature/login-form"
+        return {"name": branch_name, "commit": {"sha": "snapshot-head-sha"}}
+
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.create_installation_token", fake_create_installation_token)
+    monkeypatch.setattr("app.hotdock.services.github.GithubAppClient.fetch_repository_branch", fake_fetch_repository_branch)
+
+    response = client.post(
+        f"/workspaces/manual-snapshot-team/repositories/{repository_id}/branches/manual-register",
+        data={
+            "csrf_token": owner_csrf,
+            "manual_branch_input": "BRANCH:feature/login-form\nM\tapp/models/user.rb\nM\tapp/models/user.rb\nR100\tapp/models/user_old.rb\tapp/models/user_profile.rb\nD\tapp/tmp/old_login.txt",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "touched files を 3 件反映しました。" in response.text
+
+    db = SessionLocal()
+    branch = db.query(Branch).filter_by(repository_id=repository_id, name="feature/login-form").one()
+    assert branch.touched_files_count == 3
+    renamed_old = db.query(BranchFile).filter_by(branch_id=branch.id, path="app/models/user_old.rb").one()
+    assert renamed_old.is_active is False
+    dropped_file = db.query(BranchFile).filter_by(branch_id=branch.id, path="app/obsolete.txt").one()
+    assert dropped_file.is_active is False
+    renamed_new = db.query(BranchFile).filter_by(branch_id=branch.id, path="app/models/user_profile.rb").one()
+    assert renamed_new.is_active is True
+    removed_file = db.query(BranchFile).filter_by(branch_id=branch.id, path="app/tmp/old_login.txt").one()
+    assert removed_file.is_active is True
+    db.close()
+
+
 def test_manual_branch_registration_rejects_invalid_first_line(client):
     register_page = client.get("/register")
     anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
@@ -1775,7 +2015,66 @@ def test_manual_branch_registration_rejects_non_active_repository(client):
     assert "現在この repository は監視対象ではありません" in response.text
 
 
-def test_manual_branch_registration_rejects_webhook_observed_branch(client, monkeypatch):
+def test_workspace_branches_shows_manual_registration_guidance_for_active_repository(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Manual UI",
+            "email": "manual-ui@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Manual UI Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="manual-ui-team").one()
+    installation = GithubInstallation(
+        installation_id=8351,
+        github_account_id=99751,
+        github_account_login="manual-ui-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=97501,
+        full_name="manual-ui-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.commit()
+    db.close()
+
+    response = client.get("/workspaces/manual-ui-team/branches")
+
+    assert response.status_code == 200
+    assert "既存ブランチを手動登録" in response.text
+    assert 'BRANCH=&quot;feature/login-form&quot;' in response.text or 'BRANCH="feature/login-form"' in response.text
+    assert "git diff --name-status origin/master" in response.text
+    assert "受け入れ可能な出力例" in response.text
+    assert "BRANCH:feature/login-form" in response.text
+
+
+def test_manual_branch_registration_rescues_webhook_seeded_branch(client, monkeypatch):
     register_page = client.get("/register")
     anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
     client.post(
@@ -1827,10 +2126,14 @@ def test_manual_branch_registration_rejects_webhook_observed_branch(client, monk
         workspace_id=workspace.id,
         repository_id=repository.id,
         name="feature/login-form",
-        branch_status="normal",
+        branch_status="api_error",
         is_active=True,
         is_deleted=False,
         observed_via="webhook",
+        touch_seed_source="payload_commits",
+        touch_seed_status="api_error",
+        touch_seed_error_message="初回 push payload から touched files を取り出せませんでした。",
+        has_authoritative_compare_history=False,
         has_webhook_history=True,
     )
     db.add(branch)
@@ -1854,7 +2157,19 @@ def test_manual_branch_registration_rejects_webhook_observed_branch(client, monk
     )
 
     assert response.status_code == 200
-    assert "webhook 観測済みの branch は手動再登録できません" in response.text
+    assert "手動登録により touched files を確定しました。" in response.text
+
+    db = SessionLocal()
+    branch = db.query(Branch).filter_by(repository_id=repository_id, name="feature/login-form").one()
+    assert branch.observed_via == "manual"
+    assert branch.touch_seed_source == "manual_diff"
+    assert branch.touch_seed_status is None
+    assert branch.touch_seed_error_message is None
+    assert branch.has_webhook_history is True
+    assert branch.has_authoritative_compare_history is False
+    file_record = db.query(BranchFile).filter_by(branch_id=branch.id, path="app/models/user.rb").one()
+    assert file_record.is_active is True
+    db.close()
 
 
 def test_repository_catalog_sync_creates_unselected_candidates_without_branch_fetch(client, monkeypatch):

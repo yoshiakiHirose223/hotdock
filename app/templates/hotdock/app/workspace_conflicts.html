@@ -8,6 +8,12 @@
             <h2>{{ workspace.name }}</h2>
         </div>
     </div>
+    {% if conflicts_filter_path %}
+    <div class="inline-alert">
+        path: <code>{{ conflicts_filter_path }}</code> を表示しています。
+        <a class="text-link" href="/workspaces/{{ workspace.slug }}/conflicts">フィルタ解除</a>
+    </div>
+    {% endif %}
     {% if conflicts %}
     <div class="table-wrap">
         <table class="app-table">

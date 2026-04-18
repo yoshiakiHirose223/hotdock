@@ -53,7 +53,13 @@
             <tbody>
                 {% for file in branch_files %}
                 <tr>
-                    <td><code>{{ file.path }}</code></td>
+                    <td>
+                        {% if file.is_conflict %}
+                        <a class="text-link" href="/workspaces/{{ workspace.slug }}/conflicts?path={{ file.normalized_path|urlencode }}&repository_id={{ branch_repository.id|urlencode }}"><code>{{ file.path }}</code></a>
+                        {% else %}
+                        <code>{{ file.path }}</code>
+                        {% endif %}
+                    </td>
                     <td>{{ file.first_seen_change_type or file.change_type or '-' }}</td>
                     <td>{{ file.last_change_type or file.change_type or '-' }}</td>
                     <td>{% if file.previous_path %}<code>{{ file.previous_path }} -> {{ file.path }}</code>{% else %}-{% endif %}</td>

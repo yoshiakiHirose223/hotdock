@@ -298,18 +298,32 @@ def parse_manual_branch_registration_input(raw_text: str) -> tuple[str, list[dic
         change_type = _manual_change_type(status_token)
         if change_type == "renamed":
             if len(columns) != 3:
-                raise HTTPException(status_code=422, detail=f"{line_number}行目の rename 行の形式が不正です")
+                raise HTTPException(status_code=422, detail=f"{line_number}行目の rename 行は old path と new path の2つが必要です")
             previous_path, path = columns[1], columns[2]
             if not previous_path or not path:
-                raise HTTPException(status_code=422, detail=f"{line_number}行目の rename 行の形式が不正です")
-            changes.append({"path": path, "change_type": change_type, "previous_path": previous_path})
+                raise HTTPException(status_code=422, detail=f"{line_number}行目の rename 行は old path と new path の2つが必要です")
+            changes.append(
+                {
+                    "path": path,
+                    "normalized_path": _normalize_path(path),
+                    "change_type": change_type,
+                    "previous_path": previous_path,
+                }
+            )
             continue
         if len(columns) != 2:
             raise HTTPException(status_code=422, detail=f"{line_number}行目の diff 形式が不正です")
         path = columns[1]
         if not path:
             raise HTTPException(status_code=422, detail=f"{line_number}行目の path が空です")
-        changes.append({"path": path, "change_type": change_type, "previous_path": None})
+        changes.append(
+            {
+                "path": path,
+                "normalized_path": _normalize_path(path),
+                "change_type": change_type,
+                "previous_path": None,
+            }
+        )
 
     if not changes:
         raise HTTPException(status_code=422, detail="2行目以降に git diff --name-status の出力を貼り付けてください")
@@ -1816,6 +1830,7 @@ def _apply_branch_file_changes(
     return {
         "impacted_paths": impacted_paths,
         "files_seen": len(changes),
+        "active_file_count": branch.touched_files_count,
         "head_commit_sha": head_sha,
     }
 
@@ -1926,6 +1941,7 @@ async def manually_register_branch_snapshot(
     )
     created = False
     reactivated = False
+    rescued_touch_seed = False
     if branch is None:
         branch = Branch(
             workspace_id=workspace.id,
@@ -1953,8 +1969,10 @@ async def manually_register_branch_snapshot(
         db.flush()
         created = True
     else:
-        if branch.has_webhook_history:
-            raise HTTPException(status_code=409, detail="webhook 観測済みの branch は手動再登録できません")
+        rescued_touch_seed = (
+            branch.touch_seed_status in {BRANCH_TOUCH_SEED_STATUS_API_ERROR, BRANCH_TOUCH_SEED_STATUS_PARTIAL, BRANCH_TOUCH_SEED_STATUS_PAYLOAD}
+            or (branch.has_webhook_history and not branch.has_authoritative_compare_history)
+        )
         reactivated = branch.is_deleted or not branch.is_active
         branch.is_active = True
         branch.is_deleted = False
@@ -1965,6 +1983,7 @@ async def manually_register_branch_snapshot(
         branch.touch_seed_status = None
         branch.touch_seed_warning = None
         branch.touch_seed_error_message = None
+        branch.has_authoritative_compare_history = False
         branch.current_head_sha = head_sha or branch.current_head_sha
         branch.last_commit_sha = head_sha or branch.last_commit_sha
         branch.last_after_sha = head_sha or branch.last_after_sha
@@ -2007,10 +2026,12 @@ async def manually_register_branch_snapshot(
         metadata={
             "repository_id": repository.id,
             "branch_name": branch_name,
-            "file_count": apply_result["files_seen"],
+            "file_count": apply_result["active_file_count"],
             "created": created,
             "reactivated": reactivated,
             "observed_via": "manual",
+            "source": "manual_diff",
+            "success": True,
         },
     )
     db.commit()
@@ -2019,11 +2040,13 @@ async def manually_register_branch_snapshot(
         "created": created,
         "reactivated": reactivated,
         "parsed_file_count": len(changes),
-        "applied_file_count": apply_result["files_seen"],
+        "applied_file_count": apply_result["active_file_count"],
         "collision_recomputed": True,
         "new_collisions": len(collision_result["new_collisions"]),
         "resolved_collisions": len(collision_result["resolved_collisions"]),
         "observed_via": "manual",
+        "touch_seed_source": "manual_diff",
+        "rescued_touch_seed": rescued_touch_seed,
     }
 
 
@@ -2154,6 +2177,11 @@ class RecalculateFileCollisionsService:
         ).all()
         for file_item in active_impacted_files:
             file_item.is_conflict = file_item.is_active and file_item.normalized_path in open_collision_paths
+
+        # This project runs sessions with autoflush=False, so collision row
+        # inserts/deletes above must be flushed before the per-branch count
+        # queries below can observe the current open-collision state.
+        db.flush()
 
         for branch_id in affected_branch_ids:
             branch = db.get(Branch, branch_id)
