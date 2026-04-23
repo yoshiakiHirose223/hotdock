@@ -3,9 +3,6 @@
 {% block content %}
 <section class="panel repository-state-banner {{ repositories_page.state_banner.tone }}">
     <div class="repository-state-copy">
-        {% if repositories_page.catalog_state != "unconnected" %}
-        <p class="panel-title">現在の状態</p>
-        {% endif %}
         <h2>{{ repositories_page.state_banner.title }}</h2>
         {% if repositories_page.state_banner.body %}
         <p>{{ repositories_page.state_banner.body }}</p>
@@ -36,31 +33,6 @@
     {% endfor %}
 </section>
 
-<section class="panel panel-muted">
-    <div class="panel-head">
-        <div>
-            <p class="panel-title">開始までの流れ</p>
-            <h2>連携後の流れ</h2>
-        </div>
-    </div>
-    <div class="repository-steps">
-        {% for step in repositories_page.steps %}
-        <article class="repository-step-card {% if step.is_current %}is-current{% endif %}">
-            <div class="repository-step-no">{{ loop.index }}</div>
-            <div class="repository-step-copy">
-                <div class="repository-step-head">
-                    <strong>{{ step.title }}</strong>
-                    <span class="status-badge {{ step.status_class }}">{{ step.status_label }}</span>
-                </div>
-                <span class="muted-copy">{{ step.description }}</span>
-                {% if step.action_href and step.action_label %}
-                <a class="text-link" href="{{ step.action_href }}">{{ step.action_label }}</a>
-                {% endif %}
-            </div>
-        </article>
-        {% endfor %}
-    </div>
-</section>
 {% endif %}
 
 {% if repositories_page.sync_warning %}
@@ -68,13 +40,6 @@
     <div class="inline-alert inline-alert-error">
         {{ repositories_page.sync_warning }}
     </div>
-</section>
-{% endif %}
-
-{% if repositories_page.catalog_state == "ready" and repositories_page.active_repository and repositories_page.active_repository.is_available and repositories_page.active_repository.selection_status == "active" %}
-<section class="panel panel-muted">
-    <p class="panel-title">ブランチ補助導線</p>
-    <p class="muted-copy">branch の監視開始後、既存ブランチの取り込みは <a class="text-link" href="/workspaces/{{ workspace.slug }}/branches">Branches</a> 画面から行えます。</p>
 </section>
 {% endif %}
 
@@ -120,7 +85,6 @@
                     <th>Visibility</th>
                     <th>Default Branch</th>
                     <th>状態</th>
-                    <th>Last Sync</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -135,9 +99,10 @@
                     <td>{{ repository.default_branch }}</td>
                     <td>
                         <span class="status-badge {{ repository.status_class }}">{{ repository.status_label }}</span>
+                        {% if repository.helper_text %}
                         <div class="muted-copy">{{ repository.helper_text }}</div>
+                        {% endif %}
                     </td>
-                    <td>{{ repository.last_synced_at }}</td>
                     <td>
                         <div class="button-stack">
                             {% if current_membership and current_membership.role in ["owner", "admin"] %}

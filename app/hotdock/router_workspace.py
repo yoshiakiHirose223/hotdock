@@ -214,11 +214,11 @@ async def workspace_repositories(workspace_slug: str, request: Request, db: Sess
         elif repository.selection_status == REPOSITORY_SELECTION_ACTIVE:
             status_label = "監視中"
             status_class = "is-available"
-            helper_text = "現在の監視対象です"
+            helper_text = ""
         elif repository.selection_status == REPOSITORY_SELECTION_INACTIVE:
             status_label = "未監視"
             status_class = "is-stale"
-            helper_text = "以前の監視対象です"
+            helper_text = ""
         else:
             status_label = "未選択"
             status_class = ""
@@ -286,7 +286,6 @@ async def workspace_repositories(workspace_slug: str, request: Request, db: Sess
         "sync_warning": sync_warning,
         "state_banner": state_banner,
         "summary_items": [
-            {"label": "接続状態", "value": "未接続" if not has_claimed_installations else "接続済み", "class": "is-conflict" if not has_claimed_installations else "is-available"},
             {"label": "候補数", "value": str(len(repositories)), "class": ""},
             {"label": "監視対象", "value": active_repository.display_name if active_repository else "未選択", "class": "is-available" if active_repository else "is-stale"},
         ],

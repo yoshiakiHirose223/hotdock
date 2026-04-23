@@ -444,6 +444,95 @@ def test_workspace_repositories_connected_without_candidates_shows_compact_empty
     assert "repository を再同期" in response.text
     assert "GitHub App が未接続です" not in response.text
     assert "No claimed installations" not in response.text
+    assert "接続状態" not in response.text
+    assert "開始までの流れ" not in response.text
+    assert "ブランチ補助導線" not in response.text
+
+
+def test_workspace_repositories_ready_hides_status_helpers_and_last_sync_column(client, monkeypatch):
+    async def fake_manual_sync_workspace_installation_repositories(*args, **kwargs):
+        return {"repositories_synced": 0, "skipped_installations": 0}
+
+    monkeypatch.setattr(
+        "app.hotdock.router_workspace.manual_sync_workspace_installation_repositories",
+        fake_manual_sync_workspace_installation_repositories,
+    )
+
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Repository Ready User",
+            "email": "repository-ready@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Repository Ready Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="repository-ready-team").one()
+    installation = GithubInstallation(
+        installation_id=9301,
+        github_account_id=88301,
+        github_account_login="repository-ready-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    db.add_all(
+        [
+            Repository(
+                workspace_id=workspace.id,
+                github_installation_id=installation.id,
+                github_repository_id=99301,
+                full_name="repository-ready-org/repo-a",
+                display_name="repo-a",
+                default_branch="main",
+                provider="github",
+                visibility="private",
+                is_available=True,
+                is_active=True,
+                selection_status="active",
+                detail_sync_status="completed",
+                sync_status="active",
+            ),
+            Repository(
+                workspace_id=workspace.id,
+                github_installation_id=installation.id,
+                github_repository_id=99302,
+                full_name="repository-ready-org/repo-b",
+                display_name="repo-b",
+                default_branch="main",
+                provider="github",
+                visibility="private",
+                is_available=True,
+                is_active=False,
+                selection_status="inactive",
+                detail_sync_status="completed",
+                sync_status="inactive",
+            ),
+        ]
+    )
+    db.commit()
+    db.close()
+
+    response = client.get("/workspaces/repository-ready-team/repositories")
+
+    assert response.status_code == 200
+    assert "Last Sync" not in response.text
+    assert "現在の監視対象です" not in response.text
+    assert "以前の監視対象です" not in response.text
+    assert "現在の状態" not in response.text
+    assert "開始までの流れ" not in response.text
+    assert "ブランチ補助導線" not in response.text
 
 
 def test_workspace_branches_hides_manual_register_when_github_not_connected(client):
