@@ -129,9 +129,7 @@ async def workspace_dashboard(workspace_slug: str, request: Request, db: Session
         page_title=f"{access.workspace.name} | ダッシュボード | Hotdock",
         page_heading="ダッシュボード",
         page_description="競合と監視状況の概要",
-        breadcrumbs=[
-            {"label": "ダッシュボード", "href": f"/workspaces/{workspace_slug}/dashboard"},
-        ],
+        breadcrumbs=[],
         current_membership=access.membership,
     )
     context["dashboard"] = workspace_dashboard_data(db, access.workspace)

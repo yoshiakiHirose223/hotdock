@@ -304,6 +304,11 @@ def test_workspace_dashboard_prioritizes_actions_and_hides_internal_copy(client)
     assert "概要" in response.text
     assert "監視" in response.text
     assert "ワークスペース" in response.text
+    assert "現在の状態" not in response.text
+    assert 'aria-label="Breadcrumb"' not in response.text
+    assert "集約された観測済みファイルを表示しています" not in response.text
+    assert "ブランチ一覧へ移動" not in response.text
+    assert "コピー" not in response.text
     assert "リポジトリを見る" not in response.text
     assert "ブランチを見る" not in response.text
     assert "GitHub App 接続" not in response.text
@@ -349,7 +354,8 @@ def test_workspace_dashboard_zero_state_surfaces_next_action(client):
     assert "ディレクトリ更新状況" in response.text
     assert "まだ観測済みファイルはありません" in response.text
     assert "Push/Webhook または手動登録で検知されたファイルが表示されます" in response.text
-    assert "現在の状態" not in response.text
+    assert "現在の状態" in response.text
+    assert 'aria-label="Breadcrumb"' not in response.text
     assert "次に取る行動" not in response.text
     assert "GitHub App 接続" not in response.text
     assert "利用開始ガイド" not in response.text

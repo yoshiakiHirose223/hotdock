@@ -173,6 +173,36 @@
         background: rgba(15, 23, 42, 0.03);
     }
 
+    .directory-activity-row.is-root {
+        background: rgba(248, 250, 252, 0.85);
+    }
+
+    .directory-activity-row.is-root.is-selected {
+        background: rgba(226, 232, 240, 0.7);
+    }
+
+    .directory-activity-row.is-root .directory-activity-name {
+        font-size: 0.97rem;
+        letter-spacing: -0.01em;
+    }
+
+    .directory-activity-row.is-root .directory-activity-node-icon {
+        color: #0f172a;
+    }
+
+    .directory-activity-repository-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.18rem 0.5rem;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.06);
+        color: #475569;
+        font-size: 0.72rem;
+        line-height: 1.2;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        white-space: nowrap;
+    }
+
     .directory-activity-row::before {
         content: "";
         position: absolute;
@@ -400,12 +430,6 @@
         gap: 0.5rem;
     }
 
-    .directory-activity-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.6rem;
-    }
-
     .directory-activity-empty,
     .directory-activity-no-results,
     .directory-activity-detail-empty {
@@ -546,7 +570,7 @@
 
 <section class="panel dashboard-state-banner {{ dashboard.state_banner.tone }}">
     <div class="dashboard-state-copy">
-        {% if not dashboard.is_unconnected %}
+        {% if dashboard.is_unconnected %}
         <p class="panel-title">現在の状態</p>
         {% endif %}
         <h2>{{ dashboard.state_banner.title }}</h2>
@@ -706,8 +730,6 @@
                 rowHeight: 56,
                 visibleNodes: [],
             };
-            const branchesPageHref = "{{ '/workspaces/' ~ workspace.slug ~ '/branches' }}";
-
             const appendOptions = (selectElement, options) => {
                 options.forEach((option) => {
                     const element = document.createElement("option");
@@ -779,7 +801,7 @@
                     if (node.type !== "directory") {
                         return;
                     }
-                    const shouldExpand = filterSet ? true : state.expanded.has(nodeId);
+                    const shouldExpand = filterSet ? true : !node.parent_id || state.expanded.has(nodeId);
                     if (!shouldExpand) {
                         return;
                     }
@@ -821,10 +843,32 @@
                 const selectedClass = state.selectedId === node.id ? "is-selected" : "";
                 const indent = `--depth:${node.depth};`;
                 if (node.type === "directory") {
-                    const expanded = hasFilters() ? true : state.expanded.has(node.id);
+                    const isRoot = !node.parent_id;
+                    const expanded = hasFilters() ? true : isRoot || state.expanded.has(node.id);
                     const conflictChip = node.conflict_count
                         ? `<button class="directory-activity-chip is-conflict" type="button" data-directory-status-filter="conflict">競合 ${node.conflict_count}</button>`
                         : `<span class="directory-activity-chip">競合 0</span>`;
+                    if (isRoot) {
+                        return `
+                            <div class="directory-activity-row is-root ${escapeHtml(node.status_class)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
+                                <div class="directory-activity-row-main" style="${indent}">
+                                    <button class="directory-activity-row-button" type="button" data-directory-select="${escapeHtml(node.id)}">
+                                        <span class="directory-activity-indent"></span>
+                                        <span class="directory-activity-node-icon">▣</span>
+                                        <span class="directory-activity-name">${escapeHtml(node.name)}</span>
+                                        <span class="directory-activity-repository-chip">リポジトリ</span>
+                                        <span class="directory-activity-status-dot"></span>
+                                    </button>
+                                </div>
+                                <div class="directory-activity-row-metrics">
+                                    ${conflictChip}
+                                    <span class="directory-activity-chip">最近更新 ${node.recent_count}</span>
+                                    <span class="directory-activity-chip">ファイル ${node.file_count}</span>
+                                </div>
+                                <span class="directory-activity-row-time">${escapeHtml(node.last_active_label)}</span>
+                            </div>
+                        `;
+                    }
                     return `
                         <div class="directory-activity-row ${escapeHtml(node.status_class)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
                             <div class="directory-activity-row-main" style="${indent}">
@@ -892,33 +936,35 @@
                 if (!node) {
                     return;
                 }
+                if (node.type === "directory" && !node.parent_id) {
+                    detail.innerHTML = `
+                        <div class="directory-activity-detail-head">
+                            <div>
+                                <strong>ディレクトリ詳細</strong>
+                            </div>
+                        </div>
+                        <div class="directory-activity-detail-body"></div>
+                    `;
+                    return;
+                }
                 const branches = (node.branches || [])
                     .map(
                         (branch) =>
                             `<a class="directory-activity-branch-link" href="${escapeHtml(branch.href)}">${escapeHtml(branch.name)} <span>${escapeHtml(branch.last_active_label)}</span></a>`
                     )
                     .join("");
-                const actionButtons = [
-                    `<a class="button button-secondary button-small" href="${escapeHtml(branchesPageHref)}">ブランチ一覧へ移動</a>`,
-                    node.conflict_count
-                        ? `<button class="button button-ghost button-small" type="button" data-directory-detail-conflict>conflict のみ表示</button>`
-                        : "",
-                    `<button class="button button-ghost button-small" type="button" data-directory-copy="${escapeHtml(node.copy_text)}">コピー</button>`,
-                ]
-                    .filter(Boolean)
-                    .join("");
 
                 detail.innerHTML = `
                     <div class="directory-activity-detail-head">
                         <div>
                             <strong>${node.type === "directory" ? "ディレクトリ詳細" : "ファイル詳細"}</strong>
-                            <span>${node.type === "directory" ? "集約された観測済みファイルを表示しています" : "選択した観測済みファイルの最新状態です"}</span>
+                            ${node.type === "file" ? "<span>選択した観測済みファイルの最新状態です</span>" : ""}
                         </div>
                     </div>
                     <div class="directory-activity-detail-body">
                         <div>
                             <h3>${escapeHtml(node.name)}</h3>
-                            <p class="directory-activity-detail-path">${escapeHtml(node.full_path)}</p>
+                            <p class="directory-activity-detail-path">${escapeHtml(node.path)}</p>
                         </div>
                         <div class="directory-activity-detail-grid">
                             <div class="directory-activity-detail-stat">
@@ -943,10 +989,6 @@
                             <div class="directory-activity-branch-list">
                                 ${branches || `<span class="directory-activity-chip">ブランチはありません</span>`}
                             </div>
-                        </div>
-                        <div class="directory-activity-detail-section">
-                            <span class="directory-activity-detail-section-title">操作</span>
-                            <div class="directory-activity-actions">${actionButtons}</div>
                         </div>
                     </div>
                 `;
@@ -1050,27 +1092,6 @@
                     state.status = statusFilter;
                     statusSelect.value = statusFilter;
                     sync({ resetScroll: true });
-                }
-            });
-
-            detail.addEventListener("click", async (event) => {
-                const target = event.target;
-                if (!(target instanceof HTMLElement)) {
-                    return;
-                }
-                if (target.closest("[data-directory-detail-conflict]")) {
-                    state.status = "conflict";
-                    statusSelect.value = "conflict";
-                    sync({ resetScroll: true });
-                    return;
-                }
-                const copyTarget = target.closest("[data-directory-copy]")?.getAttribute("data-directory-copy");
-                if (copyTarget && navigator.clipboard) {
-                    try {
-                        await navigator.clipboard.writeText(copyTarget);
-                    } catch (error) {
-                        // Ignore clipboard failures in unsupported environments.
-                    }
                 }
             });
 

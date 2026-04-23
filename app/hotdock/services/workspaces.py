@@ -951,6 +951,7 @@ def _build_directory_activity_data(
         *,
         node_id: str,
         name: str,
+        path: str,
         full_path: str,
         repository_id: str,
         repository_name: str,
@@ -965,7 +966,7 @@ def _build_directory_activity_data(
             "id": node_id,
             "type": "directory",
             "name": name,
-            "path": full_path,
+            "path": path,
             "full_path": full_path,
             "repository_id": repository_id,
             "repository_name": repository_name,
@@ -1019,6 +1020,7 @@ def _build_directory_activity_data(
         ensure_directory_node(
             node_id=root_id,
             name=repository_name,
+            path=repository_name,
             full_path=repository_full_name,
             repository_id=repository_id,
             repository_name=repository_name,
@@ -1037,6 +1039,7 @@ def _build_directory_activity_data(
             ensure_directory_node(
                 node_id=directory_id,
                 name=segment,
+                path=directory_path,
                 full_path=f"{repository_full_name} / {directory_path}",
                 repository_id=repository_id,
                 repository_name=repository_name,
