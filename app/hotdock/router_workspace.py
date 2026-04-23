@@ -47,6 +47,7 @@ from app.models.branch import Branch
 from app.models.branch_file import BranchFile
 from app.models.file_collision import FileCollision
 from app.models.file_collision_branch import FileCollisionBranch
+from app.models.github_installation import GithubInstallation
 from app.models.repository import Repository
 from app.models.workspace import Workspace
 
@@ -125,11 +126,11 @@ async def workspace_dashboard(workspace_slug: str, request: Request, db: Session
         db,
         workspace=access.workspace,
         active_nav="workspace-dashboard",
-        page_title=f"{access.workspace.name} | Dashboard | Hotdock",
-        page_heading="Workspace Dashboard",
-        page_description="workspace 単位のダッシュボード。",
+        page_title=f"{access.workspace.name} | ダッシュボード | Hotdock",
+        page_heading="ダッシュボード",
+        page_description="競合と監視状況の概要",
         breadcrumbs=[
-            {"label": "Dashboard", "href": f"/workspaces/{workspace_slug}/dashboard"},
+            {"label": "ダッシュボード", "href": f"/workspaces/{workspace_slug}/dashboard"},
         ],
         current_membership=access.membership,
     )
@@ -147,7 +148,11 @@ async def workspace_repositories(workspace_slug: str, request: Request, db: Sess
         )
     access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="viewer")
     catalog_sync_error = None
-    if access.membership.role in {"owner", "admin"}:
+    github_settings_href = f"/settings/integrations/github?workspace={workspace_slug}"
+    claimed_installations = db.scalars(
+        select(GithubInstallation).where(GithubInstallation.claimed_workspace_id == access.workspace.id)
+    ).all()
+    if claimed_installations and access.membership.role in {"owner", "admin"}:
         try:
             await manual_sync_workspace_installation_repositories(
                 db,
@@ -165,7 +170,7 @@ async def workspace_repositories(workspace_slug: str, request: Request, db: Sess
         active_nav="workspace-repositories",
         page_title=f"{access.workspace.name} | Repositories | Hotdock",
         page_heading="Repositories",
-        page_description="workspace repository 一覧。",
+        page_description="監視対象にする repository を選択します",
         breadcrumbs=[
             {"label": "Dashboard", "href": f"/workspaces/{workspace_slug}/dashboard"},
             {"label": "Repositories", "href": f"/workspaces/{workspace_slug}/repositories"},
@@ -183,22 +188,143 @@ async def workspace_repositories(workspace_slug: str, request: Request, db: Sess
         )
     )
     active_repository = next((repository for repository in repositories if repository.selection_status == REPOSITORY_SELECTION_ACTIVE), None)
-    context["repositories"] = repositories
-    context["repository_limit"] = active_repository_limit()
-    context["active_repository"] = active_repository
-    context["selection_status_labels"] = {
-        REPOSITORY_SELECTION_UNSELECTED: "候補",
-        REPOSITORY_SELECTION_ACTIVE: "監視中",
-        REPOSITORY_SELECTION_INACTIVE: "監視停止",
-        REPOSITORY_SELECTION_INACCESSIBLE: "アクセス不可",
+    has_claimed_installations = bool(claimed_installations)
+    catalog_state = "ready"
+    if not has_claimed_installations:
+        catalog_state = "unconnected"
+    elif not repositories:
+        catalog_state = "empty"
+    sync_warning = None
+    if catalog_sync_error and has_claimed_installations:
+        sync_warning = "候補 repository をまだ取得できませんでした。GitHub App の接続状態を確認して、もう一度お試しください。"
+    repositories_view = []
+    for repository in repositories:
+        if not repository.is_available or repository.selection_status == REPOSITORY_SELECTION_INACCESSIBLE:
+            status_label = "エラー"
+            status_class = "is-conflict"
+            helper_text = repository.inaccessible_reason or "GitHub App から現在アクセスできません"
+        elif repository.detail_sync_status == DETAIL_SYNC_ERROR:
+            status_label = "エラー"
+            status_class = "is-conflict"
+            helper_text = repository.detail_sync_error_message or "同期に失敗しました"
+        elif repository.detail_sync_status == DETAIL_SYNC_SYNCING:
+            status_label = "同期中"
+            status_class = "is-stale"
+            helper_text = "同期を進めています"
+        elif repository.selection_status == REPOSITORY_SELECTION_ACTIVE:
+            status_label = "監視中"
+            status_class = "is-available"
+            helper_text = "現在の監視対象です"
+        elif repository.selection_status == REPOSITORY_SELECTION_INACTIVE:
+            status_label = "未監視"
+            status_class = "is-stale"
+            helper_text = "以前の監視対象です"
+        else:
+            status_label = "未選択"
+            status_class = ""
+            helper_text = "候補から選択できます"
+        repositories_view.append(
+            {
+                "id": repository.id,
+                "display_name": repository.display_name,
+                "full_name": repository.full_name,
+                "visibility": repository.visibility,
+                "default_branch": repository.default_branch or "-",
+                "status_label": status_label,
+                "status_class": status_class,
+                "helper_text": helper_text,
+                "last_synced_at": repository.last_synced_at or "-",
+                "can_activate": repository.selection_status in [REPOSITORY_SELECTION_UNSELECTED, REPOSITORY_SELECTION_INACTIVE]
+                and repository.is_available,
+                "is_active": repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
+            }
+        )
+    if catalog_state == "unconnected":
+        state_banner = {
+            "tone": "is-conflict",
+            "title": "GitHub App が未接続です",
+            "body": "",
+            "supporting": None,
+            "action_label": "GitHub App を連携",
+            "action_href": github_settings_href,
+        }
+        empty_state = {
+            "title": "候補 repository はまだありません",
+            "body": "GitHub App を連携すると、利用可能な repository 候補がここに表示されます",
+            "action_label": "GitHub App を連携",
+            "action_href": github_settings_href,
+            "action_variant": "text",
+        }
+    elif catalog_state == "empty":
+        state_banner = {
+            "tone": "is-stale",
+            "title": "候補 repository はまだ同期されていません",
+            "body": "GitHub App は接続済みです。候補 repository を取り込むと監視対象を選べます",
+            "supporting": "再同期すると候補 repository がここに表示されます",
+            "action_label": "repository を再同期",
+            "action_href": None,
+        }
+        empty_state = {
+            "title": "候補 repository はまだありません",
+            "body": "GitHub App は接続済みです。再同期すると利用可能な repository 候補を取得できます",
+            "action_label": "repository を再同期",
+            "action_href": None,
+            "action_variant": "secondary",
+        }
+    else:
+        state_banner = {
+            "tone": "is-available" if active_repository else "is-stale",
+            "title": "監視対象にする repository を選択します",
+            "body": "候補から 1 件選ぶと、その repository を起点に branch と conflict の監視が始まります",
+            "supporting": f"監視上限は {active_repository_limit()} 件です",
+            "action_label": "GitHub App を確認",
+            "action_href": github_settings_href,
+        }
+        empty_state = None
+    context["repositories_page"] = {
+        "catalog_state": catalog_state,
+        "sync_warning": sync_warning,
+        "state_banner": state_banner,
+        "summary_items": [
+            {"label": "接続状態", "value": "未接続" if not has_claimed_installations else "接続済み", "class": "is-conflict" if not has_claimed_installations else "is-available"},
+            {"label": "候補数", "value": str(len(repositories)), "class": ""},
+            {"label": "監視対象", "value": active_repository.display_name if active_repository else "未選択", "class": "is-available" if active_repository else "is-stale"},
+        ],
+        "steps": [
+            {
+                "title": "GitHub App を連携",
+                "description": "repository 候補を取り込むための最初の設定です",
+                "status_label": "未完了" if not has_claimed_installations else "完了",
+                "status_class": "is-stale" if not has_claimed_installations else "is-available",
+                "action_label": "連携する" if not has_claimed_installations else None,
+                "action_href": github_settings_href if not has_claimed_installations else None,
+                "is_current": not has_claimed_installations,
+            },
+            {
+                "title": "監視対象 repository を選択",
+                "description": "連携後に候補から 1 件選択できます" if not active_repository else "監視対象を選択済みです",
+                "status_label": "未開始" if not active_repository else "完了",
+                "status_class": "" if not active_repository else "is-available",
+                "action_label": None,
+                "action_href": None,
+                "is_current": has_claimed_installations and not active_repository,
+            },
+            {
+                "title": "branch を観測または手動登録",
+                "description": "repository 選択後に push または手動登録で進めます",
+                "status_label": "未開始" if not active_repository else "未開始",
+                "status_class": "",
+                "action_label": None,
+                "action_href": None,
+                "is_current": False,
+            },
+        ],
+        "empty_state": empty_state,
+        "github_settings_href": github_settings_href,
+        "active_repository": active_repository,
+        "repositories": repositories_view,
+        "repository_limit": active_repository_limit(),
     }
-    context["detail_sync_labels"] = {
-        DETAIL_SYNC_NOT_STARTED: "未開始",
-        DETAIL_SYNC_SYNCING: "同期中",
-        DETAIL_SYNC_COMPLETED: "完了",
-        DETAIL_SYNC_ERROR: "エラー",
-    }
-    context["catalog_sync_error"] = catalog_sync_error
     return render_app("hotdock/app/workspace_repositories.html", context)
 
 

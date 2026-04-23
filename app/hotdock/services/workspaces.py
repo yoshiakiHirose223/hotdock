@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import timedelta
+from urllib.parse import quote
 
 from fastapi import HTTPException, Request
 from sqlalchemy import delete, select
@@ -24,7 +27,13 @@ from app.models.github_pending_claim import GithubPendingClaim
 from app.models.repository import Repository
 from app.models.branch import Branch
 from app.models.file_collision import FileCollision
-from app.hotdock.services.github import REPOSITORY_SELECTION_ACTIVE, active_repository_limit
+from app.models.audit_log import AuditLog
+from app.hotdock.services.github import (
+    REPOSITORY_SELECTION_ACTIVE,
+    REPOSITORY_SELECTION_INACCESSIBLE,
+    REPOSITORY_SELECTION_INACTIVE,
+    active_repository_limit,
+)
 
 
 @dataclass
@@ -534,23 +543,718 @@ def list_user_workspaces(db: Session, user: User) -> list[WorkspaceAccess]:
     return results
 
 
-def build_workspace_navigation(workspace_slug: str, current_role: str | None = None) -> list[dict[str, str]]:
+def build_workspace_navigation(workspace_slug: str, current_role: str | None = None) -> list[dict[str, object]]:
     base = f"/workspaces/{workspace_slug}"
-    navigation = [
-        {"label": "Dashboard", "href": f"{base}/dashboard", "key": "workspace-dashboard"},
-        {"label": "Repositories", "href": f"{base}/repositories", "key": "workspace-repositories"},
-        {"label": "Branches", "href": f"{base}/branches", "key": "workspace-branches"},
-        {"label": "Conflicts", "href": f"{base}/conflicts", "key": "workspace-conflicts"},
-        {"label": "Members", "href": f"{base}/members", "key": "workspace-members"},
-        {"label": "Settings", "href": f"{base}/settings", "key": "workspace-settings"},
-        {"label": "Billing", "href": f"{base}/billing", "key": "workspace-billing"},
+    overview_items = [
+        {"label": "ダッシュボード", "href": f"{base}/dashboard", "key": "workspace-dashboard"},
+    ]
+    monitoring_items = [
+        {"label": "リポジトリ", "href": f"{base}/repositories", "key": "workspace-repositories"},
+        {"label": "ブランチ", "href": f"{base}/branches", "key": "workspace-branches"},
+        {"label": "競合", "href": f"{base}/conflicts", "key": "workspace-conflicts"},
+    ]
+    workspace_items = [
+        {"label": "メンバー", "href": f"{base}/members", "key": "workspace-members"},
+        {"label": "設定", "href": f"{base}/settings", "key": "workspace-settings"},
+        {"label": "請求", "href": f"{base}/billing", "key": "workspace-billing"},
         {"label": "GitHub", "href": f"/settings/integrations/github?workspace={workspace_slug}", "key": "workspace-github"},
     ]
     if current_role not in {"owner", "admin"}:
-        navigation = [item for item in navigation if item["key"] not in {"workspace-settings", "workspace-github"}]
+        workspace_items = [
+            item for item in workspace_items if item["key"] not in {"workspace-settings", "workspace-github"}
+        ]
     if current_role != "owner":
-        navigation = [item for item in navigation if item["key"] != "workspace-billing"]
-    return navigation
+        workspace_items = [item for item in workspace_items if item["key"] != "workspace-billing"]
+    return [
+        {"title": "概要", "items": overview_items},
+        {"title": "監視", "items": monitoring_items},
+        {"title": "ワークスペース", "items": workspace_items},
+    ]
+
+
+def _format_timestamp(value) -> str:
+    if value is None:
+        return "-"
+    return value.strftime("%Y-%m-%d %H:%M")
+
+
+def _repository_row_state(repository: Repository) -> tuple[str, str, str]:
+    if not repository.is_available or repository.selection_status == REPOSITORY_SELECTION_INACCESSIBLE:
+        return "エラー", "is-conflict", "GitHub App から現在アクセスできません"
+    if repository.detail_sync_status == "error":
+        return "エラー", "is-conflict", repository.detail_sync_error_message or "同期に失敗しました"
+    if repository.detail_sync_status == "syncing":
+        return "同期中", "is-stale", "同期を進めています"
+    if repository.selection_status == REPOSITORY_SELECTION_ACTIVE:
+        return "監視中", "is-available", "現在の監視対象です"
+    if repository.selection_status == REPOSITORY_SELECTION_INACTIVE:
+        return "未監視", "is-stale", "以前の監視対象です"
+    return "未選択", "", "候補から選択できます"
+
+
+def _installation_status_badge(installation: GithubInstallation) -> tuple[str, str, str]:
+    if installation.installation_status == "active":
+        return "接続中", "is-available", "GitHub App は正常に接続されています"
+    if installation.installation_status == "suspended":
+        return "警告", "is-stale", "GitHub 側の状態を確認してください"
+    if installation.installation_status in {"uninstalled", "unlinked"}:
+        return "未接続", "is-conflict", "再連携が必要です"
+    return "確認中", "", "接続状態を確認しています"
+
+
+def _sync_health_summary(
+    *,
+    installations: list[GithubInstallation],
+    repositories: list[Repository],
+    active_repositories: list[Repository],
+    conflicts: list[FileCollision],
+) -> dict[str, object]:
+    latest_sync_at = max((repository.last_synced_at for repository in repositories if repository.last_synced_at), default=None)
+    latest_webhook_at = max(
+        (installation.last_webhook_event_at for installation in installations if installation.last_webhook_event_at),
+        default=None,
+    )
+    has_error = any(
+        (not repository.is_available)
+        or repository.selection_status == REPOSITORY_SELECTION_INACCESSIBLE
+        or repository.detail_sync_status == "error"
+        for repository in repositories
+    )
+    is_syncing = any(repository.detail_sync_status == "syncing" for repository in repositories)
+    if not installations:
+        return {
+            "status": "未接続",
+            "tone": "is-conflict",
+            "subtitle": "GitHub App を連携してください",
+            "details": [
+                f"最終同期 {_format_timestamp(latest_sync_at)}",
+                "最終 webhook -",
+                "repository 未接続",
+                "branch 未設定",
+            ],
+            "latest_sync_at": _format_timestamp(latest_sync_at),
+        }
+    if has_error or conflicts:
+        status = "警告"
+        tone = "is-conflict"
+        subtitle = "確認が必要な項目があります"
+    elif not active_repositories:
+        status = "要設定"
+        tone = "is-stale"
+        subtitle = "監視対象 repository を選択してください"
+    elif is_syncing:
+        status = "同期中"
+        tone = "is-stale"
+        subtitle = "状態を更新しています"
+    else:
+        status = "正常"
+        tone = "is-available"
+        subtitle = "監視は正常です"
+    return {
+        "status": status,
+        "tone": tone,
+        "subtitle": subtitle,
+        "details": [
+            f"最終同期 {_format_timestamp(latest_sync_at)}",
+            f"最終 webhook {_format_timestamp(latest_webhook_at)}",
+            f"repository {'正常' if repositories and not has_error else '要確認' if has_error else '未接続'}",
+            f"branch {'監視中' if active_repositories else '未設定'}",
+        ],
+        "latest_sync_at": _format_timestamp(latest_sync_at),
+    }
+
+
+def _dashboard_action(label: str, href: str, variant: str = "secondary") -> dict[str, str]:
+    return {"label": label, "href": href, "variant": variant}
+
+
+def _recent_event_label(event: AuditLog) -> tuple[str, str]:
+    mapping = {
+        "file_collision_detected": ("競合候補を検知", "競合一覧で確認できます"),
+        "file_collision_resolved": ("競合候補を解消", "最新状態へ更新しました"),
+        "workspace_repository_activated": ("監視対象 repository を更新", "監視対象を切り替えました"),
+        "workspace_repository_sync_requested": ("repository を再同期", "候補一覧を更新しています"),
+        "workspace_branch_manual_registered": ("ブランチを手動登録", "touched files を反映しました"),
+        "claim_succeeded": ("GitHub App を接続", "repository の取り込み準備が整いました"),
+        "branch_compare_failed": ("branch 同期で警告", "次回以降の更新で再試行されます"),
+    }
+    return mapping.get(event.action, ("最近の更新", event.action.replace("_", " ")))
+
+
+_DIRECTORY_ACTIVITY_STATUS_PRIORITY = {
+    "conflict": 0,
+    "recent_7": 1,
+    "recent_28": 2,
+    "stale": 3,
+    "unknown": 4,
+}
+
+
+def _directory_activity_status(*, last_updated_at, is_conflict: bool, now) -> str:
+    if is_conflict:
+        return "conflict"
+    if last_updated_at is None:
+        return "unknown"
+    age = now - last_updated_at
+    if age <= timedelta(days=7):
+        return "recent_7"
+    if age <= timedelta(days=28):
+        return "recent_28"
+    return "stale"
+
+
+def _directory_activity_status_label(status: str) -> str:
+    return {
+        "conflict": "競合",
+        "recent_7": "7日以内に更新",
+        "recent_28": "28日以内に更新",
+        "stale": "長期間更新なし",
+        "unknown": "不明",
+    }.get(status, "不明")
+
+
+def _directory_activity_status_class(status: str) -> str:
+    return f"is-{status.replace('_', '-')}"
+
+
+def _directory_activity_source_label(source_labels: set[str]) -> str:
+    if not source_labels:
+        return "不明"
+    if source_labels == {"手動登録"}:
+        return "手動登録"
+    if source_labels == {"Webhook"}:
+        return "Webhook"
+    return "混在"
+
+
+def _directory_activity_relative_time(value, now) -> str:
+    if value is None:
+        return "不明"
+    delta = now - value
+    total_seconds = max(int(delta.total_seconds()), 0)
+    if total_seconds < 60:
+        return "たった今"
+    minutes = total_seconds // 60
+    if minutes < 60:
+        return f"{minutes}分前"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}時間前"
+    days = hours // 24
+    if days < 30:
+        return f"{days}日前"
+    return f"{days // 30}か月前"
+
+
+def _build_directory_activity_data(
+    db: Session,
+    *,
+    workspace: Workspace,
+    branches: list[Branch],
+    branches_href: str,
+    conflicts_href: str,
+) -> dict[str, object]:
+    now = utcnow()
+    open_collisions = db.scalars(
+        select(FileCollision)
+        .join(Repository, Repository.id == FileCollision.repository_id)
+        .where(
+            Repository.workspace_id == workspace.id,
+            Repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
+            Repository.is_active.is_(True),
+            Repository.is_available.is_(True),
+            FileCollision.collision_status == "open",
+        )
+    ).all()
+    open_collision_keys = {(collision.repository_id, collision.normalized_path) for collision in open_collisions}
+    branch_file_rows = db.execute(
+        select(BranchFile, Branch, Repository)
+        .join(Branch, Branch.id == BranchFile.branch_id)
+        .join(Repository, Repository.id == Branch.repository_id)
+        .where(
+            Repository.workspace_id == workspace.id,
+            Repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
+            Repository.is_active.is_(True),
+            Repository.is_available.is_(True),
+            Branch.is_active.is_(True),
+            Branch.is_deleted.is_(False),
+            BranchFile.is_active.is_(True),
+        )
+    ).all()
+
+    file_entries: dict[tuple[str, str], dict[str, object]] = {}
+    for branch_file, branch, repository in branch_file_rows:
+        normalized_path = branch_file.normalized_path or branch_file.path
+        if not normalized_path:
+            continue
+        key = (repository.id, normalized_path)
+        source_label = "手動登録" if branch.observed_via == "manual" or branch_file.source_kind == "manual_input" else "Webhook"
+        observed_at = branch_file.last_seen_at or branch_file.observed_at or branch.last_push_at or branch.updated_at
+        branch_href = f"{branches_href}?branch={quote(branch.name)}"
+        entry = file_entries.get(key)
+        if entry is None:
+            entry = {
+                "repository_id": repository.id,
+                "repository_name": repository.display_name,
+                "repository_full_name": repository.full_name,
+                "path": branch_file.path,
+                "normalized_path": normalized_path,
+                "last_updated_at": observed_at,
+                "source_labels": {source_label},
+                "branch_map": {},
+                "is_conflict": key in open_collision_keys or bool(branch_file.is_conflict),
+            }
+            file_entries[key] = entry
+        else:
+            entry["source_labels"].add(source_label)
+            entry["is_conflict"] = bool(entry["is_conflict"]) or key in open_collision_keys or bool(branch_file.is_conflict)
+            current_last_updated = entry.get("last_updated_at")
+            if observed_at and (current_last_updated is None or observed_at > current_last_updated):
+                entry["last_updated_at"] = observed_at
+                entry["path"] = branch_file.path
+        branch_seen_at = observed_at
+        branch_map = entry["branch_map"]
+        existing_branch = branch_map.get(branch.id)
+        if existing_branch is None or (
+            branch_seen_at is not None
+            and (existing_branch.get("last_updated_at") is None or branch_seen_at > existing_branch.get("last_updated_at"))
+        ):
+            branch_map[branch.id] = {
+                "id": branch.id,
+                "name": branch.name,
+                "href": branch_href,
+                "last_updated_at": branch_seen_at,
+            }
+
+    branch_options = [
+        {"value": branch.name, "label": branch.name}
+        for branch in sorted(branches, key=lambda item: item.name.lower())
+        if not branch.is_deleted and branch.is_active
+    ]
+
+    if not file_entries:
+        payload = {
+            "filters": {
+                "branches": branch_options,
+                "statuses": [
+                    {"value": "conflict", "label": "競合"},
+                    {"value": "recent_7", "label": "7日以内に更新"},
+                    {"value": "recent_28", "label": "28日以内に更新"},
+                    {"value": "stale", "label": "長期間更新なし"},
+                    {"value": "unknown", "label": "不明"},
+                ],
+                "directories": [],
+            },
+            "root_ids": [],
+            "nodes": [],
+            "default_expanded": [],
+            "initial_selected_id": None,
+        }
+        return {
+            "is_empty": True,
+            "summary_cards": [
+                {"label": "競合", "value": "0", "meta": "競合中のパス", "class": "is-conflict"},
+                {"label": "7日以内更新", "value": "0", "meta": "最近更新されたパス", "class": ""},
+                {"label": "28日以内更新", "value": "0", "meta": "観測済みのパス", "class": ""},
+                {"label": "長期間更新なし", "value": "0", "meta": "28日以上更新なし", "class": ""},
+                {"label": "手動追跡", "value": "0", "meta": "手動登録ソース", "class": ""},
+            ],
+            "empty_title": "まだ観測済みファイルはありません",
+            "empty_body": "Push/Webhook または手動登録で検知されたファイルが表示されます",
+            "empty_action": _dashboard_action("ブランチへ移動", branches_href),
+            "legend_items": [
+                {"label": "赤 = 競合", "class": "is-conflict"},
+                {"label": "緑 = 7日以内に更新", "class": "is-recent-7"},
+                {"label": "黄 = 28日以内に更新", "class": "is-recent-28"},
+                {"label": "灰 = 長期間更新なし", "class": "is-stale"},
+            ],
+            "note": "この画面は観測済みファイルのみ表示対象です。push/webhook または手動登録で検知されたもののみ対象です。",
+            "json": json.dumps(payload, ensure_ascii=False).replace("</", "<\\/"),
+        }
+
+    def _branch_sort_key(item: dict[str, object]):
+        last_updated_at = item.get("last_updated_at")
+        return (
+            0 if last_updated_at else 1,
+            -(last_updated_at.timestamp()) if last_updated_at else 0,
+            str(item["name"]).lower(),
+        )
+
+    directory_options_map: dict[str, str] = {}
+    file_nodes: list[dict[str, object]] = []
+    for entry in file_entries.values():
+        normalized_path = str(entry["normalized_path"])
+        path_parts = [segment for segment in normalized_path.split("/") if segment]
+        top_directory = path_parts[0] if path_parts else "__root__"
+        directory_value = f"{entry['repository_id']}::{top_directory}"
+        directory_label = (
+            f"{entry['repository_name']} / {top_directory}"
+            if top_directory != "__root__"
+            else f"{entry['repository_name']} / root"
+        )
+        directory_options_map[directory_value] = directory_label
+        branch_items = sorted(entry["branch_map"].values(), key=_branch_sort_key)
+        status = _directory_activity_status(
+            last_updated_at=entry["last_updated_at"],
+            is_conflict=bool(entry["is_conflict"]),
+            now=now,
+        )
+        full_path = f"{entry['repository_full_name']} / {normalized_path}"
+        file_nodes.append(
+            {
+                "id": f"file:{entry['repository_id']}:{normalized_path}",
+                "type": "file",
+                "name": path_parts[-1] if path_parts else normalized_path,
+                "path": normalized_path,
+                "full_path": full_path,
+                "repository_id": entry["repository_id"],
+                "repository_name": entry["repository_name"],
+                "repository_full_name": entry["repository_full_name"],
+                "directory_value": directory_value,
+                "status": status,
+                "status_label": _directory_activity_status_label(status),
+                "status_class": _directory_activity_status_class(status),
+                "last_active_at": entry["last_updated_at"],
+                "last_active_label": _directory_activity_relative_time(entry["last_updated_at"], now),
+                "source_label": _directory_activity_source_label(entry["source_labels"]),
+                "source_labels": set(entry["source_labels"]),
+                "is_manual": "手動登録" in entry["source_labels"],
+                "is_conflict": bool(entry["is_conflict"]),
+                "conflict_count": 1 if status == "conflict" else 0,
+                "recent_count": 1 if status == "recent_7" else 0,
+                "file_count": 1,
+                "branch_items": branch_items,
+                "branch_names": [str(item["name"]) for item in branch_items],
+                "branch_preview": branch_items[:2],
+                "branch_overflow": max(len(branch_items) - 2, 0),
+                "child_ids": [],
+                "search_text": " ".join(
+                    [
+                        full_path.lower(),
+                        " ".join(str(item["name"]).lower() for item in branch_items),
+                        str(entry["repository_full_name"]).lower(),
+                    ]
+                ),
+                "copy_text": full_path,
+                "conflict_href": (
+                    f"{conflicts_href}?path={quote(normalized_path)}&repository_id={quote(str(entry['repository_id']))}"
+                    if bool(entry["is_conflict"])
+                    else None
+                ),
+            }
+        )
+
+    nodes: dict[str, dict[str, object]] = {}
+    root_ids: list[str] = []
+
+    def ensure_directory_node(
+        *,
+        node_id: str,
+        name: str,
+        full_path: str,
+        repository_id: str,
+        repository_name: str,
+        repository_full_name: str,
+        parent_id: str | None,
+        directory_value: str,
+    ) -> dict[str, object]:
+        existing = nodes.get(node_id)
+        if existing is not None:
+            return existing
+        node = {
+            "id": node_id,
+            "type": "directory",
+            "name": name,
+            "path": full_path,
+            "full_path": full_path,
+            "repository_id": repository_id,
+            "repository_name": repository_name,
+            "repository_full_name": repository_full_name,
+            "parent_id": parent_id,
+            "directory_value": directory_value,
+            "child_ids": [],
+            "branch_map": {},
+            "branch_names": [],
+            "branch_preview": [],
+            "branch_overflow": 0,
+            "source_labels": set(),
+            "source_label": "不明",
+            "status": "unknown",
+            "status_label": _directory_activity_status_label("unknown"),
+            "status_class": _directory_activity_status_class("unknown"),
+            "last_active_at": None,
+            "last_active_label": "不明",
+            "is_conflict": False,
+            "conflict_count": 0,
+            "recent_count": 0,
+            "file_count": 0,
+            "search_text": full_path.lower(),
+            "copy_text": full_path,
+            "conflict_href": None,
+        }
+        nodes[node_id] = node
+        if parent_id is None:
+            root_ids.append(node_id)
+        else:
+            parent = nodes[parent_id]
+            if node_id not in parent["child_ids"]:
+                parent["child_ids"].append(node_id)
+        return node
+
+    def merge_branch_maps(target: dict[str, dict[str, object]], source: dict[str, dict[str, object]]) -> None:
+        for branch_id, branch_item in source.items():
+            existing = target.get(branch_id)
+            if existing is None or (
+                branch_item.get("last_updated_at") is not None
+                and (existing.get("last_updated_at") is None or branch_item["last_updated_at"] > existing["last_updated_at"])
+            ):
+                target[branch_id] = branch_item
+
+    for file_node in file_nodes:
+        repository_id = str(file_node["repository_id"])
+        repository_name = str(file_node["repository_name"])
+        repository_full_name = str(file_node["repository_full_name"])
+        root_directory_value = f"{repository_id}::__root__"
+        root_id = f"directory:{repository_id}:__root__"
+        ensure_directory_node(
+            node_id=root_id,
+            name=repository_name,
+            full_path=repository_full_name,
+            repository_id=repository_id,
+            repository_name=repository_name,
+            repository_full_name=repository_full_name,
+            parent_id=None,
+            directory_value=root_directory_value,
+        )
+        current_parent_id = root_id
+        path_segments = [segment for segment in str(file_node["path"]).split("/") if segment]
+        directory_segments = path_segments[:-1]
+        current_prefix: list[str] = []
+        for segment in directory_segments:
+            current_prefix.append(segment)
+            directory_path = "/".join(current_prefix)
+            directory_id = f"directory:{repository_id}:{directory_path}"
+            ensure_directory_node(
+                node_id=directory_id,
+                name=segment,
+                full_path=f"{repository_full_name} / {directory_path}",
+                repository_id=repository_id,
+                repository_name=repository_name,
+                repository_full_name=repository_full_name,
+                parent_id=current_parent_id,
+                directory_value=f"{repository_id}::{current_prefix[0]}",
+            )
+            current_parent_id = directory_id
+
+        file_node["parent_id"] = current_parent_id
+        nodes[file_node["id"]] = file_node
+        parent = nodes[current_parent_id]
+        if file_node["id"] not in parent["child_ids"]:
+            parent["child_ids"].append(file_node["id"])
+
+    def finalize_node(node_id: str) -> dict[str, object]:
+        node = nodes[node_id]
+        if node["type"] == "file":
+            branch_map = {item["id"]: item for item in node["branch_items"]}
+            node["branch_map"] = branch_map
+            return node
+
+        conflict_href = None
+        for child_id in list(node["child_ids"]):
+            child = finalize_node(child_id)
+            node["file_count"] += int(child["file_count"])
+            node["conflict_count"] += int(child["conflict_count"])
+            node["recent_count"] += int(child["recent_count"])
+            node["is_conflict"] = bool(node["is_conflict"]) or bool(child["is_conflict"])
+            node["source_labels"].update(child["source_labels"])
+            merge_branch_maps(node["branch_map"], child["branch_map"])
+            if child["last_active_at"] is not None and (
+                node["last_active_at"] is None or child["last_active_at"] > node["last_active_at"]
+            ):
+                node["last_active_at"] = child["last_active_at"]
+            if child["conflict_href"] and conflict_href is None:
+                conflict_href = child["conflict_href"]
+
+        if node["file_count"]:
+            child_statuses = [nodes[child_id]["status"] for child_id in node["child_ids"]]
+            node["status"] = min(
+                child_statuses,
+                key=lambda status: _DIRECTORY_ACTIVITY_STATUS_PRIORITY.get(status, 99),
+            )
+            node["status_label"] = _directory_activity_status_label(node["status"])
+            node["status_class"] = _directory_activity_status_class(node["status"])
+            node["last_active_label"] = _directory_activity_relative_time(node["last_active_at"], now)
+        node["source_label"] = _directory_activity_source_label(node["source_labels"])
+        node["conflict_href"] = conflict_href
+        branch_items = sorted(node["branch_map"].values(), key=_branch_sort_key)
+        node["branch_names"] = [str(item["name"]) for item in branch_items]
+        node["branch_preview"] = branch_items[:2]
+        node["branch_overflow"] = max(len(branch_items) - 2, 0)
+        node["search_text"] = " ".join(
+            [
+                str(node["search_text"]),
+                " ".join(name.lower() for name in node["branch_names"]),
+            ]
+        ).strip()
+        node["child_ids"].sort(
+            key=lambda child_id: (
+                0 if nodes[child_id]["type"] == "directory" else 1,
+                _DIRECTORY_ACTIVITY_STATUS_PRIORITY.get(str(nodes[child_id]["status"]), 99),
+                -(nodes[child_id]["last_active_at"].timestamp()) if nodes[child_id]["last_active_at"] else 0,
+                str(nodes[child_id]["name"]).lower(),
+            )
+        )
+        return node
+
+    for root_id in root_ids:
+        finalize_node(root_id)
+
+    root_ids.sort(
+        key=lambda node_id: (
+            _DIRECTORY_ACTIVITY_STATUS_PRIORITY.get(str(nodes[node_id]["status"]), 99),
+            -(nodes[node_id]["last_active_at"].timestamp()) if nodes[node_id]["last_active_at"] else 0,
+            str(nodes[node_id]["name"]).lower(),
+        )
+    )
+
+    serialized_nodes: list[dict[str, object]] = []
+    summary_counts = {"conflict": 0, "recent_7": 0, "recent_28": 0, "stale": 0, "manual": 0}
+    for node in nodes.values():
+        if node["type"] == "file":
+            summary_counts[node["status"]] = summary_counts.get(node["status"], 0) + 1
+            if node["is_manual"]:
+                summary_counts["manual"] += 1
+        serialized_nodes.append(
+            {
+                "id": node["id"],
+                "type": node["type"],
+                "name": node["name"],
+                "path": node["path"],
+                "full_path": node["full_path"],
+                "parent_id": node.get("parent_id"),
+                "child_ids": node["child_ids"],
+                "status": node["status"],
+                "status_label": node["status_label"],
+                "status_class": node["status_class"],
+                "last_active_label": node["last_active_label"],
+                "last_active_at": node["last_active_at"].isoformat() if node["last_active_at"] else "",
+                "source_label": node["source_label"],
+                "branch_names": node["branch_names"],
+                "branch_preview": [
+                    {
+                        "id": item["id"],
+                        "name": item["name"],
+                        "href": item["href"],
+                    }
+                    for item in node["branch_preview"]
+                ],
+                "branch_overflow": node["branch_overflow"],
+                "branches": [
+                    {
+                        "id": item["id"],
+                        "name": item["name"],
+                        "href": item["href"],
+                        "last_active_label": _directory_activity_relative_time(item["last_updated_at"], now),
+                    }
+                    for item in sorted(node["branch_map"].values(), key=_branch_sort_key)[:8]
+                ],
+                "repository_id": node["repository_id"],
+                "repository_name": node["repository_name"],
+                "repository_full_name": node["repository_full_name"],
+                "directory_value": node["directory_value"],
+                "search_text": node["search_text"],
+                "is_conflict": bool(node["is_conflict"]),
+                "conflict_count": node["conflict_count"],
+                "recent_count": node["recent_count"],
+                "file_count": node["file_count"],
+                "copy_text": node["copy_text"],
+                "conflict_href": node["conflict_href"],
+            }
+        )
+
+    prioritized_files = [
+        node
+        for node in serialized_nodes
+        if node["type"] == "file"
+    ]
+    prioritized_files.sort(
+        key=lambda node: (
+            _DIRECTORY_ACTIVITY_STATUS_PRIORITY.get(str(node["status"]), 99),
+            node["last_active_at"] != "",
+            node["last_active_at"],
+            node["full_path"],
+        ),
+        reverse=False,
+    )
+    initial_selected_id = prioritized_files[0]["id"] if prioritized_files else (root_ids[0] if root_ids else None)
+
+    payload = {
+        "filters": {
+            "branches": branch_options,
+            "statuses": [
+                {"value": "conflict", "label": "競合"},
+                {"value": "recent_7", "label": "7日以内に更新"},
+                {"value": "recent_28", "label": "28日以内に更新"},
+                {"value": "stale", "label": "長期間更新なし"},
+                {"value": "unknown", "label": "不明"},
+            ],
+            "directories": [
+                {"value": value, "label": label}
+                for value, label in sorted(directory_options_map.items(), key=lambda item: item[1].lower())
+            ],
+        },
+        "root_ids": root_ids,
+        "nodes": serialized_nodes,
+        "default_expanded": root_ids,
+        "initial_selected_id": initial_selected_id,
+    }
+
+    return {
+        "is_empty": False,
+        "summary_cards": [
+            {
+                "label": "競合",
+                "value": str(summary_counts.get("conflict", 0)),
+                "meta": "競合中のパス",
+                "class": "is-conflict",
+            },
+            {
+                "label": "7日以内更新",
+                "value": str(summary_counts.get("recent_7", 0)),
+                "meta": "最近更新されたパス",
+                "class": "",
+            },
+            {
+                "label": "28日以内更新",
+                "value": str(summary_counts.get("recent_28", 0)),
+                "meta": "観測済みのパス",
+                "class": "",
+            },
+            {
+                "label": "長期間更新なし",
+                "value": str(summary_counts.get("stale", 0)),
+                "meta": "28日以上更新なし",
+                "class": "",
+            },
+            {
+                "label": "手動追跡",
+                "value": str(summary_counts.get("manual", 0)),
+                "meta": "手動登録ソース",
+                "class": "",
+            },
+        ],
+        "empty_title": "まだ観測済みファイルはありません",
+        "empty_body": "Push/Webhook または手動登録で検知されたファイルが表示されます",
+        "empty_action": _dashboard_action("ブランチへ移動", branches_href),
+        "legend_items": [
+            {"label": "赤 = 競合", "class": "is-conflict"},
+            {"label": "緑 = 7日以内に更新", "class": "is-recent-7"},
+            {"label": "黄 = 28日以内に更新", "class": "is-recent-28"},
+            {"label": "灰 = 長期間更新なし", "class": "is-stale"},
+        ],
+        "note": "この画面は観測済みファイルのみ表示対象です。push/webhook または手動登録で検知されたもののみ対象です。",
+        "json": json.dumps(payload, ensure_ascii=False).replace("</", "<\\/"),
+    }
 
 
 def workspace_dashboard_data(db: Session, workspace: Workspace) -> dict[str, object]:
@@ -560,10 +1264,20 @@ def workspace_dashboard_data(db: Session, workspace: Workspace) -> dict[str, obj
     repositories = db.scalars(
         select(Repository).where(Repository.workspace_id == workspace.id, Repository.deleted_at.is_(None))
     ).all()
+    repositories.sort(
+        key=lambda repository: (
+            0 if repository.selection_status == REPOSITORY_SELECTION_ACTIVE else 1,
+            0 if repository.is_available else 1,
+            repository.display_name.lower(),
+        )
+    )
     active_repositories = [repository for repository in repositories if repository.selection_status == REPOSITORY_SELECTION_ACTIVE]
     active_repository_ids = [repository.id for repository in active_repositories]
     branches = db.scalars(
-        select(Branch).where(Branch.workspace_id == workspace.id, Branch.repository_id.in_(active_repository_ids) if active_repository_ids else False)
+        select(Branch).where(
+            Branch.workspace_id == workspace.id,
+            Branch.repository_id.in_(active_repository_ids) if active_repository_ids else False,
+        )
     ).all()
     conflicts = db.scalars(
         select(FileCollision)
@@ -583,18 +1297,239 @@ def workspace_dashboard_data(db: Session, workspace: Workspace) -> dict[str, obj
             WorkspaceMember.revoked_at.is_(None),
         )
     ).all()
+    recent_audits = db.scalars(
+        select(AuditLog).where(AuditLog.workspace_id == workspace.id).order_by(AuditLog.created_at.desc()).limit(4)
+    ).all()
+    sync_health = _sync_health_summary(
+        installations=installations,
+        repositories=repositories,
+        active_repositories=active_repositories,
+        conflicts=conflicts,
+    )
+    github_settings_href = f"/settings/integrations/github?workspace={workspace.slug}"
+    repositories_href = f"/workspaces/{workspace.slug}/repositories"
+    branches_href = f"/workspaces/{workspace.slug}/branches"
+    conflicts_href = f"/workspaces/{workspace.slug}/conflicts"
+    directory_activity = _build_directory_activity_data(
+        db,
+        workspace=workspace,
+        branches=branches,
+        branches_href=branches_href,
+        conflicts_href=conflicts_href,
+    )
+    is_unconnected = not installations
+    if conflicts:
+        state_banner = {
+            "tone": "is-conflict",
+            "title": f"{len(conflicts)}件の競合候補があります",
+            "subtitle": "確認が必要です",
+            "action": _dashboard_action("競合一覧を見る", conflicts_href, "primary"),
+            "extra_actions": [],
+        }
+    elif is_unconnected:
+        state_banner = {
+            "tone": "is-conflict",
+            "title": "GitHub App が未接続です",
+            "subtitle": "",
+            "action": _dashboard_action("GitHub App を連携", github_settings_href, "primary"),
+            "extra_actions": [
+                _dashboard_action("Backlogから連携", "#", "backlog"),
+                _dashboard_action("Git導入", "#", "git"),
+            ],
+        }
+    elif not active_repositories:
+        state_banner = {
+            "tone": "is-stale",
+            "title": "監視対象リポジトリが未選択です",
+            "subtitle": "候補から 1 件選択してください",
+            "action": _dashboard_action("リポジトリを選ぶ", repositories_href, "primary"),
+            "extra_actions": [],
+        }
+    elif not branches:
+        state_banner = {
+            "tone": "is-stale",
+            "title": "まだブランチが観測されていません",
+            "subtitle": "push を待つか、ブランチを手動登録してください",
+            "action": _dashboard_action("ブランチを手動登録", branches_href, "primary"),
+            "extra_actions": [],
+        }
+    else:
+        state_banner = {
+            "tone": "is-available",
+            "title": "監視は正常です",
+            "subtitle": "現在、異常はありません",
+            "action": _dashboard_action("競合一覧を見る", conflicts_href, "secondary"),
+            "extra_actions": [],
+        }
+
+    primary_action = state_banner["action"]
+    secondary_actions = [
+        _dashboard_action("競合一覧を見る", conflicts_href),
+        _dashboard_action("監視対象リポジトリを変更", repositories_href),
+        _dashboard_action("ブランチを手動登録", branches_href),
+    ]
+    secondary_actions = [action for action in secondary_actions if action["label"] != primary_action["label"]]
+    latest_sync_at = max((repository.last_synced_at for repository in repositories if repository.last_synced_at), default=None)
+    latest_webhook_at = max(
+        (installation.last_webhook_event_at for installation in installations if installation.last_webhook_event_at),
+        default=None,
+    )
+    candidate_count = len(repositories)
+    summary_cards = (
+        [
+            {
+                "label": "リポジトリ",
+                "value": str(candidate_count),
+                "meta": "候補リポジトリ",
+                "tone": "is-stale" if candidate_count == 0 else "is-available",
+                "action_label": "リポジトリを見る",
+                "action_href": repositories_href,
+            },
+            {
+                "label": "ブランチ",
+                "value": str(len(branches)),
+                "meta": "監視中ブランチ",
+                "tone": "is-stale" if not branches else "is-available",
+                "action_label": "ブランチを見る",
+                "action_href": branches_href,
+            },
+            {
+                "label": "競合",
+                "value": str(len(conflicts)),
+                "meta": "確認が必要です" if conflicts else "競合はありません",
+                "tone": "is-conflict" if conflicts else "",
+                "is_critical": True,
+                "action_label": "競合一覧を見る",
+                "action_href": conflicts_href,
+            },
+        ]
+        if is_unconnected
+        else [
+            {
+                "label": "競合",
+                "value": str(len(conflicts)),
+                "meta": "確認が必要です" if conflicts else "競合はありません",
+                "tone": "is-conflict" if conflicts else "",
+                "is_critical": True,
+                "action_label": "競合一覧を見る",
+                "action_href": conflicts_href,
+            },
+            {
+                "label": "監視中リポジトリ",
+                "value": f"{len(active_repositories)} / {active_repository_limit()}",
+                "meta": "監視対象が未選択です" if not active_repositories else f"監視中 {len(active_repositories)} / {active_repository_limit()}",
+                "tone": "is-stale" if not active_repositories else "is-available",
+                "action_label": "リポジトリを選ぶ" if not active_repositories else "監視対象リポジトリを変更",
+                "action_href": repositories_href,
+            },
+            {
+                "label": "監視中ブランチ",
+                "value": str(len(branches)),
+                "meta": "まだ観測されていません" if not branches else "監視中ブランチ",
+                "tone": "is-stale" if not branches else "is-available",
+                "action_label": "ブランチを手動登録",
+                "action_href": branches_href,
+            },
+            {
+                "label": "同期状態",
+                "value": sync_health["status"],
+                "meta": sync_health["subtitle"],
+                "tone": sync_health["tone"],
+                "details": sync_health["details"],
+                "action_label": "GitHub App を連携" if not installations else "repository を再同期",
+                "action_href": github_settings_href if not installations else repositories_href,
+            },
+        ]
+    )
     return {
-        "summary_cards": [
-            {"label": "Installations", "value": str(len(installations)), "meta": "GitHub App 連携数"},
-            {"label": "Repository Candidates", "value": str(len(repositories)), "meta": "利用可能な候補一覧"},
-            {"label": "Active Repositories", "value": str(len(active_repositories)), "meta": f"現在の監視対象 / 上限 {active_repository_limit()}"},
-            {"label": "Branches", "value": str(len(branches)), "meta": "同期済み branch"},
-            {"label": "Open conflicts", "value": str(len(conflicts)), "meta": "競合候補"},
+        "is_unconnected": is_unconnected,
+        "state_banner": state_banner,
+        "summary_cards": summary_cards,
+        "directory_activity": directory_activity,
+        "quick_actions": {
+            "title": "次に取る行動",
+            "primary": primary_action,
+            "secondary": secondary_actions,
+        },
+        "repositories": [
+            {
+                "id": repository.id,
+                "display_name": repository.display_name,
+                "full_name": repository.full_name,
+                "status_label": _repository_row_state(repository)[0],
+                "status_class": _repository_row_state(repository)[1],
+                "helper_text": _repository_row_state(repository)[2],
+                "can_activate": repository.is_available
+                and repository.selection_status in {REPOSITORY_SELECTION_INACTIVE, "unselected"},
+                "is_active_selection": repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
+                "detail_href": repositories_href,
+            }
+            for repository in repositories
         ],
-        "recent_repositories": repositories[:5],
+        "repository_summary": {
+            "count": candidate_count,
+            "is_empty": candidate_count == 0,
+            "title": "候補 repository がありません" if candidate_count == 0 else "候補 repository から監視対象を選べます",
+            "body": "GitHub App の連携後に再同期してください"
+            if candidate_count == 0
+            else f"候補 repository {candidate_count} 件",
+        },
         "active_repositories": active_repositories,
         "member_count": len(members),
-        "installations": installations,
+        "installations": [
+            {
+                "github_account_login": installation.github_account_login or f"installation-{installation.installation_id}",
+                "status_label": _installation_status_badge(installation)[0],
+                "status_class": _installation_status_badge(installation)[1],
+                "helper_text": _installation_status_badge(installation)[2],
+                "repository_count": len(
+                    [repository for repository in repositories if repository.github_installation_id == installation.id]
+                ),
+                "last_webhook_event_at": _format_timestamp(installation.last_webhook_event_at),
+                "settings_href": github_settings_href,
+            }
+            for installation in installations
+        ],
+        "installation_summary": {
+            "is_empty": len(installations) == 0,
+            "title": "GitHub App が未接続です" if not installations else "GitHub App 接続",
+            "body": "連携すると repository を取り込めます" if not installations else "接続状態と webhook 受信状況を確認できます",
+            "action": _dashboard_action("GitHub App を連携", github_settings_href),
+        },
+        "getting_started_steps": [
+            {
+                "title": "GitHub App を連携",
+                "description": "repository を取り込むための最初の設定です",
+                "status_label": "完了" if installations else "次",
+                "status_class": "is-available" if installations else "is-stale",
+                "action": None if installations else _dashboard_action("GitHub App を連携", github_settings_href),
+            },
+            {
+                "title": "監視対象 repository を選択",
+                "description": "候補から 1 件選ぶと branch の監視を開始できます",
+                "status_label": "完了" if active_repositories else "次" if installations else "未着手",
+                "status_class": "is-available" if active_repositories else "is-stale" if installations else "",
+                "action": None if active_repositories or not installations else _dashboard_action("repository を選ぶ", repositories_href),
+            },
+            {
+                "title": "branch を観測または手動登録",
+                "description": "push を待つか、既存 branch を手動登録してください",
+                "status_label": "完了" if branches else "次" if active_repositories else "未着手",
+                "status_class": "is-available" if branches else "is-stale" if active_repositories else "",
+                "action": None if branches or not active_repositories else _dashboard_action("ブランチを手動登録", branches_href),
+            },
+        ],
+        "recent_events": [
+            {
+                "title": _recent_event_label(event)[0],
+                "body": _recent_event_label(event)[1],
+                "time": _format_timestamp(event.created_at),
+            }
+            for event in recent_audits
+        ],
+        "latest_sync_at": _format_timestamp(latest_sync_at),
+        "latest_webhook_at": _format_timestamp(latest_webhook_at),
+        "candidate_count": candidate_count,
     }
 
 

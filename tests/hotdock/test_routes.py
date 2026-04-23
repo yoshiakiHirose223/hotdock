@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -138,7 +139,336 @@ def test_register_creates_workspace_and_redirects_to_workspace_dashboard(client)
     follow = client.get("/dashboard", follow_redirects=True)
     assert follow.status_code == 200
     assert "Example Team" in follow.text
-    assert "Workspace Dashboard" in follow.text
+    assert "ダッシュボード" in follow.text
+
+
+def test_workspace_dashboard_prioritizes_actions_and_hides_internal_copy(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Dashboard User",
+            "email": "dashboard@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Dashboard Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="dashboard-team").one()
+    installation = GithubInstallation(
+        installation_id=9101,
+        github_account_id=88101,
+        github_account_login="dashboard-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    active_repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=99101,
+        full_name="dashboard-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    candidate_repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=99102,
+        full_name="dashboard-org/repo-b",
+        display_name="repo-b",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=False,
+        selection_status="unselected",
+        detail_sync_status="not_started",
+        sync_status="pending",
+    )
+    db.add(active_repository)
+    db.add(candidate_repository)
+    db.flush()
+    primary_branch = Branch(
+        workspace_id=workspace.id,
+        repository_id=active_repository.id,
+        name="feature/conflict-ui",
+        branch_status="tracked",
+        is_active=True,
+        is_deleted=False,
+        observed_via="webhook",
+    )
+    manual_branch = Branch(
+        workspace_id=workspace.id,
+        repository_id=active_repository.id,
+        name="fix/theme-token",
+        branch_status="tracked",
+        is_active=True,
+        is_deleted=False,
+        observed_via="manual",
+        touch_seed_source="manual_diff",
+    )
+    db.add(primary_branch)
+    db.add(manual_branch)
+    db.flush()
+    now = datetime.utcnow()
+    db.add_all(
+        [
+            BranchFile(
+                workspace_id=workspace.id,
+                repository_id=active_repository.id,
+                branch_id=primary_branch.id,
+                path="app/models/user.rb",
+                normalized_path="app/models/user.rb",
+                change_type="modified",
+                last_change_type="modified",
+                source_kind="compare",
+                last_seen_at=now - timedelta(days=1),
+                observed_at=now - timedelta(days=1),
+                is_active=True,
+                is_conflict=True,
+            ),
+            BranchFile(
+                workspace_id=workspace.id,
+                repository_id=active_repository.id,
+                branch_id=manual_branch.id,
+                path="app/models/user.rb",
+                normalized_path="app/models/user.rb",
+                change_type="modified",
+                last_change_type="modified",
+                source_kind="manual_input",
+                last_seen_at=now - timedelta(days=2),
+                observed_at=now - timedelta(days=2),
+                is_active=True,
+                is_conflict=True,
+            ),
+            BranchFile(
+                workspace_id=workspace.id,
+                repository_id=active_repository.id,
+                branch_id=manual_branch.id,
+                path="app/ui/Button.tsx",
+                normalized_path="app/ui/Button.tsx",
+                change_type="modified",
+                last_change_type="modified",
+                source_kind="manual_input",
+                last_seen_at=now - timedelta(days=10),
+                observed_at=now - timedelta(days=10),
+                is_active=True,
+            ),
+        ]
+    )
+    db.add(
+        FileCollision(
+            repository_id=active_repository.id,
+            normalized_path="app/models/user.rb",
+            active_branch_count=2,
+            collision_status="open",
+        )
+    )
+    db.commit()
+    db.close()
+
+    response = client.get("/workspaces/dashboard-team/dashboard")
+
+    assert response.status_code == 200
+    assert "1件の競合候補があります" in response.text
+    assert "競合" in response.text
+    assert "競合一覧を見る" in response.text
+    assert "ディレクトリ更新状況" in response.text
+    assert "Webhook または手動登録で観測されたファイルの変更状況を表示します" in response.text
+    assert "競合中のパス" in response.text
+    assert "7日以内更新" in response.text
+    assert "28日以内更新" in response.text
+    assert "長期間更新なし" in response.text
+    assert "手動追跡" in response.text
+    assert "観測済みツリー" in response.text
+    assert "app/models/user.rb" in response.text
+    assert "app/ui/Button.tsx" in response.text
+    assert "fix/theme-token" in response.text
+    assert "概要" in response.text
+    assert "監視" in response.text
+    assert "ワークスペース" in response.text
+    assert "リポジトリを見る" not in response.text
+    assert "ブランチを見る" not in response.text
+    assert "GitHub App 接続" not in response.text
+    assert "利用開始ガイド" not in response.text
+    assert "最近のイベント" not in response.text
+    assert "次に取る行動" not in response.text
+    assert "Current Account" not in response.text
+    assert "Sync status" not in response.text
+    assert "ログイン中のアカウント" not in response.text
+    assert "owner 権限の workspace" not in response.text
+    assert "installation_repositories webhook と手動同期で候補一覧を更新します。" not in response.text
+    assert "監視対象に選んだ repository へ push webhook が入った branch だけを作成・更新します。" not in response.text
+    assert "SSR" not in response.text
+    assert "FastAPI" not in response.text
+    assert "ID: 9101" not in response.text
+    assert "unselected / not_started" not in response.text
+
+
+def test_workspace_dashboard_zero_state_surfaces_next_action(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Zero State User",
+            "email": "zero-state@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Zero State Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    response = client.get("/workspaces/zero-state-team/dashboard")
+
+    assert response.status_code == 200
+    assert "GitHub App が未接続です" in response.text
+    assert "GitHub App を連携" in response.text
+    assert "Backlogから連携" in response.text
+    assert "Git導入" in response.text
+    assert "ディレクトリ更新状況" in response.text
+    assert "まだ観測済みファイルはありません" in response.text
+    assert "Push/Webhook または手動登録で検知されたファイルが表示されます" in response.text
+    assert "現在の状態" not in response.text
+    assert "次に取る行動" not in response.text
+    assert "GitHub App 接続" not in response.text
+    assert "利用開始ガイド" not in response.text
+    assert "監視対象を選ぶ" not in response.text
+    assert "同期状態" not in response.text
+    assert "リポジトリを見る" not in response.text
+    assert "ブランチを見る" not in response.text
+
+
+def test_workspace_repositories_unconnected_focuses_on_installation_cta(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Repository User",
+            "email": "repository-user@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Repository Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    response = client.get("/workspaces/repository-team/repositories")
+
+    assert response.status_code == 200
+    assert "GitHub App が未接続です" in response.text
+    assert "GitHub App を連携" in response.text
+    assert "現在の状態" not in response.text
+    assert "接続状態" not in response.text
+    assert "候補数" not in response.text
+    assert "監視対象" not in response.text
+    assert "開始までの流れ" not in response.text
+    assert "連携する" not in response.text
+    assert "Git未連携です" in response.text
+    assert "詳細を見る" not in response.text
+    assert "No claimed installations" not in response.text
+    assert "連携された repository はページ表示時に候補一覧として同期します。" not in response.text
+    assert "repository を選択したあと、その repository への push webhook を受けた branch だけが" not in response.text
+    assert "Visibility" not in response.text
+    assert "Webhook Sync" not in response.text
+
+
+def test_workspace_repositories_connected_without_candidates_shows_compact_empty_state(client, monkeypatch):
+    async def fake_manual_sync_workspace_installation_repositories(*args, **kwargs):
+        return {"repositories_synced": 0, "skipped_installations": 0}
+
+    monkeypatch.setattr(
+        "app.hotdock.router_workspace.manual_sync_workspace_installation_repositories",
+        fake_manual_sync_workspace_installation_repositories,
+    )
+
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Connected Empty User",
+            "email": "connected-empty@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Connected Empty Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="connected-empty-team").one()
+    db.add(
+        GithubInstallation(
+            installation_id=9201,
+            github_account_id=88201,
+            github_account_login="connected-empty-org",
+            github_account_type="Organization",
+            target_type="Organization",
+            installation_status="active",
+            claimed_workspace_id=workspace.id,
+        )
+    )
+    db.commit()
+    db.close()
+
+    response = client.get("/workspaces/connected-empty-team/repositories")
+
+    assert response.status_code == 200
+    assert "候補 repository はまだ同期されていません" in response.text
+    assert "repository を再同期" in response.text
+    assert "GitHub App が未接続です" not in response.text
+    assert "No claimed installations" not in response.text
+
+
+def test_workspace_branches_hides_manual_register_when_github_not_connected(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Branch Viewer",
+            "email": "branch-viewer@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Branch Viewer Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    response = client.get("/workspaces/branch-viewer-team/branches")
+
+    assert response.status_code == 200
+    assert "観測中のブランチ" in response.text
+    assert "Git手動登録" not in response.text
+    assert "branch 一覧と touched files の主導線は" not in response.text
 
 
 def test_legacy_app_routes_redirect_to_workspace_after_login(client):

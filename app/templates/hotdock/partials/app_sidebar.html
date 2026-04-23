@@ -1,18 +1,26 @@
 <aside class="app-sidebar" data-app-sidebar>
     <div class="app-sidebar-head">
         <a class="brand-mark" href="/">Hotdock</a>
-        <span class="sidebar-badge">{{ app_status }}</span>
     </div>
     <div class="app-sidebar-workspace">
         <p class="eyebrow">Workspace</p>
         <strong>{{ app_workspace }}</strong>
-        <span>GitHub App と SaaS の着地点</span>
+        <span>監視対象と競合をまとめて管理</span>
     </div>
     <nav class="app-sidebar-nav" aria-label="App">
-        {% for item in app_navigation %}
-        <a class="{% if active_nav == item.key %}is-active{% endif %}" href="{{ item.href }}">{{ item.label }}</a>
-        {% if item.key == "projects" %}
+        {% for section in app_navigation %}
+        {% if section.get('items') %}
+        <div class="sidebar-section">
+            <p class="sidebar-section-title">{{ section["title"] }}</p>
+            {% for item in section["items"] %}
+            <a class="{% if active_nav == item.key %}is-active{% endif %}" href="{{ item.href }}">{{ item.label }}</a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <a class="{% if active_nav == section.key %}is-active{% endif %}" href="{{ section.href }}">{{ section.label }}</a>
+        {% if section.key == "projects" %}
         {% include "hotdock/partials/sidebar_bookmarks.html" %}
+        {% endif %}
         {% endif %}
         {% endfor %}
     </nav>

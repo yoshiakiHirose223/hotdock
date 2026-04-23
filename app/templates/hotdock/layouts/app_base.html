@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ page_title }}</title>
     <meta name="description" content="{{ page_description }}">
-    <link rel="stylesheet" href="/static/hotdock/css/tokens.css">
-    <link rel="stylesheet" href="/static/hotdock/css/base.css">
-    <link rel="stylesheet" href="/static/hotdock/css/layout.css">
-    <link rel="stylesheet" href="/static/hotdock/css/components.css">
-    <link rel="stylesheet" href="/static/hotdock/css/app.css">
+    <link rel="stylesheet" href="{{ asset_url('/static/hotdock/css/tokens.css') }}">
+    <link rel="stylesheet" href="{{ asset_url('/static/hotdock/css/base.css') }}">
+    <link rel="stylesheet" href="{{ asset_url('/static/hotdock/css/layout.css') }}">
+    <link rel="stylesheet" href="{{ asset_url('/static/hotdock/css/components.css') }}">
+    <link rel="stylesheet" href="{{ asset_url('/static/hotdock/css/app.css') }}">
 </head>
 <body class="{{ body_class }}">
     <div class="app-shell">
@@ -24,6 +24,6 @@
             </main>
         </div>
     </div>
-    <script src="/static/hotdock/js/app.js" defer></script>
+    <script src="{{ asset_url('/static/hotdock/js/app.js') }}" defer></script>
 </body>
 </html>

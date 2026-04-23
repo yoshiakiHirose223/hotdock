@@ -5,11 +5,8 @@
     <div class="panel-head">
         <div>
             <p class="panel-title">Branches</p>
-            <h2>{{ workspace.name }}</h2>
+            <h2>観測中のブランチ</h2>
         </div>
-    </div>
-    <div class="inline-alert">
-        branch 一覧と touched files の主導線は、現在監視中の repository に対する push webhook です。既存 branch の救済や初回 seed 未確定時だけ、このページから手動登録できます。
     </div>
     {% if active_repository %}
     <div class="summary-strip">
@@ -20,6 +17,7 @@
     {% endif %}
 </section>
 
+{% if active_repository %}
 <section class="panel">
     <div class="panel-head">
         <div>
@@ -27,7 +25,7 @@
             <h2>既存ブランチを手動登録</h2>
         </div>
     </div>
-    {% if active_repository and active_repository.is_active and active_repository.is_available and active_repository.selection_status == "active" and current_membership and current_membership.role in ["owner", "admin"] %}
+    {% if current_membership and current_membership.role in ["owner", "admin"] %}
     <div class="inline-alert">
         連携後に push webhook がまだ来ていない既存ブランチは自動では一覧に出ません。必要な既存ブランチだけを手動で登録でき、登録時に branch の存在確認を行い、touched files をその時点の差分 snapshot として同時に反映します。
     </div>
@@ -78,12 +76,11 @@
         <p class="muted-copy">登録成功、反映ファイル数、再活性化の有無、エラー内容がここに表示されます。</p>
         {% endif %}
     </div>
-    {% elif active_repository and active_repository.is_active and active_repository.is_available and active_repository.selection_status == "active" %}
-    <div class="empty-inline">この操作は owner / admin のみ実行できます。</div>
     {% else %}
-    <div class="empty-inline">この repository は現在監視対象ではないため、手動登録できません。</div>
+    <div class="empty-inline">この操作は owner / admin のみ実行できます。</div>
     {% endif %}
 </section>
+{% endif %}
 
 <section class="panel">
     {% if branches %}

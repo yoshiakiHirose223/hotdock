@@ -9,11 +9,11 @@
     <meta property="og:description" content="{{ meta_og_description }}">
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="{{ site_name }}">
-    <link rel="stylesheet" href="/static/hotdock/css/tokens.css">
-    <link rel="stylesheet" href="/static/hotdock/css/base.css">
-    <link rel="stylesheet" href="/static/hotdock/css/layout.css">
-    <link rel="stylesheet" href="/static/hotdock/css/components.css">
-    <link rel="stylesheet" href="/static/hotdock/css/pages.css">
+    <link rel="stylesheet" href="{{ asset_url('/static/hotdock/css/tokens.css') }}">
+    <link rel="stylesheet" href="{{ asset_url('/static/hotdock/css/base.css') }}">
+    <link rel="stylesheet" href="{{ asset_url('/static/hotdock/css/layout.css') }}">
+    <link rel="stylesheet" href="{{ asset_url('/static/hotdock/css/components.css') }}">
+    <link rel="stylesheet" href="{{ asset_url('/static/hotdock/css/pages.css') }}">
 </head>
 <body class="{{ body_class }}">
     {% include "hotdock/partials/public_header.html" %}
@@ -26,6 +26,6 @@
         {% block content %}{% endblock %}
     </main>
     {% include "hotdock/partials/public_footer.html" %}
-    <script src="/static/hotdock/js/faq.js" defer></script>
+    <script src="{{ asset_url('/static/hotdock/js/faq.js') }}" defer></script>
 </body>
 </html>

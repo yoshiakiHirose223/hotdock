@@ -8,21 +8,23 @@
             {% endfor %}
         </nav>
         {% endif %}
-        <h1>{{ page_heading }}</h1>
+        <div class="app-header-title-row">
+            <h1>{{ page_heading }}</h1>
+            {% if active_nav == "workspace-dashboard" %}
+            <span class="app-header-chip">プレビュー</span>
+            {% endif %}
+        </div>
+        {% if page_description and active_nav == "workspace-dashboard" %}
+        <p class="app-header-description">{{ page_description }}</p>
+        {% endif %}
     </div>
     <div class="app-header-meta">
         {% if current_user %}
-        <span class="app-header-chip">{{ current_user.display_name }}</span>
         <span class="app-header-chip app-header-chip-muted">{{ current_user.email }}</span>
         <form class="inline-form" method="post" action="/logout">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button class="button button-ghost button-small" type="submit">ログアウト</button>
         </form>
         {% endif %}
-        {% if current_membership %}
-        <span class="app-header-chip">{{ current_membership.role }}</span>
-        {% endif %}
-        <span class="app-header-chip">SSR</span>
-        <span class="app-header-chip">FastAPI</span>
     </div>
 </header>

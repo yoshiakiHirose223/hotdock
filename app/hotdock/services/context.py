@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import Request
@@ -11,6 +12,22 @@ from app.hotdock.data.navigation import (
     FOOTER_META,
     PUBLIC_NAVIGATION,
 )
+
+STATIC_ROOT = Path(__file__).resolve().parents[2] / "static"
+
+
+def _asset_url(path: str) -> str:
+    normalized = path if path.startswith("/") else f"/{path}"
+    static_prefix = "/static/"
+    if not normalized.startswith(static_prefix):
+        return normalized
+    relative_path = normalized.removeprefix(static_prefix)
+    asset_path = STATIC_ROOT / relative_path
+    try:
+        version = int(asset_path.stat().st_mtime)
+    except FileNotFoundError:
+        return normalized
+    return f"{normalized}?v={version}"
 
 
 def _base_context(
@@ -36,6 +53,7 @@ def _base_context(
         "breadcrumbs": breadcrumbs or [],
         "meta_og_title": meta_og_title or page_title,
         "meta_og_description": meta_og_description or page_description,
+        "asset_url": _asset_url,
     }
 
 
