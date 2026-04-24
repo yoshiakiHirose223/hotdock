@@ -1,226 +1,387 @@
 {% extends "hotdock/layouts/app_base.html" %}
 
 {% block content %}
-<section class="panel">
-    <div class="panel-head">
-        <div>
-            <p class="panel-title">Branches</p>
-            <h2>観測中のブランチ</h2>
-        </div>
-    </div>
-    {% if active_repository %}
-    <div class="summary-strip">
-        <strong>現在監視中:</strong>
-        <span>{{ active_repository.display_name }}</span>
-        <span class="muted-copy">{{ active_repository.full_name }}</span>
-    </div>
-    {% endif %}
-</section>
+<style>
+    .workspace-branches {
+        display: grid;
+        gap: 1.25rem;
+    }
 
-{% if active_repository %}
-<section class="panel">
-    <div class="panel-head">
-        <div>
-            <p class="panel-title">Git手動登録</p>
-            <h2>既存ブランチを手動登録</h2>
-        </div>
-    </div>
-    {% if current_membership and current_membership.role in ["owner", "admin"] %}
-    <div class="inline-alert">
-        連携後に push webhook がまだ来ていない既存ブランチは自動では一覧に出ません。必要な既存ブランチだけを手動で登録でき、登録時に branch の存在確認を行い、touched files をその時点の差分 snapshot として同時に反映します。
-    </div>
-    <div class="form-grid two-col">
-        <div class="panel panel-muted">
-            <p class="panel-title">コマンド例</p>
-            <p class="muted-copy">このコマンドを実行した結果をそのまま貼り付けてください。`feature/login-form` は登録したいブランチ名に置き換えてください。比較元は `origin/master` です。出力結果をそのまま下の入力欄に貼り付けてください。</p>
-            <pre class="code-block">{{ manual_branch_command_example }}</pre>
-        </div>
-        <div class="panel panel-muted">
-            <p class="panel-title">受け入れ可能な出力例</p>
-            <p class="muted-copy">1行目は必ず `BRANCH:&lt;branch_name&gt;` 形式、2行目以降は `git diff --name-status` の出力をそのまま貼り付けてください。A / M / D / R のみ受け付けます。</p>
-            <pre class="code-block">{{ manual_branch_output_example }}</pre>
-        </div>
-    </div>
-    <form class="form-stack manual-branch-form" method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ active_repository.id }}/branches/manual-register">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="next_path" value="/workspaces/{{ workspace.slug }}/branches">
-        <label for="manual_branch_input">貼り付け入力</label>
-        <textarea
-            id="manual_branch_input"
-            name="manual_branch_input"
-            rows="12"
-            placeholder="{{ manual_branch_output_example }}"
-            required
-        ></textarea>
-        <div class="button-row">
-            <button class="button button-primary" type="submit">登録する</button>
-        </div>
-        <p class="muted-copy">成功すると branch が一覧に追加され、touched files と collision 判定対象が更新されます。</p>
-    </form>
-    <div class="panel panel-muted">
-        <p class="panel-title">結果</p>
-        {% if manual_branch_result and manual_branch_result.status == "success" %}
-        <p>登録成功: {{ manual_branch_result.branch_name }}</p>
-        <p class="muted-copy">反映ファイル数: {{ manual_branch_result.applied_file_count }} / parsed {{ manual_branch_result.parsed_file_count }}</p>
-        <p class="muted-copy">再活性化: {{ "はい" if manual_branch_result.reactivated else "いいえ" }}</p>
-        <p class="muted-copy">Observed Via: {{ manual_branch_result.observed_via }} / touch seed: {{ manual_branch_result.touch_seed_source }}</p>
-        {% if manual_branch_result.rescued_touch_seed %}
-        <p class="muted-copy">手動登録により touched files を確定しました。</p>
-        {% else %}
-        <p class="muted-copy">このブランチは衝突判定対象に入りました。</p>
-        {% endif %}
-        {% elif manual_branch_result and manual_branch_result.status == "error" %}
-        <p>登録失敗</p>
-        <p class="muted-copy">{{ manual_branch_result.message }}</p>
-        {% else %}
-        <p class="muted-copy">登録成功、反映ファイル数、再活性化の有無、エラー内容がここに表示されます。</p>
-        {% endif %}
-    </div>
-    {% else %}
-    <div class="empty-inline">この操作は owner / admin のみ実行できます。</div>
-    {% endif %}
-</section>
-{% endif %}
+    .branch-list-meta {
+        display: grid;
+        gap: 0.2rem;
+    }
 
-<section class="panel">
-    {% if branches %}
-    <div class="table-wrap">
-        <table class="app-table branch-table">
-            <thead>
-                <tr>
-                    <th>Repository</th>
-                    <th>Branch</th>
-                    <th>Last Push</th>
-                    <th>Head</th>
-                    <th>Files</th>
-                    <th>Conflicts</th>
-                    <th>Status</th>
-                    <th class="toggle-col"> </th>
-                </tr>
-            </thead>
-            {% for branch in branches %}
-            <tbody class="branch-group {% if branch.conflict_files_count > 0 %}has-conflict{% endif %}">
-                <tr
-                    class="branch-row"
-                    data-accordion-row
-                    data-accordion-target="{{ branch.details_id }}"
-                    aria-expanded="false"
+    .branch-list-count {
+        min-width: 5.5rem;
+        text-align: center;
+    }
+
+    .branch-manual-register-panel {
+        padding: 0;
+        overflow: hidden;
+    }
+
+    .branch-manual-register-disclosure {
+        display: grid;
+        gap: 0;
+    }
+
+    .branch-manual-register-disclosure > summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1.1rem 1.25rem;
+        cursor: pointer;
+        list-style: none;
+        font-weight: 700;
+        color: #0f172a;
+    }
+
+    .branch-manual-register-disclosure > summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .branch-manual-register-disclosure > summary::after {
+        content: "▾";
+        color: #64748b;
+        transition: transform 160ms ease;
+    }
+
+    .branch-manual-register-disclosure[open] > summary::after {
+        transform: rotate(180deg);
+    }
+
+    .branch-manual-register-body {
+        display: grid;
+        gap: 1rem;
+        padding: 0 1.25rem 1.25rem;
+        border-top: 1px solid rgba(214, 224, 234, 0.75);
+    }
+
+    .branch-filter-topline {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .branch-filter-result {
+        color: var(--text-soft);
+        font-size: 0.92rem;
+    }
+
+    .branch-filter-sort {
+        min-width: 220px;
+    }
+
+    .branch-search-empty {
+        margin-top: 1rem;
+    }
+
+    @media (max-width: 980px) {
+        .branch-filter-topline {
+            align-items: stretch;
+        }
+
+        .branch-list-count {
+            text-align: left;
+        }
+    }
+</style>
+
+<div class="workspace-branches">
+    <section class="panel branch-panel" data-branch-browser>
+        <div class="panel-head">
+            <div class="branch-list-meta">
+                <p class="panel-title">ブランチ</p>
+                <h2>ブランチ一覧</h2>
+                {% if active_repository %}
+                <span class="muted-copy">監視中リポジトリ: {{ active_repository.display_name }}</span>
+                {% endif %}
+            </div>
+            {% if branches %}
+            <span class="status-badge branch-list-count" data-branch-result-count>{{ branches|length }} 件</span>
+            {% endif %}
+        </div>
+
+        {% if branches %}
+        <div class="branch-filter-topline">
+            <form class="branch-filter-bar" onsubmit="return false;">
+                <div class="form-row branch-filter-search">
+                    <label for="branch-search">検索</label>
+                    <input id="branch-search" type="search" placeholder="ブランチ名で検索" data-branch-search>
+                </div>
+                <div class="form-row branch-filter-sort">
+                    <label for="branch-sort">並び順</label>
+                    <select id="branch-sort" data-branch-sort>
+                        <option value="updated_desc">更新日順（新しい順）</option>
+                        <option value="name">ブランチ名順</option>
+                        <option value="conflicts_desc">競合数が多い順</option>
+                    </select>
+                </div>
+                <div class="branch-filter-actions">
+                    <button class="button button-ghost" type="button" data-branch-clear>クリア</button>
+                </div>
+            </form>
+            <div class="branch-filter-result" data-branch-filter-result>更新が新しい順で表示しています</div>
+        </div>
+
+        <div class="table-wrap">
+            <table class="app-table branch-table" data-branch-table>
+                <thead>
+                    <tr>
+                        <th>リポジトリ</th>
+                        <th>ブランチ</th>
+                        <th>最終更新</th>
+                        <th>ファイル</th>
+                        <th>競合</th>
+                        <th>状態</th>
+                        <th class="toggle-col"> </th>
+                    </tr>
+                </thead>
+                {% for branch in branches %}
+                <tbody
+                    class="branch-group {% if branch.conflict_files_count > 0 %}has-conflict{% endif %}"
+                    data-branch-group
+                    data-branch-name="{{ branch.name|lower }}"
+                    data-branch-search-text="{{ branch.search_text }}"
+                    data-last-push-sort="{{ branch.last_push_sort }}"
+                    data-conflicts="{{ branch.conflict_files_count }}"
                 >
-                    <td>
-                        <div>{{ branch.repository_name }}</div>
-                        {% if branch.repository_selection_status == "active" %}
-                        <span class="mini-badge">監視中 repository</span>
-                        {% elif branch.repository_selection_status == "inactive" %}
-                        <span class="mini-badge">監視停止中</span>
-                        {% elif branch.repository_selection_status == "inaccessible" or not branch.repository_is_available %}
-                        <span class="mini-badge is-conflict">アクセス不可</span>
-                        {% else %}
-                        <span class="mini-badge">候補のみ</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        <strong>{{ branch.name }}</strong>
-                        {% if branch.observed_via == "manual" %}
-                        <div><span class="mini-badge">manual</span></div>
-                        {% endif %}
-                    </td>
-                    <td>{{ branch.last_push_at or '-' }}</td>
-                    <td><code>{{ (branch.current_head_sha or '-')[:12] if branch.current_head_sha else '-' }}</code></td>
-                    <td>{{ branch.touched_files_count }}</td>
-                    <td>{{ branch.conflict_files_count }}</td>
-                    <td>
-                        {% if branch.is_deleted %}
-                        <span class="badge badge-muted">deleted</span>
-                        {% elif branch.conflict_files_count %}
-                        <span class="badge badge-danger">collision</span>
-                        {% elif branch.touch_seed_status == "api_error" %}
-                        <span class="badge badge-danger">APIエラー</span>
-                        {% elif branch.touch_seed_status == "partial" and not branch.has_authoritative_compare_history %}
-                        <span class="badge badge-warning">初回seed不完全</span>
-                        {% elif branch.touch_seed_status == "seeded_from_payload" and not branch.has_authoritative_compare_history %}
-                        <span class="badge badge-info">初回seed済み</span>
-                        {% else %}
-                        <span class="badge badge-success">{{ branch.branch_status }}</span>
-                        {% endif %}
-                    </td>
-                    <td class="toggle-col">
-                        <button
-                            class="branch-toggle"
-                            type="button"
-                            data-accordion-toggle
-                            data-accordion-target="{{ branch.details_id }}"
-                            aria-expanded="false"
-                            aria-controls="{{ branch.details_id }}"
-                        >
-                            <span class="branch-toggle-icon">▾</span>
-                        </button>
-                    </td>
-                </tr>
-                <tr id="{{ branch.details_id }}" class="branch-details-row" hidden>
-                    <td colspan="8">
-                        <div class="branch-detail-head">
-                            <div>
-                                <strong>{{ branch.name }}</strong>
-                                <span class="muted">{{ branch.repository_name }}</span>
-                                {% if branch.touch_seed_status == "seeded_from_payload" and not branch.has_authoritative_compare_history %}
-                                <div class="muted-copy">初回 push の commits payload から touched files を取り込みました。次回以降の compare が正本です。</div>
-                                {% elif branch.touch_seed_status == "partial" and not branch.has_authoritative_compare_history %}
-                                <div class="muted-copy">初回 push の touched files は一部だけ取り込めました。次回以降の compare が正本です。</div>
-                                {% elif branch.touch_seed_status == "api_error" %}
-                                <div class="muted-copy">APIエラー: 初回 push の touched files 取り込みが不完全な可能性があります。</div>
-                                {% endif %}
-                            </div>
-                            <a class="text-link" href="/workspaces/{{ workspace.slug }}/branches/{{ branch.id }}">詳細ページを見る</a>
-                        </div>
-                        {% if branch.touch_seed_error_message %}
-                        <div class="inline-alert is-warning">{{ branch.touch_seed_error_message }}</div>
-                        {% endif %}
-                        {% if branch.files %}
-                        <div class="branch-files-grid">
-                            {% for file in branch.files %}
-                            <article class="branch-file-item {% if file.is_conflict %}is-conflict{% endif %}">
-                                <div class="branch-file-main">
-                                    {% if file.is_conflict %}
-                                    <strong><a class="text-link" href="/workspaces/{{ workspace.slug }}/conflicts?path={{ file.normalized_path|urlencode }}&repository_id={{ branch.repository_id|urlencode }}">{{ file.path }}</a></strong>
-                                    {% else %}
-                                    <strong>{{ file.path }}</strong>
-                                    {% endif %}
-                                <div class="branch-file-meta">
-                                        <span class="mini-badge {% if (file.first_seen_change_type or file.change_type) == 'added' %}is-added{% elif (file.last_change_type or file.change_type) == 'removed' %}is-removed{% elif file.is_conflict %}is-conflict{% endif %}">
-                                            first {{ file.first_seen_change_type or file.change_type or '-' }}
-                                        </span>
-                                        <span class="mini-badge {% if (file.last_change_type or file.change_type) == 'added' %}is-added{% elif (file.last_change_type or file.change_type) == 'removed' %}is-removed{% elif file.is_conflict %}is-conflict{% endif %}">
-                                            last {{ file.last_change_type or file.change_type or '-' }}
-                                        </span>
-                                        {% if file.previous_path %}
-                                        <span class="mini-badge">from {{ file.previous_path }}</span>
-                                        {% endif %}
-                                        {% if file.is_conflict %}
-                                        <span class="mini-badge is-conflict">Collision</span>
-                                        {% endif %}
-                                        {% if not file.is_active %}
-                                        <span class="mini-badge">Historical</span>
-                                        {% endif %}
-                                    </div>
+                    <tr
+                        class="branch-row"
+                        data-accordion-row
+                        data-accordion-target="{{ branch.details_id }}"
+                        aria-expanded="false"
+                    >
+                        <td>
+                            <div>{{ branch.repository_name }}</div>
+                        </td>
+                        <td>
+                            <strong>{{ branch.name }}</strong>
+                            {% if branch.observed_via_label %}
+                            <div><span class="mini-badge">{{ branch.observed_via_label }}</span></div>
+                            {% endif %}
+                        </td>
+                        <td>{{ branch.last_push_display }}</td>
+                        <td>{{ branch.touched_files_count }}</td>
+                        <td>{{ branch.conflict_files_count }}</td>
+                        <td>
+                            <span class="{{ branch.status_badge_class }}">{{ branch.status_badge_label }}</span>
+                        </td>
+                        <td class="toggle-col">
+                            <button
+                                class="branch-toggle"
+                                type="button"
+                                data-accordion-toggle
+                                data-accordion-target="{{ branch.details_id }}"
+                                aria-expanded="false"
+                                aria-controls="{{ branch.details_id }}"
+                            >
+                                <span class="branch-toggle-icon">▾</span>
+                            </button>
+                        </td>
+                    </tr>
+                    <tr id="{{ branch.details_id }}" class="branch-details-row" hidden>
+                        <td colspan="7">
+                            <div class="branch-detail-head">
+                                <div>
+                                    <strong>{{ branch.name }}</strong>
                                 </div>
-                                <span class="branch-file-time">{{ file.last_seen_at or file.observed_at }}</span>
-                            </article>
-                            {% endfor %}
-                        </div>
-                        {% else %}
-                        <div class="empty-inline">この branch の touched files はまだありません。</div>
-                        {% endif %}
-                    </td>
-                </tr>
-            </tbody>
-            {% endfor %}
-        </table>
-    </div>
-    {% else %}
-    <div class="empty-state">
-        <h3>branch はまだありません</h3>
-        <p>監視対象 repository を選んだあと、その repository への push webhook が届くと branch が作成されます。touched files と collision も同じ push 処理で更新されます。</p>
-    </div>
+                                <a class="text-link" href="/workspaces/{{ workspace.slug }}/branches/{{ branch.id }}">詳細ページを見る</a>
+                            </div>
+                            {% if branch.touch_seed_error_message %}
+                            <div class="inline-alert is-warning">{{ branch.touch_seed_error_message }}</div>
+                            {% endif %}
+                            {% if branch.files %}
+                            <div class="branch-files-grid">
+                                {% for file in branch.files %}
+                                <article class="branch-file-item {% if file.is_conflict %}is-conflict{% endif %}">
+                                    <div class="branch-file-main">
+                                        {% if file.is_conflict %}
+                                        <strong><a class="text-link" href="/workspaces/{{ workspace.slug }}/conflicts?path={{ file.normalized_path|urlencode }}&repository_id={{ branch.repository_id|urlencode }}">{{ file.path }}</a></strong>
+                                        {% else %}
+                                        <strong>{{ file.path }}</strong>
+                                        {% endif %}
+                                        <div class="branch-file-meta">
+                                            {% if file.previous_path %}
+                                            <span class="mini-badge">from {{ file.previous_path }}</span>
+                                            {% endif %}
+                                            {% if file.is_conflict %}
+                                            <span class="mini-badge is-conflict">競合</span>
+                                            {% endif %}
+                                            {% if not file.is_active %}
+                                            <span class="mini-badge">履歴</span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    <span class="branch-file-time">{{ file.last_seen_at or file.observed_at }}</span>
+                                </article>
+                                {% endfor %}
+                            </div>
+                            {% else %}
+                            <div class="empty-inline">このブランチの touched files はまだありません。</div>
+                            {% endif %}
+                        </td>
+                    </tr>
+                </tbody>
+                {% endfor %}
+            </table>
+        </div>
+        <div class="empty-inline branch-search-empty" data-branch-empty-search hidden>一致するブランチはありません。</div>
+
+        <script>
+            document.addEventListener("DOMContentLoaded", () => {
+                const root = document.querySelector("[data-branch-browser]");
+                if (!root) {
+                    return;
+                }
+
+                const searchInput = root.querySelector("[data-branch-search]");
+                const sortSelect = root.querySelector("[data-branch-sort]");
+                const clearButton = root.querySelector("[data-branch-clear]");
+                const table = root.querySelector("[data-branch-table]");
+                const groups = Array.from(root.querySelectorAll("[data-branch-group]"));
+                const count = root.querySelector("[data-branch-result-count]");
+                const summary = root.querySelector("[data-branch-filter-result]");
+                const empty = root.querySelector("[data-branch-empty-search]");
+
+                if (!searchInput || !sortSelect || !clearButton || !table || !summary || !empty) {
+                    return;
+                }
+
+                const sortLabels = {
+                    updated_desc: "更新が新しい順で表示しています",
+                    name: "ブランチ名順で表示しています",
+                    conflicts_desc: "競合数が多い順で表示しています",
+                };
+
+                const sortGroups = (items, sortKey) => {
+                    const sorted = [...items];
+                    if (sortKey === "name") {
+                        sorted.sort((a, b) => (a.dataset.branchName || "").localeCompare(b.dataset.branchName || "", "ja"));
+                        return sorted;
+                    }
+                    if (sortKey === "conflicts_desc") {
+                        sorted.sort((a, b) => {
+                            const conflictDiff = Number(b.dataset.conflicts || 0) - Number(a.dataset.conflicts || 0);
+                            if (conflictDiff !== 0) {
+                                return conflictDiff;
+                            }
+                            return Number(b.dataset.lastPushSort || 0) - Number(a.dataset.lastPushSort || 0);
+                        });
+                        return sorted;
+                    }
+                    sorted.sort((a, b) => Number(b.dataset.lastPushSort || 0) - Number(a.dataset.lastPushSort || 0));
+                    return sorted;
+                };
+
+                const applyFilters = () => {
+                    const query = searchInput.value.trim().toLowerCase();
+                    const visible = groups.filter((group) => {
+                        if (!query) {
+                            return true;
+                        }
+                        return (group.dataset.branchSearchText || "").includes(query);
+                    });
+                    const sorted = sortGroups(visible, sortSelect.value);
+                    groups.forEach((group) => {
+                        group.hidden = true;
+                    });
+                    sorted.forEach((group) => {
+                        group.hidden = false;
+                        table.appendChild(group);
+                    });
+                    empty.hidden = visible.length !== 0;
+                    if (count) {
+                        count.textContent = `${visible.length} 件`;
+                    }
+                    summary.textContent = sortLabels[sortSelect.value] || sortLabels.updated_desc;
+                };
+
+                searchInput.addEventListener("input", applyFilters);
+                sortSelect.addEventListener("change", applyFilters);
+                clearButton.addEventListener("click", () => {
+                    searchInput.value = "";
+                    sortSelect.value = "updated_desc";
+                    applyFilters();
+                });
+
+                applyFilters();
+            });
+        </script>
+        {% else %}
+        <div class="empty-state">
+            <h3>ブランチはまだありません</h3>
+            <p>監視対象 repository を選んだあと、その repository への push webhook が届くとブランチが作成されます。</p>
+        </div>
+        {% endif %}
+    </section>
+
+    {% if active_repository %}
+    <section class="panel branch-manual-register-panel">
+        <details class="branch-manual-register-disclosure" {% if manual_branch_result %}open{% endif %}>
+            <summary>Git手動登録を開く</summary>
+            <div class="branch-manual-register-body">
+                {% if current_membership and current_membership.role in ["owner", "admin"] %}
+                <div class="inline-alert">
+                    既存ブランチを補助的に手動登録できます。登録時に branch の存在確認を行い、touched files をその時点の差分 snapshot として反映します。
+                </div>
+                <div class="form-grid two-col">
+                    <div class="panel panel-muted">
+                        <p class="panel-title">コマンド例</p>
+                        <p class="muted-copy">このコマンドを実行した結果をそのまま貼り付けてください。`feature/login-form` は登録したいブランチ名に置き換えてください。比較元は `origin/master` です。</p>
+                        <pre class="code-block">{{ manual_branch_command_example }}</pre>
+                    </div>
+                    <div class="panel panel-muted">
+                        <p class="panel-title">受け入れ可能な出力例</p>
+                        <p class="muted-copy">1行目は必ず `BRANCH:&lt;branch_name&gt;` 形式、2行目以降は `git diff --name-status` の出力をそのまま貼り付けてください。A / M / D / R のみ受け付けます。</p>
+                        <pre class="code-block">{{ manual_branch_output_example }}</pre>
+                    </div>
+                </div>
+                <form class="form-stack manual-branch-form" method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ active_repository.id }}/branches/manual-register">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="next_path" value="/workspaces/{{ workspace.slug }}/branches">
+                    <label for="manual_branch_input">貼り付け入力</label>
+                    <textarea
+                        id="manual_branch_input"
+                        name="manual_branch_input"
+                        rows="12"
+                        placeholder="{{ manual_branch_output_example }}"
+                        required
+                    ></textarea>
+                    <div class="button-row">
+                        <button class="button button-primary" type="submit">登録する</button>
+                    </div>
+                    <p class="muted-copy">成功するとブランチが一覧に追加され、touched files と collision 判定対象が更新されます。</p>
+                </form>
+                <div class="panel panel-muted">
+                    <p class="panel-title">結果</p>
+                    {% if manual_branch_result and manual_branch_result.status == "success" %}
+                    <p>登録成功: {{ manual_branch_result.branch_name }}</p>
+                    <p class="muted-copy">反映ファイル数: {{ manual_branch_result.applied_file_count }} / parsed {{ manual_branch_result.parsed_file_count }}</p>
+                    <p class="muted-copy">再活性化: {{ "はい" if manual_branch_result.reactivated else "いいえ" }}</p>
+                    {% if manual_branch_result.rescued_touch_seed %}
+                    <p class="muted-copy">手動登録により touched files を確定しました。</p>
+                    {% else %}
+                    <p class="muted-copy">このブランチは衝突判定対象に入りました。</p>
+                    {% endif %}
+                    {% elif manual_branch_result and manual_branch_result.status == "error" %}
+                    <p>登録失敗</p>
+                    <p class="muted-copy">{{ manual_branch_result.message }}</p>
+                    {% else %}
+                    <p class="muted-copy">登録成功、反映ファイル数、再活性化の有無、エラー内容がここに表示されます。</p>
+                    {% endif %}
+                </div>
+                {% else %}
+                <div class="empty-inline">この操作は owner / admin のみ実行できます。</div>
+                {% endif %}
+            </div>
+        </details>
+    </section>
     {% endif %}
-</section>
+</div>
 {% endblock %}

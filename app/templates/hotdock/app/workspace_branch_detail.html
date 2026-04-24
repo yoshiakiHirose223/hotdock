@@ -4,19 +4,19 @@
 <section class="panel">
     <div class="panel-head">
         <div>
-            <p class="panel-title">Branch Detail</p>
+            <p class="panel-title">ブランチ詳細</p>
             <h2>{{ branch_detail.name }}</h2>
             <p>{{ branch_repository.display_name if branch_repository else "-" }}</p>
         </div>
     </div>
     <div class="stack-list">
-        <div><strong>Current Head:</strong> <code>{{ branch_detail.current_head_sha or '-' }}</code></div>
+        <div><strong>現在の Head:</strong> <code>{{ branch_detail.current_head_sha or '-' }}</code></div>
         <div><strong>Before:</strong> <code>{{ branch_detail.last_before_sha or '-' }}</code></div>
         <div><strong>After:</strong> <code>{{ branch_detail.last_after_sha or '-' }}</code></div>
-        <div><strong>Last Push:</strong> {{ branch_detail.last_push_at or '-' }}</div>
-        <div><strong>Observed Flags:</strong> created={{ branch_detail.was_created_observed }}, forced={{ branch_detail.was_force_pushed_observed }}, deleted={{ branch_detail.is_deleted }}</div>
-        <div><strong>Observed Via:</strong> {{ branch_detail.observed_via or '-' }}</div>
-        <div><strong>Compare History:</strong> {{ "authoritative" if branch_detail.has_authoritative_compare_history else "seed-only" }}</div>
+        <div><strong>最終 push:</strong> {{ branch_detail.last_push_at or '-' }}</div>
+        <div><strong>観測フラグ:</strong> created={{ branch_detail.was_created_observed }}, forced={{ branch_detail.was_force_pushed_observed }}, deleted={{ branch_detail.is_deleted }}</div>
+        <div><strong>観測経路:</strong> {{ branch_detail.observed_via or '-' }}</div>
+        <div><strong>比較履歴:</strong> {{ "compare 正本あり" if branch_detail.has_authoritative_compare_history else "seed のみ" }}</div>
         {% if branch_detail.touch_seed_status == "seeded_from_payload" and not branch_detail.has_authoritative_compare_history %}
         <div><strong>初回状態:</strong> 初回pushからファイルを取り込みました</div>
         {% elif branch_detail.touch_seed_status == "partial" %}
@@ -25,7 +25,7 @@
         <div><strong>初回状態:</strong> APIエラー（初回seed不完全）</div>
         {% endif %}
         {% if branch_detail.touch_seed_error_message %}
-        <div><strong>Warning:</strong> {{ branch_detail.touch_seed_error_message }}</div>
+        <div><strong>警告:</strong> {{ branch_detail.touch_seed_error_message }}</div>
         {% endif %}
     </div>
 </section>
@@ -33,8 +33,8 @@
 <section class="panel">
     <div class="panel-head">
         <div>
-            <p class="panel-title">Touched Files</p>
-            <h2>{{ branch_files|length }} files</h2>
+            <p class="panel-title">ファイル一覧</p>
+            <h2>{{ branch_files|length }} 件</h2>
         </div>
     </div>
     {% if branch_files %}
@@ -93,8 +93,8 @@
 <section class="panel">
     <div class="panel-head">
         <div>
-            <p class="panel-title">Open Collisions</p>
-            <h2>{{ branch_collisions|length }} paths</h2>
+            <p class="panel-title">競合</p>
+            <h2>{{ branch_collisions|length }} 件</h2>
         </div>
     </div>
     {% if branch_collisions %}

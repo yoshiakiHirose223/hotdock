@@ -101,6 +101,30 @@ def workspace_page_context(
     return context
 
 
+def _format_branch_timestamp(value) -> str:
+    if value is None:
+        return "-"
+    return value.strftime("%Y-%m-%d %H:%M")
+
+
+def _workspace_branch_status_badge(branch: Branch) -> tuple[str, str]:
+    if branch.is_deleted or branch.branch_status == "deleted":
+        return "削除済み", "badge badge-muted"
+    if branch.conflict_files_count > 0 or branch.branch_status == "has_conflict":
+        return "競合", "badge badge-danger"
+    if branch.touch_seed_status == "api_error" or branch.branch_status == "api_error":
+        return "APIエラー", "badge badge-danger"
+    if branch.branch_status == "compare_error":
+        return "比較エラー", "badge badge-warning"
+    if branch.touch_seed_status == "partial" and not branch.has_authoritative_compare_history:
+        return "一部取り込み", "badge badge-warning"
+    if branch.touch_seed_status == "seeded_from_payload" and not branch.has_authoritative_compare_history:
+        return "比較待ち", "badge badge-info"
+    if branch.branch_status in {"tracked", "normal"}:
+        return "監視中", "badge badge-success"
+    return branch.branch_status or "監視中", "badge badge-success"
+
+
 @router.get("/dashboard", name="hotdock-dashboard")
 async def dashboard_root(request: Request, db: Session = Depends(get_db)):
     auth = attach_auth_context(request, db)
@@ -571,8 +595,8 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
         db,
         workspace=access.workspace,
         active_nav="workspace-branches",
-        page_title=f"{access.workspace.name} | Branches | Hotdock",
-        page_heading="Branches",
+        page_title=f"{access.workspace.name} | ブランチ | Hotdock",
+        page_heading="ブランチ",
         page_description="workspace branch 一覧。",
         breadcrumbs=[
             {"label": "Dashboard", "href": f"/workspaces/{workspace_slug}/dashboard"},
@@ -619,21 +643,27 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
             "details_id": f"branch-details-{branch.id}",
             "name": branch.name,
             "last_push_at": branch.last_push_at,
+            "last_push_display": _format_branch_timestamp(branch.last_push_at),
+            "last_push_sort": int(branch.last_push_at.timestamp()) if branch.last_push_at else 0,
             "current_head_sha": branch.current_head_sha or branch.last_commit_sha,
             "touched_files_count": branch.touched_files_count,
             "conflict_files_count": branch.conflict_files_count,
             "branch_status": branch.branch_status,
+            "status_badge_label": _workspace_branch_status_badge(branch)[0],
+            "status_badge_class": _workspace_branch_status_badge(branch)[1],
             "touch_seed_status": branch.touch_seed_status,
             "touch_seed_warning": branch.touch_seed_warning,
             "touch_seed_error_message": branch.touch_seed_error_message,
             "has_authoritative_compare_history": branch.has_authoritative_compare_history,
             "observed_via": branch.observed_via,
+            "observed_via_label": "手動登録" if branch.observed_via == "manual" else None,
             "touch_seed_source": branch.touch_seed_source,
             "is_deleted": branch.is_deleted,
             "repository_name": repositories.get(branch.repository_id).display_name if repositories.get(branch.repository_id) else "-",
             "repository_selection_status": repositories.get(branch.repository_id).selection_status if repositories.get(branch.repository_id) else None,
             "repository_is_available": repositories.get(branch.repository_id).is_available if repositories.get(branch.repository_id) else False,
             "files": files_by_branch.get(branch.id, []),
+            "search_text": f"{branch.name} {repositories.get(branch.repository_id).display_name if repositories.get(branch.repository_id) else ''}".lower(),
         }
         for branch in branches
     ]
@@ -677,8 +707,8 @@ async def workspace_branch_detail(workspace_slug: str, branch_id: str, request: 
         db,
         workspace=access.workspace,
         active_nav="workspace-branches",
-        page_title=f"{branch.name} | Branch | Hotdock",
-        page_heading="Branch Detail",
+        page_title=f"{branch.name} | ブランチ | Hotdock",
+        page_heading="ブランチ詳細",
         page_description="branch ごとの touched files と collision 状態。",
         breadcrumbs=[
             {"label": "Dashboard", "href": f"/workspaces/{workspace_slug}/dashboard"},

@@ -568,11 +568,10 @@
     }
 </style>
 
+{% if dashboard.is_unconnected %}
 <section class="panel dashboard-state-banner {{ dashboard.state_banner.tone }}">
     <div class="dashboard-state-copy">
-        {% if dashboard.is_unconnected %}
         <p class="panel-title">現在の状態</p>
-        {% endif %}
         <h2>{{ dashboard.state_banner.title }}</h2>
         {% if dashboard.state_banner.subtitle %}
         <p>{{ dashboard.state_banner.subtitle }}</p>
@@ -585,6 +584,7 @@
         {% endfor %}
     </div>
 </section>
+{% endif %}
 
 <section class="panel directory-activity-shell" data-directory-activity-root>
     <div class="directory-activity-heading">

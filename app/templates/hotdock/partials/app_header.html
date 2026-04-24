@@ -1,22 +1,12 @@
 <header class="app-header">
     <button class="sidebar-toggle" type="button" data-app-sidebar-toggle>Menu</button>
     <div>
-        {% if breadcrumbs %}
-        <nav class="breadcrumbs" aria-label="Breadcrumb">
-            {% for crumb in breadcrumbs %}
-            <a href="{{ crumb.href }}">{{ crumb.label }}</a>
-            {% endfor %}
-        </nav>
-        {% endif %}
         <div class="app-header-title-row">
             <h1>{{ page_heading }}</h1>
             {% if active_nav == "workspace-dashboard" %}
             <span class="app-header-chip">プレビュー</span>
             {% endif %}
         </div>
-        {% if page_description and active_nav == "workspace-dashboard" %}
-        <p class="app-header-description">{{ page_description }}</p>
-        {% endif %}
     </div>
     <div class="app-header-meta">
         {% if current_user %}

@@ -287,9 +287,7 @@ def test_workspace_dashboard_prioritizes_actions_and_hides_internal_copy(client)
     response = client.get("/workspaces/dashboard-team/dashboard")
 
     assert response.status_code == 200
-    assert "1件の競合候補があります" in response.text
     assert "競合" in response.text
-    assert "競合一覧を見る" in response.text
     assert "ディレクトリ更新状況" in response.text
     assert "Webhook または手動登録で観測されたファイルの変更状況を表示します" in response.text
     assert "競合中のパス" in response.text
@@ -306,6 +304,7 @@ def test_workspace_dashboard_prioritizes_actions_and_hides_internal_copy(client)
     assert "ワークスペース" in response.text
     assert "現在の状態" not in response.text
     assert 'aria-label="Breadcrumb"' not in response.text
+    assert "競合と監視状況の概要" not in response.text
     assert "集約された観測済みファイルを表示しています" not in response.text
     assert "ブランチ一覧へ移動" not in response.text
     assert "コピー" not in response.text
@@ -356,6 +355,7 @@ def test_workspace_dashboard_zero_state_surfaces_next_action(client):
     assert "Push/Webhook または手動登録で検知されたファイルが表示されます" in response.text
     assert "現在の状態" in response.text
     assert 'aria-label="Breadcrumb"' not in response.text
+    assert "競合と監視状況の概要" not in response.text
     assert "次に取る行動" not in response.text
     assert "GitHub App 接続" not in response.text
     assert "利用開始ガイド" not in response.text
@@ -561,9 +561,13 @@ def test_workspace_branches_hides_manual_register_when_github_not_connected(clie
     response = client.get("/workspaces/branch-viewer-team/branches")
 
     assert response.status_code == 200
-    assert "観測中のブランチ" in response.text
+    assert "ブランチ一覧" in response.text
+    assert "Branches" not in response.text
+    assert "検索" in response.text
+    assert "並び順" in response.text
     assert "Git手動登録" not in response.text
     assert "branch 一覧と touched files の主導線は" not in response.text
+    assert 'aria-label="Breadcrumb"' not in response.text
 
 
 def test_legacy_app_routes_redirect_to_workspace_after_login(client):
@@ -2499,10 +2503,113 @@ def test_workspace_branches_shows_manual_registration_guidance_for_active_reposi
 
     assert response.status_code == 200
     assert "既存ブランチを手動登録" in response.text
+    assert "Git手動登録を開く" in response.text
+    assert response.text.index("ブランチ一覧") < response.text.index("Git手動登録を開く")
     assert 'BRANCH=&quot;feature/login-form&quot;' in response.text or 'BRANCH="feature/login-form"' in response.text
     assert "git diff --name-status origin/master" in response.text
     assert "受け入れ可能な出力例" in response.text
     assert "BRANCH:feature/login-form" in response.text
+
+
+def test_workspace_branches_table_uses_japanese_labels_and_hides_old_seed_copy(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Branch Table User",
+            "email": "branch-table@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Branch Table Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="branch-table-team").one()
+    installation = GithubInstallation(
+        installation_id=8451,
+        github_account_id=99761,
+        github_account_login="branch-table-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=97601,
+        full_name="branch-table-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.flush()
+    now = datetime.utcnow()
+    branch = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/table-refresh",
+        branch_status="normal",
+        current_head_sha="1" * 40,
+        touched_files_count=1,
+        conflict_files_count=0,
+        touch_seed_status="seeded_from_payload",
+        has_authoritative_compare_history=False,
+        last_push_at=now,
+        is_active=True,
+        is_deleted=False,
+        observed_via="webhook",
+    )
+    db.add(branch)
+    db.flush()
+    db.add(
+        BranchFile(
+            workspace_id=workspace.id,
+            repository_id=repository.id,
+            branch_id=branch.id,
+            path="app/models/user.rb",
+            normalized_path="app/models/user.rb",
+            change_type="added",
+            first_seen_change_type="added",
+            last_change_type="added",
+            source_kind="initial_payload_seed",
+            observed_at=now,
+            last_seen_at=now,
+            is_active=True,
+        )
+    )
+    db.commit()
+    db.close()
+
+    response = client.get("/workspaces/branch-table-team/branches")
+
+    assert response.status_code == 200
+    assert "ブランチ一覧" in response.text
+    assert "最終更新" in response.text
+    assert "検索" in response.text
+    assert "並び順" in response.text
+    assert "更新日順（新しい順）" in response.text
+    assert "Head" not in response.text
+    assert "比較待ち" in response.text
+    assert "初回seed済み" not in response.text
+    assert "初回 push の commits payload から touched files を取り込みました。次回以降の compare が正本です。" not in response.text
+    assert "first added" not in response.text
+    assert "last added" not in response.text
+    assert "branch-table-org/repo-a" not in response.text
 
 
 def test_manual_branch_registration_rescues_webhook_seeded_branch(client, monkeypatch):
