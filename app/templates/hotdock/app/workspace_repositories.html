@@ -46,7 +46,6 @@
 <section class="panel">
     <div class="panel-head">
         <div>
-            <p class="panel-title">リポジトリ</p>
             <h2>{% if repositories_page.catalog_state == "unconnected" %}Git未連携です{% else %}監視対象の候補{% endif %}</h2>
         </div>
         {% if repositories_page.catalog_state == "ready" %}

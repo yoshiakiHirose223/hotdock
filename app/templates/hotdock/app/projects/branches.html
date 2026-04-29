@@ -3,17 +3,14 @@
 {% block project_content %}
 <section class="app-grid three-up">
     <article class="panel stat-panel">
-        <p class="panel-title">Total Branches</p>
         <strong>{{ total_branches }}</strong>
         <span>push が観測された branch</span>
     </article>
     <article class="panel stat-panel">
-        <p class="panel-title">Updated in 24h</p>
         <strong>{{ recent_updated_count }}</strong>
         <span>直近 24 時間で更新</span>
     </article>
     <article class="panel stat-panel">
-        <p class="panel-title">With Conflicts</p>
         <strong>{{ conflict_branch_count }}</strong>
         <span>競合ありの branch</span>
     </article>
@@ -22,7 +19,6 @@
 <section class="panel branch-panel">
     <div class="panel-head">
         <div>
-            <p class="panel-title">Branches</p>
             <h2>Branch 一覧</h2>
         </div>
     </div>

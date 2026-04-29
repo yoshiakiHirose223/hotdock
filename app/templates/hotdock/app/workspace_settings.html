@@ -4,7 +4,6 @@
 <section class="app-grid two-up">
     {% for section in settings_sections %}
     <article class="panel">
-        <p class="panel-title">{{ section.title }}</p>
         <div class="form-stack">
             {% for field in section.fields %}
             <div class="form-row">
@@ -18,13 +17,11 @@
 </section>
 
 <section class="panel">
-    <p class="panel-title">Access Policy</p>
     <p>この画面は admin 以上のみ閲覧できます。owner は billing と owner 管理を担当し、member / viewer には公開しません。</p>
 </section>
 
 <section class="app-grid two-up">
     <article class="panel">
-        <p class="panel-title">Member Exit</p>
         <h2>この workspace から退会</h2>
         <p>現在のアカウントだけをこの workspace から外します。最後の owner は、別の owner を立てるまで退会できません。</p>
         <form method="post" action="/workspaces/{{ workspace.slug }}/leave">
@@ -35,7 +32,6 @@
 
     {% if current_membership.role == "owner" %}
     <article class="panel danger-panel">
-        <p class="panel-title">Workspace Exit</p>
         <h2>workspace を退会して削除</h2>
         <p>workspace 配下の member / invitation / repository / branch / conflict / pending claim を DB から削除します。GitHub installation は Hotdock から unlink されます。</p>
         <form method="post" action="/workspaces/{{ workspace.slug }}/delete">

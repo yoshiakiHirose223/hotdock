@@ -3,7 +3,6 @@
 {% block content %}
 <section class="app-grid two-up">
     <article class="panel">
-        <p class="panel-title">Members</p>
         <h2>{{ workspace.name }}</h2>
         <div class="table-wrap">
             <table class="app-table">
@@ -52,7 +51,6 @@
         </div>
     </article>
     <article class="panel">
-        <p class="panel-title">Owner Policy</p>
         <div class="empty-inline">
             最後の owner は remove / demote できません。owner を引き継ぐ場合は、先に別 member を owner へ昇格してから自分を変更してください。
         </div>
@@ -64,7 +62,6 @@
         </div>
     </article>
     <article class="panel">
-        <p class="panel-title">Invite</p>
         <h2>新しい member を招待</h2>
         {% if current_membership.role == "owner" %}
         <form method="post" action="/workspaces/{{ workspace.slug }}/members/invite">

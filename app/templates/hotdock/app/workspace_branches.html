@@ -96,7 +96,6 @@
     <section class="panel branch-panel" data-branch-browser>
         <div class="panel-head">
             <div class="branch-list-meta">
-                <p class="panel-title">ブランチ</p>
                 <h2>ブランチ一覧</h2>
                 {% if active_repository %}
                 <span class="muted-copy">監視中リポジトリ: {{ active_repository.display_name }}</span>
@@ -332,12 +331,10 @@
                 </div>
                 <div class="form-grid two-col">
                     <div class="panel panel-muted">
-                        <p class="panel-title">コマンド例</p>
                         <p class="muted-copy">このコマンドを実行した結果をそのまま貼り付けてください。`feature/login-form` は登録したいブランチ名に置き換えてください。比較元は `origin/master` です。</p>
                         <pre class="code-block">{{ manual_branch_command_example }}</pre>
                     </div>
                     <div class="panel panel-muted">
-                        <p class="panel-title">受け入れ可能な出力例</p>
                         <p class="muted-copy">1行目は必ず `BRANCH:&lt;branch_name&gt;` 形式、2行目以降は `git diff --name-status` の出力をそのまま貼り付けてください。A / M / D / R のみ受け付けます。</p>
                         <pre class="code-block">{{ manual_branch_output_example }}</pre>
                     </div>
@@ -359,7 +356,6 @@
                     <p class="muted-copy">成功するとブランチが一覧に追加され、touched files と collision 判定対象が更新されます。</p>
                 </form>
                 <div class="panel panel-muted">
-                    <p class="panel-title">結果</p>
                     {% if manual_branch_result and manual_branch_result.status == "success" %}
                     <p>登録成功: {{ manual_branch_result.branch_name }}</p>
                     <p class="muted-copy">反映ファイル数: {{ manual_branch_result.applied_file_count }} / parsed {{ manual_branch_result.parsed_file_count }}</p>

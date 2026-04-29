@@ -3,7 +3,6 @@
 {% block content %}
 <section class="app-grid two-up">
     <article class="panel">
-        <p class="panel-title">GitHub Installations</p>
         <h2>{{ workspace.name }}</h2>
         {% if log_installations %}
         <ul class="stack-list">
@@ -30,7 +29,6 @@
     </article>
 
     <article class="panel">
-        <p class="panel-title">Pending Claims</p>
         <h2>再開待ちの連携</h2>
         {% if log_pending_claims %}
         <ul class="stack-list">
@@ -54,7 +52,6 @@
 </section>
 
 <section class="panel">
-    <p class="panel-title">Webhook Events</p>
     <h2>GitHub からの受信履歴</h2>
     {% if log_webhook_events %}
     <div class="table-wrap">
@@ -87,7 +84,6 @@
 </section>
 
 <section class="panel">
-    <p class="panel-title">Audit Logs</p>
     <h2>アプリ内操作の履歴</h2>
     {% if log_audit_logs %}
     <div class="table-wrap">

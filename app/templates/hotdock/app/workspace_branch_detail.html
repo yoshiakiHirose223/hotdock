@@ -4,7 +4,6 @@
 <section class="panel">
     <div class="panel-head">
         <div>
-            <p class="panel-title">ブランチ詳細</p>
             <h2>{{ branch_detail.name }}</h2>
             <p>{{ branch_repository.display_name if branch_repository else "-" }}</p>
         </div>
@@ -33,7 +32,6 @@
 <section class="panel">
     <div class="panel-head">
         <div>
-            <p class="panel-title">ファイル一覧</p>
             <h2>{{ branch_files|length }} 件</h2>
         </div>
     </div>
@@ -93,7 +91,6 @@
 <section class="panel">
     <div class="panel-head">
         <div>
-            <p class="panel-title">競合</p>
             <h2>{{ branch_collisions|length }} 件</h2>
         </div>
     </div>
