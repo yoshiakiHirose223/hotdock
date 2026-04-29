@@ -29,6 +29,26 @@ body.page-app {
 
 .app-sidebar .brand-mark {
     color: #fff;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.65rem;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+}
+
+.app-sidebar .brand-mark::before {
+    content: "hub";
+    width: 2rem;
+    height: 2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: rgba(142, 197, 255, 0.16);
+    color: #8ec5ff;
+    font-family: "Material Symbols Outlined";
+    font-size: 1.2rem;
+    font-variation-settings: "FILL" 0, "wght" 600, "GRAD" 0, "opsz" 20;
 }
 
 .app-sidebar-workspace {
@@ -65,28 +85,29 @@ body.page-app {
 }
 
 .sidebar-inline-icon {
-    width: 1rem;
-    height: 1rem;
+    width: 1.15rem;
+    height: 1.15rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
+    color: rgba(255, 255, 255, 0.56);
+    transition: color 160ms ease;
 }
 
-.sidebar-inline-icon svg {
-    width: 100%;
-    height: 100%;
-    stroke: currentColor;
-    fill: none;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
+.sidebar-inline-icon.material-symbols-outlined {
+    font-size: 1.15rem;
 }
 
 .app-sidebar-nav a.is-active,
 .app-sidebar-nav a:hover {
     background: rgba(255, 255, 255, 0.08);
     color: #fff;
+}
+
+.app-sidebar-nav a.is-active .sidebar-inline-icon,
+.app-sidebar-nav a:hover .sidebar-inline-icon {
+    color: #8ec5ff;
 }
 
 .app-sidebar-nav a.is-active {
@@ -169,6 +190,11 @@ body.page-app {
     margin-left: auto;
     align-items: center;
     justify-content: flex-end;
+}
+
+.app-header-meta .material-symbols-outlined,
+.sidebar-toggle .material-symbols-outlined {
+    font-size: 1rem;
 }
 
 .breadcrumbs a {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 import hmac
@@ -108,6 +109,30 @@ def _format_branch_timestamp(value) -> str:
     return value.strftime("%Y-%m-%d %H:%M")
 
 
+def _format_branch_relative_timestamp(value, *, now: datetime | None = None) -> str:
+    if value is None:
+        return "更新なし"
+    current = now or datetime.utcnow()
+    delta = current - value
+    total_seconds = max(int(delta.total_seconds()), 0)
+    if total_seconds < 3600:
+        minutes = max(1, total_seconds // 60)
+        return f"{minutes}分前"
+    if total_seconds < 86400:
+        hours = max(1, total_seconds // 3600)
+        return f"{hours}時間前"
+    days = max(1, total_seconds // 86400)
+    if days == 1:
+        return "昨日"
+    if days < 7:
+        return f"{days}日前"
+    weeks = max(1, days // 7)
+    if weeks < 5:
+        return f"{weeks}週間前"
+    months = max(1, days // 30)
+    return f"{months}か月前"
+
+
 def _workspace_branch_status_badge(branch: Branch) -> tuple[str, str]:
     if branch.is_deleted or branch.branch_status == "deleted":
         return "削除済み", "badge badge-muted"
@@ -124,6 +149,36 @@ def _workspace_branch_status_badge(branch: Branch) -> tuple[str, str]:
     if branch.branch_status in {"tracked", "normal"}:
         return "監視中", "badge badge-success"
     return branch.branch_status or "監視中", "badge badge-success"
+
+
+def _workspace_branch_list_status(branch: Branch) -> tuple[str, str, str]:
+    if branch.is_deleted or branch.branch_status == "deleted":
+        return "deleted", "削除済み", "is-muted"
+    if branch.conflict_files_count > 0 or branch.branch_status == "has_conflict":
+        return "conflict", "競合中", "is-conflict"
+    if branch.touch_seed_status == "api_error" or branch.branch_status == "api_error":
+        return "warning", "APIエラー", "is-warning"
+    if branch.branch_status == "compare_error":
+        return "warning", "比較エラー", "is-warning"
+    if branch.touch_seed_status == "partial" and not branch.has_authoritative_compare_history:
+        return "pending", "一部取り込み", "is-warning"
+    if branch.touch_seed_status == "seeded_from_payload" and not branch.has_authoritative_compare_history:
+        return "pending", "比較待ち", "is-warning"
+    if branch.observed_via == "manual":
+        return "manual", "手動登録", "is-manual"
+    return "active", "監視中", "is-active"
+
+
+def _workspace_branch_meter_segments(file_count: int) -> int:
+    if file_count <= 0:
+        return 1
+    if file_count <= 5:
+        return 1
+    if file_count <= 15:
+        return 2
+    if file_count <= 40:
+        return 3
+    return 4
 
 
 @router.get("/dashboard", name="hotdock-dashboard")
@@ -644,31 +699,23 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
     active_repository = next(iter(repositories.values()), None)
     active_repository_ids = list(repositories.keys())
     branches = []
+    now = datetime.utcnow()
+    active_cutoff = now - timedelta(days=7)
     if active_repository_ids:
         branches = db.scalars(
             select(Branch)
             .where(Branch.workspace_id == access.workspace.id, Branch.repository_id.in_(active_repository_ids))
             .order_by(Branch.last_push_at.desc().nullslast())
         ).all()
-    branch_ids = [branch.id for branch in branches]
-    branch_files = []
-    if branch_ids:
-        branch_files = db.scalars(
-            select(BranchFile)
-            .where(BranchFile.branch_id.in_(branch_ids))
-            .order_by(BranchFile.last_seen_at.desc().nullslast(), BranchFile.updated_at.desc())
-        ).all()
-    files_by_branch: dict[str, list[BranchFile]] = {}
-    for file_item in branch_files:
-        files_by_branch.setdefault(file_item.branch_id, []).append(file_item)
     context["branches"] = [
-        {
+        (
+            lambda status_key, status_label, status_class: {
             "id": branch.id,
             "repository_id": branch.repository_id,
-            "details_id": f"branch-details-{branch.id}",
             "name": branch.name,
             "last_push_at": branch.last_push_at,
             "last_push_display": _format_branch_timestamp(branch.last_push_at),
+            "last_push_relative": _format_branch_relative_timestamp(branch.last_push_at, now=now),
             "last_push_sort": int(branch.last_push_at.timestamp()) if branch.last_push_at else 0,
             "current_head_sha": branch.current_head_sha or branch.last_commit_sha,
             "touched_files_count": branch.touched_files_count,
@@ -676,6 +723,9 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
             "branch_status": branch.branch_status,
             "status_badge_label": _workspace_branch_status_badge(branch)[0],
             "status_badge_class": _workspace_branch_status_badge(branch)[1],
+            "list_status_key": status_key,
+            "list_status_label": status_label,
+            "list_status_class": status_class,
             "touch_seed_status": branch.touch_seed_status,
             "touch_seed_warning": branch.touch_seed_warning,
             "touch_seed_error_message": branch.touch_seed_error_message,
@@ -687,12 +737,44 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
             "repository_name": repositories.get(branch.repository_id).display_name if repositories.get(branch.repository_id) else "-",
             "repository_selection_status": repositories.get(branch.repository_id).selection_status if repositories.get(branch.repository_id) else None,
             "repository_is_available": repositories.get(branch.repository_id).is_available if repositories.get(branch.repository_id) else False,
-            "files": files_by_branch.get(branch.id, []),
             "search_text": f"{branch.name} {repositories.get(branch.repository_id).display_name if repositories.get(branch.repository_id) else ''}".lower(),
-        }
+            "detail_href": f"/workspaces/{workspace_slug}/branches/{branch.id}",
+            "conflict_detail_href": f"/workspaces/{workspace_slug}/conflicts?branch_id={branch.id}",
+            "is_conflict": status_key == "conflict",
+            "is_recent": bool(branch.last_push_at and branch.last_push_at >= active_cutoff),
+            "activity_segments": _workspace_branch_meter_segments(branch.touched_files_count),
+            "activity_class": "is-conflict" if status_key == "conflict" else "is-warning" if status_key in {"warning", "pending"} else "is-active",
+            "row_icon": "warning" if status_key == "conflict" else "fork_right",
+            "row_icon_class": "is-conflict" if status_key == "conflict" else "is-active",
+            "subline": "手動登録" if branch.observed_via == "manual" else f"監視中: {repositories.get(branch.repository_id).display_name if repositories.get(branch.repository_id) else '-'}",
+            }
+        )(*_workspace_branch_list_status(branch))
         for branch in branches
     ]
     context["active_repository"] = active_repository
+    context["branch_summary_cards"] = [
+        {"label": "ブランチ数", "value": len(branches), "icon": "account_tree", "class": "is-total"},
+        {
+            "label": "競合数",
+            "value": sum(1 for branch in branches if branch.conflict_files_count > 0 or branch.branch_status == "has_conflict"),
+            "icon": "warning",
+            "class": "is-conflict",
+        },
+        {
+            "label": "アクティブ(1週間以内)",
+            "value": sum(1 for branch in branches if branch.last_push_at and branch.last_push_at >= active_cutoff),
+            "icon": "bolt",
+            "class": "is-active",
+        },
+    ]
+    context["branch_filter_options"] = [
+        {"value": "all", "label": "状態: すべて"},
+        {"value": "conflict", "label": "状態: 競合中"},
+        {"value": "warning", "label": "状態: エラー / 要確認"},
+        {"value": "pending", "label": "状態: 比較待ち / 要確認"},
+        {"value": "manual", "label": "状態: 手動登録"},
+        {"value": "active", "label": "状態: 監視中"},
+    ]
     context["manual_branch_command_example"] = 'BRANCH="feature/login-form"\necho "BRANCH:$BRANCH"\ngit diff --name-status origin/master..."$BRANCH"'
     context["manual_branch_output_example"] = "BRANCH:feature/login-form\nM\tapp/controllers/login_controller.rb\nA\tapp/views/login/new.html.erb\nR100\tapp/models/user_old.rb\tapp/models/user.rb\nD\tapp/tmp/old_login.txt"
     manual_branch_result = request.session.pop(MANUAL_BRANCH_RESULT_SESSION_KEY, None)
@@ -773,6 +855,7 @@ async def workspace_conflicts(
     db: Session = Depends(get_db),
     path: str | None = Query(default=None),
     repository_id: str | None = Query(default=None),
+    branch_id: str | None = Query(default=None),
 ):
     auth = attach_auth_context(request, db)
     if auth.user is None:
@@ -813,6 +896,14 @@ async def workspace_conflicts(
         collision_rows = [collision for collision in collision_rows if collision.normalized_path == path]
     if repository_id:
         collision_rows = [collision for collision in collision_rows if collision.repository_id == repository_id]
+    if branch_id:
+        filtered_collision_ids = {
+            collision_branch.collision_id
+            for collision_branch in db.scalars(
+                select(FileCollisionBranch).where(FileCollisionBranch.branch_id == branch_id)
+            ).all()
+        }
+        collision_rows = [collision for collision in collision_rows if collision.id in filtered_collision_ids]
     context["conflicts"] = [
         {
             "repository_name": repositories.get(collision.repository_id).display_name if repositories.get(collision.repository_id) else "-",
@@ -836,6 +927,7 @@ async def workspace_conflicts(
     ]
     context["conflicts_filter_path"] = path
     context["conflicts_filter_repository_id"] = repository_id
+    context["conflicts_filter_branch_name"] = branches.get(branch_id).name if branch_id and branches.get(branch_id) else None
     return render_app("hotdock/app/workspace_conflicts.html", context)
 
 

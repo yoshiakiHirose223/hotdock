@@ -13,6 +13,12 @@
         <a class="text-link" href="/workspaces/{{ workspace.slug }}/conflicts">フィルタ解除</a>
     </div>
     {% endif %}
+    {% if conflicts_filter_branch_name %}
+    <div class="inline-alert">
+        ブランチ: <code>{{ conflicts_filter_branch_name }}</code> の競合を表示しています。
+        <a class="text-link" href="/workspaces/{{ workspace.slug }}/conflicts">フィルタ解除</a>
+    </div>
+    {% endif %}
     {% if conflicts %}
     <div class="table-wrap">
         <table class="app-table">

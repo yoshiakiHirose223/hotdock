@@ -7,258 +7,827 @@
         gap: 1.25rem;
     }
 
-    .branch-list-meta {
+    .branch-workbench-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .branch-workbench-meta {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .branch-workbench-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.45rem 0.7rem;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 999px;
+        background: #fff;
+        color: #475569;
+        font-size: 0.84rem;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .branches-summary-grid {
         display: grid;
-        gap: 0.2rem;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
     }
 
-    .branch-list-count {
-        min-width: 5.5rem;
-        text-align: center;
+    .branches-summary-card {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        min-height: 88px;
+        padding: 18px 24px;
+        border: 1px solid #d8e1ec;
+        border-radius: 8px;
+        background: #ffffff;
+        box-sizing: border-box;
     }
 
-    .branch-manual-register-panel {
+    .branches-summary-card--conflict {
+        border-color: #ef4444;
+    }
+
+    .branches-summary-card__icon {
+        width: 52px;
+        height: 52px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        border-radius: 8px;
+        background: #eef4ff;
+        color: #0969da;
+    }
+
+    .branches-summary-card--conflict .branches-summary-card__icon {
+        background: #fee2e2;
+        color: #b91c1c;
+    }
+
+    .branches-summary-card--active .branches-summary-card__icon {
+        background: #dcfce7;
+        color: #15803d;
+    }
+
+    .branches-summary-card__body {
+        display: grid;
+        gap: 0.15rem;
+        min-width: 0;
+    }
+
+    .branches-summary-card__label {
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        line-height: 1.25;
+        overflow-wrap: anywhere;
+    }
+
+    .branches-summary-card__value {
+        color: #0f172a;
+        font-size: 28px;
+        line-height: 1.1;
+        font-weight: 800;
+    }
+
+    .branch-list-surface {
+        padding: 1rem;
+        display: grid;
+        gap: 1rem;
+    }
+
+    .branches-filter-panel {
+        background: #ffffff;
+        border: 1px solid #d8e1ec;
+        border-radius: 8px;
+        padding: 10px;
+    }
+
+    .branches-filter-row {
+        display: grid;
+        grid-template-columns: minmax(240px, 1fr) 180px 180px;
+        gap: 10px;
+        align-items: center;
+    }
+
+    .branches-filter-search {
+        height: 40px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: #ffffff;
+        border: 1px solid #d8e1ec;
+        border-radius: 6px;
+        padding: 0 12px;
+        min-width: 0;
+    }
+
+    .branches-filter-search__icon {
+        font-size: 18px;
+        color: #94a3b8;
+        flex-shrink: 0;
+    }
+
+    .branches-filter-search__input {
+        width: 100%;
+        border: none;
+        outline: none;
+        background: transparent;
+        font-size: 14px;
+        color: #0f172a;
         padding: 0;
+    }
+
+    .branches-filter-search__input::placeholder {
+        color: #94a3b8;
+    }
+
+    .branches-filter-select {
+        height: 40px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: #ffffff;
+        border: 1px solid #d8e1ec;
+        border-radius: 6px;
+        padding: 0 10px;
+        color: #334155;
+        min-width: 0;
+    }
+
+    .branches-filter-select__icon {
+        font-size: 18px;
+        color: #94a3b8;
+        flex-shrink: 0;
+    }
+
+    .branches-filter-select__control {
+        border: 0;
+        outline: none;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        width: 100%;
+        min-width: 0;
+        appearance: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        padding: 0;
+    }
+
+    .branches-filter-clear {
+        display: none;
+    }
+
+    .branch-table-shell {
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 16px;
         overflow: hidden;
+        background: #fff;
     }
 
-    .branch-manual-register-disclosure {
+    .branch-workbench-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .branch-workbench-table thead tr {
+        background: #f8fafc;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.24);
+    }
+
+    .branch-workbench-table th {
+        padding: 0.95rem 1rem;
+        color: #64748b;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        text-align: left;
+        white-space: nowrap;
+    }
+
+    .branch-workbench-table tbody tr {
+        border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+    }
+
+    .branch-workbench-table tbody tr:hover {
+        background: rgba(248, 250, 252, 0.72);
+    }
+
+    .branch-workbench-table tbody tr.is-conflict {
+        background: rgba(254, 242, 242, 0.3);
+    }
+
+    .branch-workbench-table td {
+        padding: 1rem;
+        vertical-align: middle;
+    }
+
+    .branch-name-cell {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        min-width: 0;
+    }
+
+    .branch-name-icon {
+        color: #94a3b8;
+        font-size: 1.1rem;
+        flex: 0 0 auto;
+    }
+
+    .branch-name-icon.is-active {
+        color: #0f4fa8;
+    }
+
+    .branch-name-icon.is-conflict {
+        color: #b91c1c;
+    }
+
+    .branch-name-copy {
         display: grid;
-        gap: 0;
+        gap: 0.25rem;
+        min-width: 0;
     }
 
-    .branch-manual-register-disclosure > summary {
+    .branch-name-link {
+        color: #0f4fa8;
+        font-family: ui-monospace, SFMono-Regular, Roboto Mono, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.94rem;
+        font-weight: 700;
+        text-decoration: none;
+        overflow-wrap: anywhere;
+    }
+
+    .branch-name-link:hover {
+        text-decoration: underline;
+    }
+
+    .branch-name-link.is-conflict {
+        color: #b91c1c;
+    }
+
+    .branch-subcopy {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        flex-wrap: wrap;
+        min-width: 0;
+        color: #64748b;
+        font-size: 0.79rem;
+    }
+
+    .branch-status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 0.18rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: #f8fafc;
+        color: #475569;
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        text-align: left;
+    }
+
+    .branch-status-pill.is-conflict {
+        background: #fee2e2;
+        color: #b91c1c;
+        border-color: rgba(220, 38, 38, 0.18);
+    }
+
+    .branch-status-pill.is-warning {
+        background: #fff7ed;
+        color: #c2410c;
+        border-color: rgba(249, 115, 22, 0.2);
+    }
+
+    .branch-status-pill.is-manual {
+        background: #eff6ff;
+        color: #1d4ed8;
+        border-color: rgba(37, 99, 235, 0.2);
+    }
+
+    .branch-updated-copy {
+        display: grid;
+        gap: 0.18rem;
+    }
+
+    .branch-updated-copy strong {
+        color: #0f172a;
+        font-size: 0.92rem;
+    }
+
+    .branch-updated-copy span {
+        color: #64748b;
+        font-size: 0.79rem;
+        overflow-wrap: anywhere;
+    }
+
+    .branch-files-cell {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+    }
+
+    .branch-files-cell strong {
+        color: #334155;
+        font-family: ui-monospace, SFMono-Regular, Roboto Mono, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+
+    .branch-activity-meter {
+        display: inline-flex;
+        align-items: flex-end;
+        gap: 0.18rem;
+        min-width: 1.75rem;
+    }
+
+    .branch-activity-meter span {
+        width: 4px;
+        height: 12px;
+        border-radius: 999px;
+        background: #cbd5e1;
+    }
+
+    .branch-activity-meter.is-active span {
+        background: #22c55e;
+    }
+
+    .branch-activity-meter.is-warning span {
+        background: #f59e0b;
+    }
+
+    .branch-activity-meter.is-conflict span {
+        background: #dc2626;
+    }
+
+    .branch-actions-cell {
+        text-align: right;
+    }
+
+    .branch-actions {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .branch-delete-button {
+        width: 34px;
+        height: 34px;
+        display: inline-grid;
+        place-items: center;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 10px;
+        background: #fff;
+        color: #94a3b8;
+        cursor: pointer;
+    }
+
+    .branch-delete-button:hover {
+        color: #b91c1c;
+        border-color: rgba(220, 38, 38, 0.2);
+        background: #fff5f5;
+    }
+
+    .branch-table-footer {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 1rem;
-        padding: 1.1rem 1.25rem;
-        cursor: pointer;
-        list-style: none;
-        font-weight: 700;
-        color: #0f172a;
+        padding: 0.9rem 1rem;
+        border-top: 1px solid rgba(148, 163, 184, 0.24);
+        background: #f8fafc;
+        color: #64748b;
+        font-size: 0.84rem;
     }
 
-    .branch-manual-register-disclosure > summary::-webkit-details-marker {
+    .branch-pagination {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .branch-pagination button[disabled] {
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
+
+    .branch-hidden {
+        display: none !important;
+    }
+
+    .branch-modal[hidden] {
         display: none;
     }
 
-    .branch-manual-register-disclosure > summary::after {
-        content: "▾";
-        color: #64748b;
-        transition: transform 160ms ease;
+    .branch-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 60;
+        display: grid;
+        place-items: center;
+        padding: 1.5rem;
     }
 
-    .branch-manual-register-disclosure[open] > summary::after {
-        transform: rotate(180deg);
+    .branch-modal-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.42);
     }
 
-    .branch-manual-register-body {
+    .branch-modal-dialog {
+        position: relative;
+        width: min(920px, 100%);
+        max-height: min(88vh, 920px);
         display: grid;
         gap: 1rem;
-        padding: 0 1.25rem 1.25rem;
-        border-top: 1px solid rgba(214, 224, 234, 0.75);
+        padding: 1.25rem;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 18px;
+        background: #fff;
+        overflow: auto;
+        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.16);
     }
 
-    .branch-filter-topline {
+    .branch-modal-head {
         display: flex;
+        align-items: flex-start;
         justify-content: space-between;
         gap: 1rem;
-        align-items: flex-start;
-        flex-wrap: wrap;
     }
 
-    .branch-filter-result {
-        color: var(--text-soft);
+    .branch-modal-head h3 {
+        margin: 0;
+        font-size: 1.15rem;
+        color: #0f172a;
+    }
+
+    .branch-modal-head p {
+        margin: 0.35rem 0 0;
+        color: #64748b;
         font-size: 0.92rem;
     }
 
-    .branch-filter-sort {
-        min-width: 220px;
+    .branch-modal-close {
+        width: 36px;
+        height: 36px;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 10px;
+        background: #fff;
+        color: #64748b;
+        cursor: pointer;
     }
 
-    .branch-search-empty {
-        margin-top: 1rem;
+    .branch-modal-close:hover {
+        background: #f8fafc;
     }
 
-    @media (max-width: 980px) {
-        .branch-filter-topline {
-            align-items: stretch;
+    .branch-modal-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+    }
+
+    .branch-modal-card {
+        display: grid;
+        gap: 0.65rem;
+        padding: 1rem;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 14px;
+        background: #f8fafc;
+    }
+
+    .branch-modal-card strong {
+        color: #0f172a;
+    }
+
+    .branch-modal-card p {
+        margin: 0;
+        color: #64748b;
+        font-size: 0.85rem;
+    }
+
+    .branch-modal-result {
+        padding: 1rem;
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        background: #f8fafc;
+    }
+
+    .branch-modal-result.is-error {
+        border-color: rgba(220, 38, 38, 0.2);
+        background: #fff5f5;
+        color: #b91c1c;
+    }
+
+    .branch-visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
+
+    @media (max-width: 1080px) {
+        .branches-summary-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @media (max-width: 840px) {
+        .branch-modal-grid {
+            grid-template-columns: 1fr;
         }
 
-        .branch-list-count {
+        .branches-filter-row {
+            grid-template-columns: 1fr;
+        }
+
+        .branch-workbench-table thead {
+            display: none;
+        }
+
+        .branch-workbench-table,
+        .branch-workbench-table tbody,
+        .branch-workbench-table tr,
+        .branch-workbench-table td {
+            display: block;
+            width: 100%;
+        }
+
+        .branch-workbench-table td {
+            padding-top: 0.55rem;
+            padding-bottom: 0.55rem;
+        }
+
+        .branch-actions-cell {
             text-align: left;
+        }
+
+        .branch-table-footer {
+            flex-direction: column;
+            align-items: flex-start;
         }
     }
 </style>
 
-<div class="workspace-branches">
-    <section class="panel branch-panel" data-branch-browser>
-        <div class="panel-head">
-            <div class="branch-list-meta">
-                <h2>ブランチ一覧</h2>
-                {% if active_repository %}
-                <span class="muted-copy">監視中リポジトリ: {{ active_repository.display_name }}</span>
-                {% endif %}
-            </div>
-            {% if branches %}
-            <span class="status-badge branch-list-count" data-branch-result-count>{{ branches|length }} 件</span>
+<div class="workspace-branches" data-branch-workbench>
+    <div class="branch-workbench-toolbar">
+        <div class="branch-workbench-meta">
+            {% if active_repository %}
+            <span class="branch-workbench-chip">
+                <span class="material-symbols-outlined" aria-hidden="true">source</span>
+                監視中: {{ active_repository.display_name }}
+            </span>
             {% endif %}
+        </div>
+        {% if active_repository and current_membership and current_membership.role in ["owner", "admin"] %}
+        <button class="button button-primary" type="button" data-branch-modal-open>
+            <span class="material-symbols-outlined" aria-hidden="true">add</span>
+            Add Branch
+        </button>
+        {% endif %}
+    </div>
+
+    <div class="branches-summary-grid">
+        {% for card in branch_summary_cards %}
+        <article class="branches-summary-card {% if card.class == 'is-conflict' %}branches-summary-card--conflict{% elif card.class == 'is-active' %}branches-summary-card--active{% endif %}">
+            <div class="branches-summary-card__icon">
+                <span class="material-symbols-outlined" aria-hidden="true">{{ card.icon }}</span>
+            </div>
+            <div class="branches-summary-card__body">
+                <div class="branches-summary-card__label">{{ card.label }}</div>
+                <div class="branches-summary-card__value">{{ card.value }}</div>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+
+    <section class="panel branch-list-surface" data-branch-browser>
+        <div class="branches-filter-panel">
+            <div class="branches-filter-row">
+                <div class="branches-filter-search">
+                    <label class="branch-visually-hidden" for="branch-search">ブランチ名を検索</label>
+                    <span class="material-symbols-outlined branches-filter-search__icon" aria-hidden="true">search</span>
+                    <input id="branch-search" type="search" class="branches-filter-search__input" placeholder="名前で検索..." data-branch-search value="{{ branch_search_query or '' }}">
+                </div>
+
+                <label class="branches-filter-select" for="branch-status-filter">
+                    <span class="material-symbols-outlined branches-filter-select__icon" aria-hidden="true">filter_list</span>
+                    <select id="branch-status-filter" class="branches-filter-select__control" data-branch-status-filter>
+                        {% for option in branch_filter_options %}
+                        <option value="{{ option.value }}">{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+
+                <label class="branches-filter-select" for="branch-sort">
+                    <span class="material-symbols-outlined branches-filter-select__icon" aria-hidden="true">sort</span>
+                    <select id="branch-sort" class="branches-filter-select__control" data-branch-sort>
+                        <option value="updated_desc">最終更新</option>
+                        <option value="name">ブランチ名順</option>
+                        <option value="conflicts_desc">競合が多い順</option>
+                    </select>
+                </label>
+
+                <button class="button button-ghost branches-filter-clear" type="button" data-branch-clear>クリア</button>
+            </div>
         </div>
 
         {% if branches %}
-        <div class="branch-filter-topline">
-            <form class="branch-filter-bar" onsubmit="return false;">
-                <div class="form-row branch-filter-search">
-                    <label for="branch-search">検索</label>
-                    <input id="branch-search" type="search" placeholder="ブランチ名で検索" data-branch-search value="{{ branch_search_query or '' }}">
-                </div>
-                <div class="form-row branch-filter-sort">
-                    <label for="branch-sort">並び順</label>
-                    <select id="branch-sort" data-branch-sort>
-                        <option value="updated_desc">更新日順（新しい順）</option>
-                        <option value="name">ブランチ名順</option>
-                        <option value="conflicts_desc">競合数が多い順</option>
-                    </select>
-                </div>
-                <div class="branch-filter-actions">
-                    <button class="button button-ghost" type="button" data-branch-clear>クリア</button>
-                </div>
-            </form>
-            <div class="branch-filter-result" data-branch-filter-result>更新が新しい順で表示しています</div>
-        </div>
-
-        <div class="table-wrap">
-            <table class="app-table branch-table" data-branch-table>
-                <thead>
-                    <tr>
-                        <th>リポジトリ</th>
-                        <th>ブランチ</th>
-                        <th>最終更新</th>
-                        <th>ファイル</th>
-                        <th>競合</th>
-                        <th>状態</th>
-                        <th class="toggle-col"> </th>
-                    </tr>
-                </thead>
-                {% for branch in branches %}
-                <tbody
-                    class="branch-group {% if branch.conflict_files_count > 0 %}has-conflict{% endif %}"
-                    data-branch-group
-                    data-branch-name="{{ branch.name|lower }}"
-                    data-branch-search-text="{{ branch.search_text }}"
-                    data-last-push-sort="{{ branch.last_push_sort }}"
-                    data-conflicts="{{ branch.conflict_files_count }}"
-                >
-                    <tr
-                        class="branch-row"
-                        data-accordion-row
-                        data-accordion-target="{{ branch.details_id }}"
-                        aria-expanded="false"
-                    >
-                        <td>
-                            <div>{{ branch.repository_name }}</div>
-                        </td>
-                        <td>
-                            <strong>{{ branch.name }}</strong>
-                            {% if branch.observed_via_label %}
-                            <div><span class="mini-badge">{{ branch.observed_via_label }}</span></div>
-                            {% endif %}
-                        </td>
-                        <td>{{ branch.last_push_display }}</td>
-                        <td>{{ branch.touched_files_count }}</td>
-                        <td>{{ branch.conflict_files_count }}</td>
-                        <td>
-                            <span class="{{ branch.status_badge_class }}">{{ branch.status_badge_label }}</span>
-                        </td>
-                        <td class="toggle-col">
-                            <button
-                                class="branch-toggle"
-                                type="button"
-                                data-accordion-toggle
-                                data-accordion-target="{{ branch.details_id }}"
-                                aria-expanded="false"
-                                aria-controls="{{ branch.details_id }}"
-                            >
-                                <span class="branch-toggle-icon">▾</span>
-                            </button>
-                        </td>
-                    </tr>
-                    <tr id="{{ branch.details_id }}" class="branch-details-row" hidden>
-                        <td colspan="7">
-                            <div class="branch-detail-head">
-                                <div>
-                                    <strong>{{ branch.name }}</strong>
-                                </div>
-                                <a class="text-link" href="/workspaces/{{ workspace.slug }}/branches/{{ branch.id }}">詳細ページを見る</a>
-                            </div>
-                            {% if branch.touch_seed_error_message %}
-                            <div class="inline-alert is-warning">{{ branch.touch_seed_error_message }}</div>
-                            {% endif %}
-                            {% if branch.files %}
-                            <div class="branch-files-grid">
-                                {% for file in branch.files %}
-                                <article class="branch-file-item {% if file.is_conflict %}is-conflict{% endif %}">
-                                    <div class="branch-file-main">
-                                        {% if file.is_conflict %}
-                                        <strong><a class="text-link" href="/workspaces/{{ workspace.slug }}/conflicts?path={{ file.normalized_path|urlencode }}&repository_id={{ branch.repository_id|urlencode }}">{{ file.path }}</a></strong>
-                                        {% else %}
-                                        <strong>{{ file.path }}</strong>
-                                        {% endif %}
-                                        <div class="branch-file-meta">
-                                            {% if file.previous_path %}
-                                            <span class="mini-badge">from {{ file.previous_path }}</span>
-                                            {% endif %}
-                                            {% if file.is_conflict %}
-                                            <span class="mini-badge is-conflict">競合</span>
-                                            {% endif %}
-                                            {% if not file.is_active %}
-                                            <span class="mini-badge">履歴</span>
+        <div class="branch-table-shell">
+            <div class="table-wrap">
+                <table class="branch-workbench-table">
+                    <thead>
+                        <tr>
+                            <th>ブランチ名</th>
+                            <th>最終更新</th>
+                            <th>編集ファイル</th>
+                            <th class="branch-actions-cell">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody data-branch-table-body>
+                        {% for branch in branches %}
+                        <tr
+                            data-branch-row
+                            data-branch-id="{{ branch.id }}"
+                            data-branch-name="{{ branch.name|lower }}"
+                            data-branch-search-text="{{ branch.search_text }}"
+                            data-branch-status="{{ branch.list_status_key }}"
+                            data-last-push-sort="{{ branch.last_push_sort }}"
+                            data-conflicts="{{ branch.conflict_files_count }}"
+                            class="{% if branch.is_conflict %}is-conflict{% endif %}"
+                        >
+                            <td>
+                                <div class="branch-name-cell">
+                                    <span class="material-symbols-outlined branch-name-icon {{ branch.row_icon_class }}" aria-hidden="true">{{ branch.row_icon }}</span>
+                                    <div class="branch-name-copy">
+                                        <a class="branch-name-link {% if branch.is_conflict %}is-conflict{% endif %}" href="{{ branch.detail_href }}">{{ branch.name }}</a>
+                                        <div class="branch-subcopy">
+                                            <span>{{ branch.subline }}</span>
+                                            {% if branch.list_status_key != "active" %}
+                                            <span class="branch-status-pill {{ branch.list_status_class }}">{{ branch.list_status_label }}</span>
                                             {% endif %}
                                         </div>
                                     </div>
-                                    <span class="branch-file-time">{{ file.last_seen_at or file.observed_at }}</span>
-                                </article>
-                                {% endfor %}
-                            </div>
-                            {% else %}
-                            <div class="empty-inline">このブランチの touched files はまだありません。</div>
-                            {% endif %}
-                        </td>
-                    </tr>
-                </tbody>
-                {% endfor %}
-            </table>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="branch-updated-copy">
+                                    <strong>{{ branch.last_push_relative }}</strong>
+                                    <span>{{ branch.last_push_display }}</span>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="branch-files-cell">
+                                    <strong>{{ branch.touched_files_count }} ファイル</strong>
+                                    <span class="branch-activity-meter {{ branch.activity_class }}" aria-hidden="true">
+                                        {% for _ in range(branch.activity_segments) %}
+                                        <span></span>
+                                        {% endfor %}
+                                    </span>
+                                </div>
+                            </td>
+                            <td class="branch-actions-cell">
+                                <div class="branch-actions">
+                                    {% if branch.is_conflict %}
+                                    <a class="button button-secondary button-small" href="{{ branch.conflict_detail_href }}">詳細</a>
+                                    {% endif %}
+                                    <button class="button button-ghost button-small" type="button" data-branch-ignore="{{ branch.id }}">Ignore</button>
+                                    <button class="branch-delete-button" type="button" data-branch-delete="{{ branch.id }}" aria-label="削除">
+                                        <span class="material-symbols-outlined" aria-hidden="true">delete</span>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="branch-table-footer">
+                <span data-branch-pagination-summary></span>
+                <div class="branch-pagination">
+                    <button class="button button-ghost button-small" type="button" data-branch-prev>前へ</button>
+                    <button class="button button-ghost button-small" type="button" data-branch-next>次へ</button>
+                </div>
+            </div>
         </div>
-        <div class="empty-inline branch-search-empty" data-branch-empty-search hidden>一致するブランチはありません。</div>
+        <div class="empty-inline branch-hidden" data-branch-empty-search>一致するブランチはありません。</div>
+        {% else %}
+        <div class="empty-state">
+            <h3>ブランチはまだありません</h3>
+            <p>監視対象 repository を選んだあと、その repository への push webhook が届くとブランチが作成されます。</p>
+        </div>
+        {% endif %}
+    </section>
 
-        <script>
-            document.addEventListener("DOMContentLoaded", () => {
-                const root = document.querySelector("[data-branch-browser]");
-                if (!root) {
-                    return;
-                }
+    {% if active_repository and current_membership and current_membership.role in ["owner", "admin"] %}
+    <div class="branch-modal" hidden data-branch-modal {% if manual_branch_result %}data-open-on-load="true"{% endif %}>
+        <div class="branch-modal-backdrop" data-branch-modal-close></div>
+        <div class="branch-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="branch-modal-title">
+            <div class="branch-modal-head">
+                <div>
+                    <h3 id="branch-modal-title">ブランチを手動登録</h3>
+                    <p>既存ブランチを補助的に登録し、touched files をその時点の snapshot として反映します。</p>
+                </div>
+                <button class="branch-modal-close" type="button" data-branch-modal-close aria-label="閉じる">✕</button>
+            </div>
 
-                const searchInput = root.querySelector("[data-branch-search]");
-                const sortSelect = root.querySelector("[data-branch-sort]");
-                const clearButton = root.querySelector("[data-branch-clear]");
-                const table = root.querySelector("[data-branch-table]");
-                const groups = Array.from(root.querySelectorAll("[data-branch-group]"));
-                const count = root.querySelector("[data-branch-result-count]");
-                const summary = root.querySelector("[data-branch-filter-result]");
-                const empty = root.querySelector("[data-branch-empty-search]");
+            <div class="branch-modal-grid">
+                <div class="branch-modal-card">
+                    <strong>コマンド例</strong>
+                    <p>このコマンドの出力をそのまま貼り付けてください。</p>
+                    <pre class="code-block">{{ manual_branch_command_example }}</pre>
+                </div>
+                <div class="branch-modal-card">
+                    <strong>受け入れ可能な出力例</strong>
+                    <p>1行目は `BRANCH:&lt;branch_name&gt;`、2行目以降は `git diff --name-status` の結果です。</p>
+                    <pre class="code-block">{{ manual_branch_output_example }}</pre>
+                </div>
+            </div>
 
-                if (!searchInput || !sortSelect || !clearButton || !table || !summary || !empty) {
-                    return;
-                }
+            <form class="form-stack manual-branch-form" method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ active_repository.id }}/branches/manual-register">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="next_path" value="/workspaces/{{ workspace.slug }}/branches">
+                <label for="manual_branch_input">出力結果</label>
+                <textarea
+                    id="manual_branch_input"
+                    name="manual_branch_input"
+                    rows="12"
+                    placeholder="{{ manual_branch_output_example }}"
+                    required
+                ></textarea>
+                <div class="button-row">
+                    <button class="button button-primary" type="submit">登録する</button>
+                </div>
+            </form>
 
-                const sortLabels = {
-                    updated_desc: "更新が新しい順で表示しています",
-                    name: "ブランチ名順で表示しています",
-                    conflicts_desc: "競合数が多い順で表示しています",
-                };
+            <div class="branch-modal-result {% if manual_branch_result and manual_branch_result.status == 'error' %}is-error{% endif %}">
+                {% if manual_branch_result and manual_branch_result.status == "success" %}
+                <p><strong>登録成功:</strong> {{ manual_branch_result.branch_name }}</p>
+                <p class="muted-copy">反映ファイル数: {{ manual_branch_result.applied_file_count }} / parsed {{ manual_branch_result.parsed_file_count }}</p>
+                <p class="muted-copy">再活性化: {{ "はい" if manual_branch_result.reactivated else "いいえ" }}</p>
+                {% elif manual_branch_result and manual_branch_result.status == "error" %}
+                <p><strong>登録失敗</strong></p>
+                <p class="muted-copy">{{ manual_branch_result.message }}</p>
+                {% else %}
+                <p class="muted-copy">登録結果はここに表示されます。</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
 
-                const sortGroups = (items, sortKey) => {
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const browser = document.querySelector("[data-branch-browser]");
+        if (browser) {
+            const searchInput = browser.querySelector("[data-branch-search]");
+            const statusSelect = browser.querySelector("[data-branch-status-filter]");
+            const sortSelect = browser.querySelector("[data-branch-sort]");
+            const clearButton = browser.querySelector("[data-branch-clear]");
+            const rows = Array.from(browser.querySelectorAll("[data-branch-row]"));
+            const tbody = browser.querySelector("[data-branch-table-body]");
+            const empty = browser.querySelector("[data-branch-empty-search]");
+            const summary = browser.querySelector("[data-branch-pagination-summary]");
+            const prevButton = browser.querySelector("[data-branch-prev]");
+            const nextButton = browser.querySelector("[data-branch-next]");
+            const pageSize = 15;
+            const state = {
+                page: 1,
+                ignored: new Set(),
+            };
+
+            if (searchInput && statusSelect && sortSelect && clearButton && tbody && empty && summary && prevButton && nextButton && rows.length) {
+                const sortRows = (items, sortKey) => {
                     const sorted = [...items];
                     if (sortKey === "name") {
                         sorted.sort((a, b) => (a.dataset.branchName || "").localeCompare(b.dataset.branchName || "", "ja"));
@@ -278,106 +847,130 @@
                     return sorted;
                 };
 
-                const applyFilters = () => {
+                const updateTable = () => {
                     const query = searchInput.value.trim().toLowerCase();
-                    const visible = groups.filter((group) => {
-                        if (!query) {
-                            return true;
+                    const statusValue = statusSelect.value;
+                    const filtered = rows.filter((row) => {
+                        if (state.ignored.has(row.dataset.branchId || "")) {
+                            return false;
                         }
-                        return (group.dataset.branchSearchText || "").includes(query);
+                        if (query && !(row.dataset.branchSearchText || "").includes(query)) {
+                            return false;
+                        }
+                        if (statusValue !== "all" && (row.dataset.branchStatus || "") !== statusValue) {
+                            return false;
+                        }
+                        return true;
                     });
-                    const sorted = sortGroups(visible, sortSelect.value);
-                    groups.forEach((group) => {
-                        group.hidden = true;
+                    const sorted = sortRows(filtered, sortSelect.value);
+                    const total = sorted.length;
+                    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+                    state.page = Math.min(state.page, totalPages);
+                    const start = total === 0 ? 0 : (state.page - 1) * pageSize;
+                    const end = total === 0 ? 0 : Math.min(total, start + pageSize);
+
+                    rows.forEach((row) => {
+                        row.hidden = true;
                     });
-                    sorted.forEach((group) => {
-                        group.hidden = false;
-                        table.appendChild(group);
+
+                    sorted.slice(start, end).forEach((row) => {
+                        row.hidden = false;
+                        tbody.appendChild(row);
                     });
-                    empty.hidden = visible.length !== 0;
-                    if (count) {
-                        count.textContent = `${visible.length} 件`;
-                    }
-                    summary.textContent = sortLabels[sortSelect.value] || sortLabels.updated_desc;
+
+                    empty.classList.toggle("branch-hidden", total !== 0);
+                    summary.textContent = total === 0 ? "0 件" : `全 ${total} 件中 ${start + 1}-${end} 件を表示`;
+                    prevButton.disabled = state.page <= 1 || total === 0;
+                    nextButton.disabled = state.page >= totalPages || total === 0;
                 };
 
-                searchInput.addEventListener("input", applyFilters);
-                sortSelect.addEventListener("change", applyFilters);
-                clearButton.addEventListener("click", () => {
-                    searchInput.value = "";
-                    sortSelect.value = "updated_desc";
-                    applyFilters();
+                searchInput.addEventListener("input", () => {
+                    state.page = 1;
+                    updateTable();
                 });
 
-                applyFilters();
-            });
-        </script>
-        {% else %}
-        <div class="empty-state">
-            <h3>ブランチはまだありません</h3>
-            <p>監視対象 repository を選んだあと、その repository への push webhook が届くとブランチが作成されます。</p>
-        </div>
-        {% endif %}
-    </section>
+                statusSelect.addEventListener("change", () => {
+                    state.page = 1;
+                    updateTable();
+                });
 
-    {% if active_repository %}
-    <section class="panel branch-manual-register-panel">
-        <details class="branch-manual-register-disclosure" {% if manual_branch_result %}open{% endif %}>
-            <summary>Git手動登録を開く</summary>
-            <div class="branch-manual-register-body">
-                {% if current_membership and current_membership.role in ["owner", "admin"] %}
-                <div class="inline-alert">
-                    既存ブランチを補助的に手動登録できます。登録時に branch の存在確認を行い、touched files をその時点の差分 snapshot として反映します。
-                </div>
-                <div class="form-grid two-col">
-                    <div class="panel panel-muted">
-                        <p class="muted-copy">このコマンドを実行した結果をそのまま貼り付けてください。`feature/login-form` は登録したいブランチ名に置き換えてください。比較元は `origin/master` です。</p>
-                        <pre class="code-block">{{ manual_branch_command_example }}</pre>
-                    </div>
-                    <div class="panel panel-muted">
-                        <p class="muted-copy">1行目は必ず `BRANCH:&lt;branch_name&gt;` 形式、2行目以降は `git diff --name-status` の出力をそのまま貼り付けてください。A / M / D / R のみ受け付けます。</p>
-                        <pre class="code-block">{{ manual_branch_output_example }}</pre>
-                    </div>
-                </div>
-                <form class="form-stack manual-branch-form" method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ active_repository.id }}/branches/manual-register">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <input type="hidden" name="next_path" value="/workspaces/{{ workspace.slug }}/branches">
-                    <label for="manual_branch_input">貼り付け入力</label>
-                    <textarea
-                        id="manual_branch_input"
-                        name="manual_branch_input"
-                        rows="12"
-                        placeholder="{{ manual_branch_output_example }}"
-                        required
-                    ></textarea>
-                    <div class="button-row">
-                        <button class="button button-primary" type="submit">登録する</button>
-                    </div>
-                    <p class="muted-copy">成功するとブランチが一覧に追加され、touched files と collision 判定対象が更新されます。</p>
-                </form>
-                <div class="panel panel-muted">
-                    {% if manual_branch_result and manual_branch_result.status == "success" %}
-                    <p>登録成功: {{ manual_branch_result.branch_name }}</p>
-                    <p class="muted-copy">反映ファイル数: {{ manual_branch_result.applied_file_count }} / parsed {{ manual_branch_result.parsed_file_count }}</p>
-                    <p class="muted-copy">再活性化: {{ "はい" if manual_branch_result.reactivated else "いいえ" }}</p>
-                    {% if manual_branch_result.rescued_touch_seed %}
-                    <p class="muted-copy">手動登録により touched files を確定しました。</p>
-                    {% else %}
-                    <p class="muted-copy">このブランチは衝突判定対象に入りました。</p>
-                    {% endif %}
-                    {% elif manual_branch_result and manual_branch_result.status == "error" %}
-                    <p>登録失敗</p>
-                    <p class="muted-copy">{{ manual_branch_result.message }}</p>
-                    {% else %}
-                    <p class="muted-copy">登録成功、反映ファイル数、再活性化の有無、エラー内容がここに表示されます。</p>
-                    {% endif %}
-                </div>
-                {% else %}
-                <div class="empty-inline">この操作は owner / admin のみ実行できます。</div>
-                {% endif %}
-            </div>
-        </details>
-    </section>
-    {% endif %}
-</div>
+                sortSelect.addEventListener("change", () => {
+                    state.page = 1;
+                    updateTable();
+                });
+
+                clearButton.addEventListener("click", () => {
+                    searchInput.value = "";
+                    statusSelect.value = "all";
+                    sortSelect.value = "updated_desc";
+                    state.page = 1;
+                    updateTable();
+                });
+
+                prevButton.addEventListener("click", () => {
+                    if (state.page > 1) {
+                        state.page -= 1;
+                        updateTable();
+                    }
+                });
+
+                nextButton.addEventListener("click", () => {
+                    state.page += 1;
+                    updateTable();
+                });
+
+                browser.addEventListener("click", (event) => {
+                    const target = event.target;
+                    if (!(target instanceof HTMLElement)) {
+                        return;
+                    }
+                    const ignoreId = target.closest("[data-branch-ignore]")?.getAttribute("data-branch-ignore");
+                    const deleteId = target.closest("[data-branch-delete]")?.getAttribute("data-branch-delete");
+                    const branchId = ignoreId || deleteId;
+                    if (!branchId) {
+                        return;
+                    }
+                    state.ignored.add(branchId);
+                    updateTable();
+                });
+
+                updateTable();
+            }
+        }
+
+        const modal = document.querySelector("[data-branch-modal]");
+        if (modal) {
+            const openButtons = document.querySelectorAll("[data-branch-modal-open]");
+            const closeButtons = modal.querySelectorAll("[data-branch-modal-close]");
+
+            const openModal = () => {
+                modal.hidden = false;
+                document.body.style.overflow = "hidden";
+            };
+
+            const closeModal = () => {
+                modal.hidden = true;
+                document.body.style.overflow = "";
+            };
+
+            openButtons.forEach((button) => {
+                button.addEventListener("click", openModal);
+            });
+
+            closeButtons.forEach((button) => {
+                button.addEventListener("click", closeModal);
+            });
+
+            document.addEventListener("keydown", (event) => {
+                if (event.key === "Escape" && !modal.hidden) {
+                    closeModal();
+                }
+            });
+
+            if (modal.dataset.openOnLoad === "true") {
+                openModal();
+            }
+        }
+    });
+</script>
 {% endblock %}

@@ -1,11 +1,20 @@
 <header class="app-header">
-    <button class="sidebar-toggle" type="button" data-app-sidebar-toggle>Menu</button>
+    <button class="sidebar-toggle" type="button" data-app-sidebar-toggle>
+        <span class="material-symbols-outlined" aria-hidden="true">menu</span>
+        <span>Menu</span>
+    </button>
     <div class="app-header-meta">
         {% if current_user %}
-        <span class="app-header-chip app-header-chip-muted">{{ current_user.email }}</span>
+        <span class="app-header-chip app-header-chip-muted">
+            <span class="material-symbols-outlined" aria-hidden="true">mail</span>
+            <span>{{ current_user.email }}</span>
+        </span>
         <form class="inline-form" method="post" action="/logout">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="button button-ghost button-small" type="submit">ログアウト</button>
+            <button class="button button-ghost button-small" type="submit">
+                <span class="material-symbols-outlined" aria-hidden="true">logout</span>
+                <span>ログアウト</span>
+            </button>
         </form>
         {% endif %}
     </div>

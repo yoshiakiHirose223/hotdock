@@ -546,19 +546,19 @@ def list_user_workspaces(db: Session, user: User) -> list[WorkspaceAccess]:
 def build_workspace_navigation(workspace_slug: str, current_role: str | None = None) -> list[dict[str, object]]:
     base = f"/workspaces/{workspace_slug}"
     overview_items = [
-        {"label": "ダッシュボード", "href": f"{base}/dashboard", "key": "workspace-dashboard"},
+        {"label": "ダッシュボード", "href": f"{base}/dashboard", "key": "workspace-dashboard", "icon": "dashboard"},
     ]
     monitoring_items = [
-        {"label": "ファイルツリー", "href": f"{base}/file-tree", "key": "workspace-file-tree", "icon": "tree"},
-        {"label": "リポジトリ", "href": f"{base}/repositories", "key": "workspace-repositories"},
-        {"label": "ブランチ", "href": f"{base}/branches", "key": "workspace-branches"},
-        {"label": "競合", "href": f"{base}/conflicts", "key": "workspace-conflicts"},
+        {"label": "ファイルツリー", "href": f"{base}/file-tree", "key": "workspace-file-tree", "icon": "account_tree"},
+        {"label": "リポジトリ", "href": f"{base}/repositories", "key": "workspace-repositories", "icon": "source"},
+        {"label": "ブランチ", "href": f"{base}/branches", "key": "workspace-branches", "icon": "fork_right"},
+        {"label": "競合", "href": f"{base}/conflicts", "key": "workspace-conflicts", "icon": "warning"},
     ]
     workspace_items = [
-        {"label": "メンバー", "href": f"{base}/members", "key": "workspace-members"},
-        {"label": "設定", "href": f"{base}/settings", "key": "workspace-settings"},
-        {"label": "請求", "href": f"{base}/billing", "key": "workspace-billing"},
-        {"label": "GitHub", "href": f"/settings/integrations/github?workspace={workspace_slug}", "key": "workspace-github"},
+        {"label": "メンバー", "href": f"{base}/members", "key": "workspace-members", "icon": "groups"},
+        {"label": "設定", "href": f"{base}/settings", "key": "workspace-settings", "icon": "settings"},
+        {"label": "請求", "href": f"{base}/billing", "key": "workspace-billing", "icon": "payments"},
+        {"label": "GitHub", "href": f"/settings/integrations/github?workspace={workspace_slug}", "key": "workspace-github", "icon": "integration_instructions"},
     ]
     if current_role not in {"owner", "admin"}:
         workspace_items = [

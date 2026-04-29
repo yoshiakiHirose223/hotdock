@@ -724,11 +724,13 @@ def test_workspace_branches_hides_manual_register_when_github_not_connected(clie
     response = client.get("/workspaces/branch-viewer-team/branches")
 
     assert response.status_code == 200
-    assert "ブランチ一覧" in response.text
     assert "Branches" not in response.text
-    assert "検索" in response.text
-    assert "並び順" in response.text
+    assert "ブランチ数" in response.text
+    assert "競合数" in response.text
+    assert "アクティブ(1週間以内)" in response.text
+    assert "名前で検索..." in response.text
     assert "Git手動登録" not in response.text
+    assert "Add Branch" not in response.text
     assert "branch 一覧と touched files の主導線は" not in response.text
     assert 'aria-label="Breadcrumb"' not in response.text
 
@@ -2665,9 +2667,9 @@ def test_workspace_branches_shows_manual_registration_guidance_for_active_reposi
     response = client.get("/workspaces/manual-ui-team/branches")
 
     assert response.status_code == 200
-    assert "既存ブランチを手動登録" in response.text
-    assert "Git手動登録を開く" in response.text
-    assert response.text.index("ブランチ一覧") < response.text.index("Git手動登録を開く")
+    assert "Add Branch" in response.text
+    assert "ブランチを手動登録" in response.text
+    assert "Git手動登録を開く" not in response.text
     assert 'BRANCH=&quot;feature/login-form&quot;' in response.text or 'BRANCH="feature/login-form"' in response.text
     assert "git diff --name-status origin/master" in response.text
     assert "受け入れ可能な出力例" in response.text
@@ -2761,14 +2763,24 @@ def test_workspace_branches_table_uses_japanese_labels_and_hides_old_seed_copy(c
     response = client.get("/workspaces/branch-table-team/branches")
 
     assert response.status_code == 200
-    assert "ブランチ一覧" in response.text
+    assert "ブランチ数" in response.text
+    assert "競合数" in response.text
+    assert "アクティブ(1週間以内)" in response.text
+    assert "名前で検索..." in response.text
+    assert "状態: すべて" in response.text
+    assert "更新順" in response.text
     assert "最終更新" in response.text
-    assert "検索" in response.text
-    assert "並び順" in response.text
-    assert "更新日順（新しい順）" in response.text
+    assert "編集ファイル" in response.text
+    assert "操作" in response.text
     assert "Head" not in response.text
+    assert "Conflict Status" not in response.text
     assert "比較待ち" in response.text
     assert "初回seed済み" not in response.text
+    assert "Compare" not in response.text
+    assert "Merge" not in response.text
+    assert "Resolve" not in response.text
+    assert "Ignore" in response.text
+    assert "Add Branch" in response.text
     assert "初回 push の commits payload から touched files を取り込みました。次回以降の compare が正本です。" not in response.text
     assert "first added" not in response.text
     assert "last added" not in response.text
