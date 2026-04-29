@@ -1,0 +1,1321 @@
+{% extends "hotdock/layouts/app_base.html" %}
+
+{% block content %}
+<style>
+    .file-tree-page {
+        display: grid;
+        gap: 1.25rem;
+    }
+
+    .file-tree-layout {
+        display: grid;
+        grid-template-columns: 320px minmax(0, 1fr);
+        gap: 1rem;
+        align-items: start;
+    }
+
+    .file-tree-explorer,
+    .file-tree-detail {
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 18px;
+        background: #ffffff;
+        overflow: hidden;
+    }
+
+    .file-tree-explorer {
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        min-height: 740px;
+    }
+
+    .file-tree-detail {
+        min-height: 740px;
+        display: grid;
+        align-content: start;
+    }
+
+    .file-tree-detail.is-empty {
+        align-content: stretch;
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .file-tree-panel-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1rem 1rem 0.9rem;
+        border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+        background: #f8fbff;
+    }
+
+    .file-tree-panel-head strong {
+        display: block;
+        margin: 0;
+        color: #141c25;
+        font-size: 1rem;
+    }
+
+    .file-tree-panel-head span {
+        color: #636c76;
+        font-size: 0.8rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-weight: 700;
+    }
+
+    .file-tree-panel-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        justify-content: flex-end;
+    }
+
+    .file-tree-search {
+        padding: 0.9rem 1rem;
+        border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+        display: grid;
+        gap: 0.35rem;
+    }
+
+    .file-tree-search label {
+        font-size: 0.79rem;
+        color: #636c76;
+    }
+
+    .file-tree-search input {
+        width: 100%;
+    }
+
+    .file-tree-results {
+        color: #636c76;
+        font-size: 0.82rem;
+        padding: 0.15rem 1rem 0;
+    }
+
+    .file-tree-viewport {
+        overflow: auto;
+        max-height: 100%;
+        background: linear-gradient(180deg, rgba(247, 249, 255, 0.72), rgba(255, 255, 255, 0));
+    }
+
+    .file-tree-viewport.is-empty [data-file-tree-top-spacer],
+    .file-tree-viewport.is-empty [data-file-tree-bottom-spacer] {
+        display: none;
+    }
+
+    .file-tree-list {
+        display: grid;
+    }
+
+    .file-tree-list.is-empty {
+        min-height: 100%;
+        align-content: center;
+    }
+
+    .file-tree-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 0.9rem;
+        min-height: 30px;
+        padding: 0.34rem 0.9rem 0.34rem 0.8rem;
+        border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+        position: relative;
+        background: #fff;
+    }
+
+    .file-tree-row:last-child {
+        border-bottom: 0;
+    }
+
+    .file-tree-row::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 6px;
+        bottom: 6px;
+        width: 3px;
+        border-radius: 999px;
+        background: transparent;
+    }
+
+    .file-tree-row.is-selected {
+        background: #eef6ff;
+    }
+
+    .file-tree-row.is-selected::before {
+        background: #0969da;
+    }
+
+    .file-tree-row.is-conflict::before,
+    .file-tree-status-dot.is-conflict,
+    .file-tree-legend-dot.is-conflict {
+        background: #ba1a1a;
+    }
+
+    .file-tree-row.is-overlap::before,
+    .file-tree-status-dot.is-overlap,
+    .file-tree-legend-dot.is-overlap {
+        background: #f97316;
+    }
+
+    .file-tree-row.is-recent::before,
+    .file-tree-status-dot.is-recent,
+    .file-tree-legend-dot.is-recent {
+        background: #177d35;
+    }
+
+    .file-tree-row.is-watch::before,
+    .file-tree-status-dot.is-watch,
+    .file-tree-legend-dot.is-watch {
+        background: #ca8a04;
+    }
+
+    .file-tree-row.is-manual::before,
+    .file-tree-status-dot.is-manual,
+    .file-tree-legend-dot.is-manual {
+        background: #2563eb;
+    }
+
+    .file-tree-row.is-stale::before,
+    .file-tree-status-dot.is-stale,
+    .file-tree-legend-dot.is-stale {
+        background: #94a3b8;
+    }
+
+    .file-tree-row.is-unknown::before,
+    .file-tree-status-dot.is-unknown,
+    .file-tree-legend-dot.is-unknown {
+        background: #cbd5e1;
+    }
+
+    .file-tree-row.is-repository {
+        background: rgba(248, 250, 252, 0.88);
+    }
+
+    .file-tree-row-main {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        min-width: 0;
+    }
+
+    .file-tree-indent {
+        flex: 0 0 auto;
+        width: calc(var(--depth, 0) * 18px);
+    }
+
+    .file-tree-row-button,
+    .file-tree-row-toggle {
+        width: 100%;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        min-width: 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+    }
+
+    .file-tree-row-button:hover,
+    .file-tree-row-toggle:hover {
+        color: #0969da;
+    }
+
+    .file-tree-chevron {
+        flex: 0 0 auto;
+        width: 12px;
+        color: #94a3b8;
+        font-size: 0.85rem;
+    }
+
+    .file-tree-node-icon {
+        flex: 0 0 auto;
+        width: 22px;
+        height: 22px;
+        display: grid;
+        place-items: center;
+        border-radius: 7px;
+        background: rgba(15, 23, 42, 0.06);
+        color: #475569;
+        font-size: 0.72rem;
+        font-weight: 700;
+        line-height: 1;
+    }
+
+    .file-tree-row.is-selected .file-tree-node-icon {
+        color: #0969da;
+        background: rgba(9, 105, 218, 0.12);
+    }
+
+    .file-tree-node-icon.is-folder,
+    .file-tree-node-icon.is-folder-open {
+        font-size: 0.86rem;
+    }
+
+    .file-tree-node-icon.is-image {
+        background: rgba(20, 184, 166, 0.1);
+        color: #0f766e;
+    }
+
+    .file-tree-node-icon.is-code {
+        background: rgba(99, 102, 241, 0.1);
+        color: #4338ca;
+    }
+
+    .file-tree-node-icon.is-json,
+    .file-tree-node-icon.is-settings {
+        background: rgba(249, 115, 22, 0.1);
+        color: #c2410c;
+    }
+
+    .file-tree-node-icon.is-css,
+    .file-tree-node-icon.is-html {
+        background: rgba(59, 130, 246, 0.1);
+        color: #1d4ed8;
+    }
+
+    .file-tree-node-icon.is-key,
+    .file-tree-node-icon.is-lock {
+        background: rgba(234, 179, 8, 0.14);
+        color: #a16207;
+    }
+
+    .file-tree-node-icon.is-docker {
+        background: rgba(14, 116, 144, 0.1);
+        color: #0f766e;
+    }
+
+    .file-tree-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: #141c25;
+    }
+
+    .file-tree-row.is-selected .file-tree-name {
+        font-weight: 700;
+    }
+
+    .file-tree-row-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        align-items: center;
+        min-width: 0;
+        justify-content: flex-start;
+    }
+
+    .file-tree-chip,
+    .file-tree-branch-chip,
+    .file-tree-source-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.28rem;
+        padding: 0.18rem 0.5rem;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        background: #f8fafc;
+        color: #475569;
+        font-size: 0.74rem;
+        line-height: 1.2;
+        white-space: nowrap;
+        text-decoration: none;
+    }
+
+    .file-tree-chip.is-conflict {
+        background: rgba(254, 242, 242, 0.9);
+        border-color: rgba(220, 38, 38, 0.16);
+        color: #b91c1c;
+    }
+
+    .file-tree-branch-chip:hover {
+        background: #eef6ff;
+        color: #0f4fa8;
+    }
+
+    .file-tree-source-chip {
+        background: #fff;
+    }
+
+    .file-tree-row-side {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        color: #636c76;
+        font-size: 0.78rem;
+        white-space: nowrap;
+    }
+
+    .file-tree-status-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: #cbd5e1;
+        flex: 0 0 auto;
+    }
+
+    .file-tree-empty,
+    .file-tree-no-results,
+    .file-tree-detail-empty {
+        display: grid;
+        place-items: center;
+        gap: 0.65rem;
+        padding: 2rem 1.4rem;
+        text-align: center;
+        color: #475569;
+    }
+
+    .file-tree-detail.is-empty .file-tree-detail-empty {
+        min-height: 100%;
+        display: grid;
+        place-items: center;
+        align-content: center;
+        padding: 2.5rem 1.6rem;
+    }
+
+    .file-tree-empty h3,
+    .file-tree-no-results strong,
+    .file-tree-detail-empty strong {
+        margin: 0;
+        color: #141c25;
+    }
+
+    .file-tree-empty p,
+    .file-tree-no-results p,
+    .file-tree-detail-empty p {
+        margin: 0;
+        max-width: 38ch;
+        color: #636c76;
+    }
+
+    .file-tree-empty-icon {
+        width: 46px;
+        height: 46px;
+        display: grid;
+        place-items: center;
+        border-radius: 14px;
+        background: rgba(15, 23, 42, 0.05);
+        color: #475569;
+        font-size: 1.1rem;
+    }
+
+    .file-tree-detail-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1rem 1rem 0.9rem;
+        border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+    }
+
+    .file-tree-detail-head strong {
+        display: block;
+        color: #141c25;
+    }
+
+    .file-tree-detail-head span {
+        display: block;
+        margin-top: 0.2rem;
+        color: #636c76;
+        font-size: 0.9rem;
+    }
+
+    .file-tree-detail-body {
+        display: grid;
+        gap: 1rem;
+        padding: 1rem;
+    }
+
+    .file-tree-detail-title {
+        display: grid;
+        gap: 0.3rem;
+    }
+
+    .file-tree-detail-title h3 {
+        margin: 0;
+        color: #141c25;
+        font-size: 1.2rem;
+    }
+
+    .file-tree-path {
+        margin: 0;
+        color: #475569;
+        font-size: 0.88rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        word-break: break-word;
+    }
+
+    .file-tree-detail-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .file-tree-detail-toolbar label {
+        font-size: 0.82rem;
+        color: #636c76;
+    }
+
+    .file-tree-detail-toolbar select {
+        min-width: 220px;
+    }
+
+    .file-tree-status-banner {
+        display: grid;
+        gap: 0.25rem;
+        padding: 0.95rem 1rem;
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: #f8fafc;
+    }
+
+    .file-tree-status-banner.is-conflict {
+        border-color: rgba(186, 26, 26, 0.18);
+        background: rgba(254, 242, 242, 0.9);
+    }
+
+    .file-tree-status-banner.is-overlap {
+        border-color: rgba(249, 115, 22, 0.18);
+        background: rgba(255, 247, 237, 0.9);
+    }
+
+    .file-tree-status-banner.is-safe {
+        border-color: rgba(23, 125, 53, 0.16);
+        background: rgba(240, 253, 244, 0.86);
+    }
+
+    .file-tree-status-banner strong {
+        color: #141c25;
+    }
+
+    .file-tree-status-banner p {
+        margin: 0;
+        color: #636c76;
+    }
+
+    .file-tree-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0.7rem;
+    }
+
+    .file-tree-summary-item {
+        display: grid;
+        gap: 0.2rem;
+        padding: 0.8rem 0.85rem;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 14px;
+        background: rgba(248, 250, 252, 0.72);
+    }
+
+    .file-tree-summary-item span {
+        font-size: 0.76rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #636c76;
+    }
+
+    .file-tree-summary-item strong {
+        color: #141c25;
+        font-size: 1.02rem;
+    }
+
+    .file-tree-problem-list,
+    .file-tree-branch-card-list {
+        display: grid;
+        gap: 0.8rem;
+    }
+
+    .file-tree-problem-item,
+    .file-tree-branch-card {
+        display: grid;
+        gap: 0.5rem;
+        padding: 0.95rem 1rem;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 14px;
+        background: #fff;
+    }
+
+    .file-tree-branch-card {
+        border-left: 4px solid rgba(148, 163, 184, 0.4);
+    }
+
+    .file-tree-branch-card.is-conflict {
+        border-left-color: #ba1a1a;
+    }
+
+    .file-tree-branch-card.is-overlap {
+        border-left-color: #f97316;
+    }
+
+    .file-tree-branch-card.is-changed {
+        border-left-color: #0969da;
+    }
+
+    .file-tree-branch-card.is-manual {
+        border-left-color: #2563eb;
+    }
+
+    .file-tree-problem-item button {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        width: 100%;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+    }
+
+    .file-tree-problem-item button:hover strong {
+        color: #0969da;
+    }
+
+    .file-tree-problem-item strong,
+    .file-tree-branch-card h4 {
+        margin: 0;
+        color: #141c25;
+        font-size: 1rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    .file-tree-problem-item small,
+    .file-tree-branch-card-meta,
+    .file-tree-detail-note {
+        color: #636c76;
+        font-size: 0.84rem;
+    }
+
+    .file-tree-branch-card-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.85rem;
+    }
+
+    .file-tree-branch-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 999px;
+        font-size: 0.73rem;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        background: rgba(148, 163, 184, 0.12);
+        color: #475569;
+    }
+
+    .file-tree-branch-status.is-conflict {
+        background: rgba(186, 26, 26, 0.1);
+        color: #991b1b;
+    }
+
+    .file-tree-branch-status.is-overlap {
+        background: rgba(249, 115, 22, 0.12);
+        color: #c2410c;
+    }
+
+    .file-tree-branch-status.is-changed {
+        background: rgba(9, 105, 218, 0.1);
+        color: #0f4fa8;
+    }
+
+    .file-tree-branch-status.is-manual {
+        background: rgba(37, 99, 235, 0.1);
+        color: #1d4ed8;
+    }
+
+    .file-tree-branch-status.is-safe {
+        background: rgba(22, 163, 74, 0.1);
+        color: #166534;
+    }
+
+    .file-tree-branch-card-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.65rem;
+    }
+
+    .file-tree-branch-card-grid div {
+        display: grid;
+        gap: 0.18rem;
+    }
+
+    .file-tree-branch-card-grid span {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #636c76;
+    }
+
+    .file-tree-branch-actions {
+        display: flex;
+        gap: 0.55rem;
+        flex-wrap: wrap;
+    }
+
+    .file-tree-footer {
+        display: grid;
+        gap: 0.75rem;
+    }
+
+    .file-tree-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.8rem;
+    }
+
+    .file-tree-legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.42rem;
+        color: #475569;
+        font-size: 0.84rem;
+    }
+
+    .file-tree-legend-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: #cbd5e1;
+        flex: 0 0 auto;
+    }
+
+    .file-tree-note {
+        margin: 0;
+        color: #636c76;
+        font-size: 0.86rem;
+    }
+
+    @media (max-width: 1180px) {
+        .file-tree-layout {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        .file-tree-explorer,
+        .file-tree-detail {
+            min-height: 0;
+        }
+    }
+
+    @media (max-width: 880px) {
+        .file-tree-summary-grid,
+        .file-tree-branch-card-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .file-tree-row {
+            grid-template-columns: minmax(0, 1fr);
+            gap: 0.45rem;
+        }
+
+        .file-tree-row-side {
+            justify-content: flex-start;
+        }
+    }
+
+    @media (max-width: 640px) {
+        .file-tree-summary-grid,
+        .file-tree-branch-card-grid {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
+</style>
+
+<div class="file-tree-page" data-file-tree-page>
+    <div class="file-tree-layout">
+        <section class="file-tree-explorer" data-file-tree-explorer>
+            <div class="file-tree-panel-head">
+                <div>
+                    <strong>EXPLORER</strong>
+                </div>
+            </div>
+            <div class="file-tree-search">
+                <label for="file-tree-search">検索</label>
+                <input id="file-tree-search" type="search" placeholder="ファイルまたはパスを検索" data-file-tree-search {% if file_tree.is_empty %}disabled{% endif %}>
+            </div>
+            <div class="file-tree-results" data-file-tree-results></div>
+            <div class="file-tree-viewport {% if file_tree.is_empty %}is-empty{% endif %}" data-file-tree-viewport>
+                <div data-file-tree-top-spacer></div>
+                <div class="file-tree-list {% if file_tree.is_empty %}is-empty{% endif %}" data-file-tree-list>
+                </div>
+                <div data-file-tree-bottom-spacer></div>
+            </div>
+        </section>
+
+        <aside class="file-tree-detail {% if file_tree.is_empty %}is-empty{% endif %}" data-file-tree-detail>
+            <div class="file-tree-detail-head">
+                <div>
+                    <strong>詳細</strong>
+                </div>
+            </div>
+            <div class="file-tree-detail-empty">
+                {% if file_tree.is_empty %}
+                <div class="file-tree-empty">
+                    <div class="file-tree-empty-icon">🗂</div>
+                    <h3>{{ file_tree.empty_state.title }}</h3>
+                    {% if file_tree.empty_state.body %}
+                    <p>{{ file_tree.empty_state.body }}</p>
+                    {% endif %}
+                    <a class="button button-secondary button-small" href="{{ file_tree.empty_state.action.href }}">{{ file_tree.empty_state.action.label }}</a>
+                </div>
+                {% else %}
+                <strong>ファイルを選択してください</strong>
+                {% endif %}
+            </div>
+        </aside>
+    </div>
+
+    <div class="file-tree-footer">
+        <div class="file-tree-legend">
+            <span class="file-tree-legend-item"><span class="file-tree-legend-dot is-conflict"></span>競合中</span>
+            <span class="file-tree-legend-item"><span class="file-tree-legend-dot is-overlap"></span>重複編集</span>
+            <span class="file-tree-legend-item"><span class="file-tree-legend-dot is-recent"></span>最近更新</span>
+            <span class="file-tree-legend-item"><span class="file-tree-legend-dot is-watch"></span>28日以内に更新</span>
+            <span class="file-tree-legend-item"><span class="file-tree-legend-dot is-manual"></span>手動追跡</span>
+            <span class="file-tree-legend-item"><span class="file-tree-legend-dot is-stale"></span>長期間更新なし</span>
+        </div>
+        <p class="file-tree-note">{{ file_tree.note }}</p>
+    </div>
+
+    <script id="workspace-file-tree-data" type="application/json">{{ file_tree.json | safe }}</script>
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            const root = document.querySelector("[data-file-tree-page]");
+            const payload = document.getElementById("workspace-file-tree-data");
+            if (!root || !payload) {
+                return;
+            }
+
+            let data;
+            try {
+                data = JSON.parse(payload.textContent || "{}");
+            } catch (error) {
+                return;
+            }
+
+            const searchInput = root.querySelector("[data-file-tree-search]");
+            const viewport = root.querySelector("[data-file-tree-viewport]");
+            const list = root.querySelector("[data-file-tree-list]");
+            const topSpacer = root.querySelector("[data-file-tree-top-spacer]");
+            const bottomSpacer = root.querySelector("[data-file-tree-bottom-spacer]");
+            const results = root.querySelector("[data-file-tree-results]");
+            const detail = root.querySelector("[data-file-tree-detail]");
+
+            if (!searchInput || !viewport || !list || !topSpacer || !bottomSpacer || !results || !detail) {
+                return;
+            }
+
+            const iconMap = {
+                repository: { glyph: "▣", className: "is-folder", label: "リポジトリ" },
+                folder: { glyph: "📁", className: "is-folder", label: "フォルダ" },
+                folderOpen: { glyph: "📂", className: "is-folder-open", label: "展開中のフォルダ" },
+                file: { glyph: "•", className: "is-file", label: "ファイル" },
+                code: { glyph: "</>", className: "is-code", label: "コードファイル" },
+                json: { glyph: "{}", className: "is-json", label: "JSON" },
+                html: { glyph: "<>", className: "is-html", label: "HTML" },
+                css: { glyph: "#", className: "is-css", label: "CSS" },
+                settings: { glyph: "⚙", className: "is-settings", label: "設定ファイル" },
+                key: { glyph: "🔑", className: "is-key", label: "環境変数または鍵" },
+                text: { glyph: "≡", className: "is-text", label: "テキストファイル" },
+                storage: { glyph: "🗄", className: "is-storage", label: "データベース関連ファイル" },
+                image: { glyph: "🖼", className: "is-image", label: "画像ファイル" },
+                lock: { glyph: "🔒", className: "is-lock", label: "ロックファイル" },
+                docker: { glyph: "🐳", className: "is-docker", label: "Docker関連ファイル" },
+            };
+
+            const escapeHtml = (value) =>
+                String(value ?? "")
+                    .replaceAll("&", "&amp;")
+                    .replaceAll("<", "&lt;")
+                    .replaceAll(">", "&gt;")
+                    .replaceAll('"', "&quot;")
+                    .replaceAll("'", "&#39;");
+
+            const nodeMap = new Map((data.nodes || []).map((node) => [node.id, node]));
+            const state = {
+                expanded: new Set(data.default_expanded || []),
+                search: "",
+                selectedId: data.initial_selected_id || null,
+                branchFilter: "all",
+                rowHeight: 36,
+                visibleNodes: [],
+            };
+
+            const hasSearch = () => Boolean(state.search);
+
+            const iconForNode = (node, expanded) => {
+                if (node.kind === "repository") {
+                    return iconMap.repository;
+                }
+                if (node.kind === "directory") {
+                    return expanded ? iconMap.folderOpen : iconMap.folder;
+                }
+                return iconMap[node.icon_key] || iconMap.file;
+            };
+
+            const searchMatches = (node) => {
+                if (!state.search) {
+                    return true;
+                }
+                return String(node.search_text || "").includes(state.search.toLowerCase());
+            };
+
+            const buildFilterSet = () => {
+                if (!hasSearch()) {
+                    return null;
+                }
+                const visibleIds = new Set();
+                nodeMap.forEach((node) => {
+                    if (!searchMatches(node)) {
+                        return;
+                    }
+                    let current = node;
+                    while (current) {
+                        visibleIds.add(current.id);
+                        current = current.parent_id ? nodeMap.get(current.parent_id) : null;
+                    }
+                });
+                return visibleIds;
+            };
+
+            const collectVisibleNodes = () => {
+                const filterSet = buildFilterSet();
+                const visible = [];
+                const walk = (nodeId, depth) => {
+                    const node = nodeMap.get(nodeId);
+                    if (!node) {
+                        return;
+                    }
+                    if (filterSet && !filterSet.has(nodeId)) {
+                        return;
+                    }
+                    visible.push({ ...node, depth });
+                    if (node.kind === "file") {
+                        return;
+                    }
+                    const shouldExpand = node.kind === "repository" || filterSet || state.expanded.has(nodeId);
+                    if (!shouldExpand) {
+                        return;
+                    }
+                    (node.child_ids || []).forEach((childId) => walk(childId, depth + 1));
+                };
+                (data.root_ids || []).forEach((rootId) => walk(rootId, 0));
+                return visible;
+            };
+
+            const ensureSelection = () => {
+                if (!state.visibleNodes.length) {
+                    state.selectedId = null;
+                    return;
+                }
+                if (state.selectedId && state.visibleNodes.some((node) => node.id === state.selectedId)) {
+                    return;
+                }
+                const preferred = state.visibleNodes.find((node) => node.kind === "file");
+                state.selectedId = (preferred || state.visibleNodes[0]).id;
+            };
+
+            const renderBranchPreview = (node) => {
+                if (node.kind !== "file") {
+                    return "";
+                }
+                const preview = (node.branch_preview || [])
+                    .map(
+                        (branch) =>
+                            `<a class="file-tree-branch-chip" href="${escapeHtml(branch.diff_href || branch.detail_href || "#")}">${escapeHtml(branch.name)}</a>`
+                    )
+                    .join("");
+                const overflow = node.branch_overflow
+                    ? `<span class="file-tree-chip">+${node.branch_overflow}</span>`
+                    : "";
+                return `${preview}${overflow}<span class="file-tree-source-chip">${escapeHtml(node.source_label)}</span>`;
+            };
+
+            const renderMetrics = (node) => {
+                const parts = [];
+                if (node.conflict_count) {
+                    parts.push(`<span class="file-tree-chip is-conflict">競合 ${node.conflict_count}</span>`);
+                }
+                if (node.overlap_count) {
+                    parts.push(`<span class="file-tree-chip">重複 ${node.overlap_count}</span>`);
+                }
+                if (node.recent_count) {
+                    parts.push(`<span class="file-tree-chip">最近更新 ${node.recent_count}</span>`);
+                }
+                parts.push(`<span class="file-tree-chip">ファイル ${node.file_count}</span>`);
+                return parts.join("");
+            };
+
+            const renderRow = (node) => {
+                const selectedClass = state.selectedId === node.id ? "is-selected" : "";
+                const statusClass = node.status_class || "";
+                const indent = `--depth:${node.depth};`;
+                if (node.kind === "repository") {
+                    const icon = iconForNode(node, true);
+                    return `
+                        <div class="file-tree-row is-repository ${escapeHtml(statusClass)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
+                            <div class="file-tree-row-main" style="${indent}">
+                                <button class="file-tree-row-button" type="button" data-file-tree-select="${escapeHtml(node.id)}" aria-selected="${state.selectedId === node.id}">
+                                    <span class="file-tree-indent"></span>
+                                    <span class="file-tree-node-icon ${escapeHtml(icon.className)}" aria-hidden="true">${escapeHtml(icon.glyph)}</span>
+                                    <span class="file-tree-name">${escapeHtml(node.name)}</span>
+                                </button>
+                            </div>
+                            <div class="file-tree-row-meta">${renderMetrics(node)}</div>
+                            <span class="file-tree-row-side">
+                                <span class="file-tree-status-dot ${escapeHtml(statusClass)}" title="${escapeHtml(node.status_label)}" aria-label="${escapeHtml(node.status_label)}"></span>
+                                <span>${escapeHtml(node.last_active_label)}</span>
+                            </span>
+                        </div>
+                    `;
+                }
+
+                if (node.kind === "directory") {
+                    const expanded = hasSearch() ? true : state.expanded.has(node.id);
+                    const icon = iconForNode(node, expanded);
+                    return `
+                        <div class="file-tree-row ${escapeHtml(statusClass)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
+                            <div class="file-tree-row-main" style="${indent}">
+                                <button class="file-tree-row-toggle" type="button" data-file-tree-toggle="${escapeHtml(node.id)}" aria-expanded="${expanded}" aria-selected="${state.selectedId === node.id}">
+                                    <span class="file-tree-indent"></span>
+                                    <span class="file-tree-chevron">${expanded ? "▾" : "▸"}</span>
+                                    <span class="file-tree-node-icon ${escapeHtml(icon.className)}" aria-hidden="true">${escapeHtml(icon.glyph)}</span>
+                                    <span class="file-tree-name">${escapeHtml(node.name)}</span>
+                                </button>
+                            </div>
+                            <div class="file-tree-row-meta">${renderMetrics(node)}</div>
+                            <span class="file-tree-row-side">
+                                <span class="file-tree-status-dot ${escapeHtml(statusClass)}" title="${escapeHtml(node.status_label)}" aria-label="${escapeHtml(node.status_label)}"></span>
+                                <span>${escapeHtml(node.last_active_label)}</span>
+                            </span>
+                        </div>
+                    `;
+                }
+
+                const icon = iconForNode(node, false);
+                return `
+                    <div class="file-tree-row ${escapeHtml(statusClass)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
+                        <div class="file-tree-row-main" style="${indent}">
+                            <button class="file-tree-row-button" type="button" data-file-tree-select="${escapeHtml(node.id)}" aria-selected="${state.selectedId === node.id}">
+                                <span class="file-tree-indent"></span>
+                                <span class="file-tree-chevron"></span>
+                                <span class="file-tree-node-icon ${escapeHtml(icon.className)}" aria-hidden="true">${escapeHtml(icon.glyph)}</span>
+                                <span class="file-tree-name">${escapeHtml(node.name)}</span>
+                            </button>
+                        </div>
+                        <div class="file-tree-row-meta">${renderBranchPreview(node)}</div>
+                        <span class="file-tree-row-side">
+                            <span class="file-tree-status-dot ${escapeHtml(statusClass)}" title="${escapeHtml(node.status_label)}" aria-label="${escapeHtml(node.status_label)}"></span>
+                            <span>${escapeHtml(node.last_active_label)}</span>
+                        </span>
+                    </div>
+                `;
+            };
+
+            const renderDetailEmpty = (title, body) => {
+                detail.innerHTML = `
+                    <div class="file-tree-detail-head">
+                        <div>
+                            <strong>詳細</strong>
+                        </div>
+                    </div>
+                    <div class="file-tree-detail-empty">
+                        <strong>${escapeHtml(title)}</strong>
+                        ${body ? `<p>${escapeHtml(body)}</p>` : ""}
+                    </div>
+                `;
+            };
+
+            const renderProblemFiles = (node) => {
+                const items = (node.problem_files || [])
+                    .map(
+                        (item) => `
+                            <article class="file-tree-problem-item">
+                                <button type="button" data-file-tree-problem-select="${escapeHtml(item.id)}">
+                                    <div>
+                                        <strong>${escapeHtml(item.path)}</strong>
+                                        <small>${escapeHtml(item.status_label)} / ${escapeHtml(String(item.branch_count))}ブランチ</small>
+                                    </div>
+                                    <span class="file-tree-chip ${item.status === "conflict" ? "is-conflict" : ""}">${escapeHtml(item.status_label)}</span>
+                                </button>
+                            </article>
+                        `
+                    )
+                    .join("");
+                if (items) {
+                    return `
+                        <section class="file-tree-detail-section">
+                            <div class="file-tree-detail-note">問題のあるファイル</div>
+                            <div class="file-tree-problem-list">${items}</div>
+                        </section>
+                    `;
+                }
+                return `
+                    <section class="file-tree-detail-section">
+                        <div class="file-tree-detail-note">問題のあるファイル</div>
+                        <div class="file-tree-problem-list">
+                            <article class="file-tree-problem-item">
+                                <small>この階層に競合や重複編集の強いシグナルはありません。</small>
+                            </article>
+                        </div>
+                    </section>
+                `;
+            };
+
+            const renderFolderDetail = (node) => {
+                const title = node.kind === "repository" ? `${node.name}` : `${node.name}/`;
+                detail.innerHTML = `
+                    <div class="file-tree-detail-head">
+                        <div>
+                            <strong>詳細</strong>
+                        </div>
+                    </div>
+                    <div class="file-tree-detail-body">
+                        <div class="file-tree-detail-title">
+                            <h3>${escapeHtml(title)}</h3>
+                            <p class="file-tree-path">${escapeHtml(node.full_path)}</p>
+                        </div>
+                        <div class="file-tree-summary-grid">
+                            <div class="file-tree-summary-item"><span>競合中</span><strong>${escapeHtml(String(node.conflict_count || 0))}</strong></div>
+                            <div class="file-tree-summary-item"><span>重複編集</span><strong>${escapeHtml(String(node.overlap_count || 0))}</strong></div>
+                            <div class="file-tree-summary-item"><span>最近更新</span><strong>${escapeHtml(String(node.recent_count || 0))}</strong></div>
+                            <div class="file-tree-summary-item"><span>ファイル数</span><strong>${escapeHtml(String(node.file_count || 0))}</strong></div>
+                            <div class="file-tree-summary-item"><span>関連ブランチ</span><strong>${escapeHtml(String(node.branch_count || 0))}</strong></div>
+                        </div>
+                        ${renderProblemFiles(node)}
+                    </div>
+                `;
+            };
+
+            const filteredBranchCards = (node) => {
+                const cards = node.branch_cards || [];
+                if (state.branchFilter === "all") {
+                    return cards;
+                }
+                return cards.filter((card) => card.status_key === state.branchFilter);
+            };
+
+            const renderBranchCards = (node) => {
+                const cards = filteredBranchCards(node)
+                    .map(
+                        (branch) => `
+                            <article class="file-tree-branch-card ${escapeHtml(branch.status_class)}">
+                                <div class="file-tree-branch-card-top">
+                                    <div>
+                                        <span class="file-tree-branch-status ${escapeHtml(branch.status_class)}">${escapeHtml(branch.status_label)}</span>
+                                        <h4>${escapeHtml(branch.name)}</h4>
+                                    </div>
+                                </div>
+                                <div class="file-tree-branch-card-grid">
+                                    <div>
+                                        <span>最終更新</span>
+                                        <strong>${escapeHtml(branch.last_updated_label)}</strong>
+                                    </div>
+                                    <div>
+                                        <span>変更種別</span>
+                                        <strong>${escapeHtml(branch.change_label)}</strong>
+                                    </div>
+                                    <div>
+                                        <span>関連リポジトリ</span>
+                                        <strong>${escapeHtml(branch.repository_name)}</strong>
+                                    </div>
+                                </div>
+                                <div class="file-tree-branch-card-meta">${escapeHtml(branch.source_label)}</div>
+                                <div class="file-tree-branch-actions">
+                                    <a class="button button-secondary button-small" href="${escapeHtml(branch.detail_href)}">詳細を見る</a>
+                                    <a class="button button-ghost button-small" href="${escapeHtml(branch.diff_href)}">差分を見る</a>
+                                </div>
+                            </article>
+                        `
+                    )
+                    .join("");
+                if (cards) {
+                    return `<div class="file-tree-branch-card-list">${cards}</div>`;
+                }
+                return `
+                    <div class="file-tree-detail-empty">
+                        <strong>一致するブランチはありません</strong>
+                        <p>表示ブランチの条件を変更すると、このファイルを触っているブランチを確認できます。</p>
+                    </div>
+                `;
+            };
+
+            const renderFileDetail = (node) => {
+                const banner = node.status_banner || {};
+                const options = (data.branch_filter_options || [])
+                    .map(
+                        (option) =>
+                            `<option value="${escapeHtml(option.value)}" ${option.value === state.branchFilter ? "selected" : ""}>${escapeHtml(option.label)}</option>`
+                    )
+                    .join("");
+                detail.innerHTML = `
+                    <div class="file-tree-detail-head">
+                        <div>
+                            <strong>詳細</strong>
+                        </div>
+                    </div>
+                    <div class="file-tree-detail-body">
+                        <div class="file-tree-detail-title">
+                            <h3>${escapeHtml(node.path)}</h3>
+                            <p class="file-tree-path">${escapeHtml(node.full_path)}</p>
+                        </div>
+                        <div class="file-tree-detail-toolbar">
+                            <div class="file-tree-status-banner ${escapeHtml(banner.tone || "is-safe")}">
+                                <strong>${escapeHtml(banner.title || node.status_label)}</strong>
+                                <p>${escapeHtml(banner.body || "")}</p>
+                            </div>
+                            <div>
+                                <label for="file-tree-branch-filter">表示ブランチ</label>
+                                <select id="file-tree-branch-filter" data-file-tree-branch-filter>
+                                    ${options}
+                                </select>
+                            </div>
+                        </div>
+                        ${node.conflict_href ? `<a class="button button-ghost button-small" href="${escapeHtml(node.conflict_href)}">競合一覧を見る</a>` : ""}
+                        ${renderBranchCards(node)}
+                    </div>
+                `;
+            };
+
+            const renderDetail = () => {
+                const node = state.selectedId ? nodeMap.get(state.selectedId) : null;
+                if (!node) {
+                renderDetailEmpty("ファイルを選択してください", "");
+                return;
+            }
+                if (node.kind === "file") {
+                    renderFileDetail(node);
+                    return;
+                }
+                renderFolderDetail(node);
+            };
+
+            const renderEmptyResults = () => {
+                topSpacer.style.height = "0px";
+                bottomSpacer.style.height = "0px";
+                list.innerHTML = `
+                    <div class="file-tree-no-results">
+                        <strong>一致するファイルはありません</strong>
+                        <p>検索条件を見直すと、関連する観測済みファイルが表示されます。</p>
+                    </div>
+                `;
+                renderDetailEmpty("一致するファイルはありません", "検索条件を戻すと、観測済みファイルと関連ブランチを確認できます。");
+            };
+
+            const renderVisibleRows = () => {
+                if (!state.visibleNodes.length) {
+                    renderEmptyResults();
+                    results.textContent = "0 件";
+                    return;
+                }
+                const scrollTop = viewport.scrollTop;
+                const viewportHeight = viewport.clientHeight || 700;
+                const buffer = 10;
+                const startIndex = Math.max(0, Math.floor(scrollTop / state.rowHeight) - buffer);
+                const endIndex = Math.min(
+                    state.visibleNodes.length,
+                    startIndex + Math.ceil(viewportHeight / state.rowHeight) + buffer * 2
+                );
+                const slice = state.visibleNodes.slice(startIndex, endIndex);
+                topSpacer.style.height = `${startIndex * state.rowHeight}px`;
+                bottomSpacer.style.height = `${(state.visibleNodes.length - endIndex) * state.rowHeight}px`;
+                list.innerHTML = slice.map(renderRow).join("");
+                results.textContent = `${state.visibleNodes.length} 件`;
+                renderDetail();
+            };
+
+            const sync = ({ resetScroll = false } = {}) => {
+                state.visibleNodes = collectVisibleNodes();
+                ensureSelection();
+                if (resetScroll) {
+                    viewport.scrollTop = 0;
+                }
+                renderVisibleRows();
+            };
+
+            if (!data.nodes || !data.nodes.length) {
+                results.textContent = "0 件";
+                return;
+            }
+
+            searchInput.addEventListener("input", () => {
+                state.search = searchInput.value.trim();
+                sync({ resetScroll: true });
+            });
+
+            viewport.addEventListener("scroll", () => {
+                window.requestAnimationFrame(renderVisibleRows);
+            });
+
+            list.addEventListener("click", (event) => {
+                const target = event.target;
+                if (!(target instanceof HTMLElement)) {
+                    return;
+                }
+                const toggleId = target.closest("[data-file-tree-toggle]")?.getAttribute("data-file-tree-toggle");
+                if (toggleId) {
+                    if (state.expanded.has(toggleId)) {
+                        state.expanded.delete(toggleId);
+                    } else {
+                        state.expanded.add(toggleId);
+                    }
+                    state.selectedId = toggleId;
+                    sync();
+                    return;
+                }
+
+                const selectId = target.closest("[data-file-tree-select]")?.getAttribute("data-file-tree-select");
+                if (selectId) {
+                    state.selectedId = selectId;
+                    renderVisibleRows();
+                }
+            });
+
+            detail.addEventListener("change", (event) => {
+                const target = event.target;
+                if (!(target instanceof HTMLSelectElement)) {
+                    return;
+                }
+                if (target.matches("[data-file-tree-branch-filter]")) {
+                    state.branchFilter = target.value;
+                    renderDetail();
+                }
+            });
+
+            detail.addEventListener("click", (event) => {
+                const target = event.target;
+                if (!(target instanceof HTMLElement)) {
+                    return;
+                }
+                const fileId = target.closest("[data-file-tree-problem-select]")?.getAttribute("data-file-tree-problem-select");
+                if (!fileId) {
+                    return;
+                }
+                state.selectedId = fileId;
+                renderVisibleRows();
+            });
+
+            window.addEventListener("resize", () => {
+                window.requestAnimationFrame(renderVisibleRows);
+            });
+
+            sync({ resetScroll: true });
+        });
+    </script>
+</div>
+{% endblock %}

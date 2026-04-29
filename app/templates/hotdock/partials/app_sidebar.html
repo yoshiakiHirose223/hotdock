@@ -13,7 +13,20 @@
         <div class="sidebar-section">
             <p class="sidebar-section-title">{{ section["title"] }}</p>
             {% for item in section["items"] %}
-            <a class="{% if active_nav == item.key %}is-active{% endif %}" href="{{ item.href }}">{{ item.label }}</a>
+            <a class="{% if active_nav == item.key %}is-active{% endif %}" href="{{ item.href }}">
+                {% if item.get("icon") == "tree" %}
+                <span class="sidebar-inline-icon" aria-hidden="true">
+                    <svg viewBox="0 0 20 20" focusable="false">
+                        <circle cx="5" cy="5" r="1.8"></circle>
+                        <circle cx="15" cy="5" r="1.8"></circle>
+                        <circle cx="10" cy="15" r="1.8"></circle>
+                        <path d="M6.8 5h6.4"></path>
+                        <path d="M10 6.8V13"></path>
+                    </svg>
+                </span>
+                {% endif %}
+                <span>{{ item.label }}</span>
+            </a>
             {% endfor %}
         </div>
         {% else %}

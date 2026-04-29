@@ -23,6 +23,31 @@ docker-compose up --build
 
 アプリ側は `DATABASE_URL` が未設定でも `POSTGRES_*` から接続先を組み立てます。compose では `db` サービス名をそのままホスト名として使います。`web` の 8000 番は外部公開せず、Nginx 経由でのみアクセスします。
 
+## Docker 開発起動
+
+UI やテンプレートを開発中に毎回 rebuild したくない場合は、`docker-compose.yml` に [docker-compose.dev.yml](/Users/hiroseyoshiaki/Desktop/project/docker-compose.dev.yml) を重ねて起動します。開発用 override では `web` を `uvicorn --reload` へ切り替え、`./app` と `./tests` を bind mount するため、Python・Jinja2 テンプレート・静的ファイルの変更を rebuild なしで反映できます。
+
+起動:
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db web nginx
+```
+
+ログ確認:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f web
+```
+
+停止:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+```
+
+本番では従来どおり `docker-compose.yml` 単独を使ってください。`docker-compose.dev.yml` は明示指定したときだけ有効になります。
+
 ### HTTPS 用の準備
 
 本番ドメインは `hotdock.jp` 前提です。`.env` の `DOMAIN=hotdock.jp`、`CERTBOT_EMAIL`、必要なら `NGINX_CERT_WATCH_INTERVAL` を設定してから証明書発行を行ってください。

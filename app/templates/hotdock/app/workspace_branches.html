@@ -111,7 +111,7 @@
             <form class="branch-filter-bar" onsubmit="return false;">
                 <div class="form-row branch-filter-search">
                     <label for="branch-search">検索</label>
-                    <input id="branch-search" type="search" placeholder="ブランチ名で検索" data-branch-search>
+                    <input id="branch-search" type="search" placeholder="ブランチ名で検索" data-branch-search value="{{ branch_search_query or '' }}">
                 </div>
                 <div class="form-row branch-filter-sort">
                     <label for="branch-sort">並び順</label>

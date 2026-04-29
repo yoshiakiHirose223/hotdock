@@ -40,6 +40,7 @@ from app.hotdock.services.workspaces import (
     resolve_workspace_access,
     workspace_billing_data,
     workspace_dashboard_data,
+    workspace_file_tree_data,
     workspace_members_data,
     workspace_settings_data,
 )
@@ -158,6 +159,30 @@ async def workspace_dashboard(workspace_slug: str, request: Request, db: Session
     )
     context["dashboard"] = workspace_dashboard_data(db, access.workspace)
     return render_app("hotdock/app/workspace_dashboard.html", context)
+
+
+@router.get("/workspaces/{workspace_slug}/file-tree", name="hotdock-workspace-file-tree")
+async def workspace_file_tree(workspace_slug: str, request: Request, db: Session = Depends(get_db)):
+    auth = attach_auth_context(request, db)
+    if auth.user is None:
+        return RedirectResponse(
+            url=build_login_redirect(f"/workspaces/{workspace_slug}/file-tree"),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="viewer")
+    context = workspace_page_context(
+        request,
+        db,
+        workspace=access.workspace,
+        active_nav="workspace-file-tree",
+        page_title=f"{access.workspace.name} | ファイルツリー | Hotdock",
+        page_heading="ファイルツリー",
+        page_description="観測済みファイルの階層と関連ブランチを確認します。",
+        breadcrumbs=[],
+        current_membership=access.membership,
+    )
+    context["file_tree"] = workspace_file_tree_data(db, access.workspace)
+    return render_app("hotdock/app/workspace_file_tree.html", context)
 
 
 @router.get("/workspaces/{workspace_slug}/repositories", name="hotdock-workspace-repositories")
@@ -672,6 +697,7 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
     context["manual_branch_output_example"] = "BRANCH:feature/login-form\nM\tapp/controllers/login_controller.rb\nA\tapp/views/login/new.html.erb\nR100\tapp/models/user_old.rb\tapp/models/user.rb\nD\tapp/tmp/old_login.txt"
     manual_branch_result = request.session.pop(MANUAL_BRANCH_RESULT_SESSION_KEY, None)
     context["manual_branch_result"] = manual_branch_result if isinstance(manual_branch_result, dict) else None
+    context["branch_search_query"] = (request.query_params.get("branch") or "").strip()
     return render_app("hotdock/app/workspace_branches.html", context)
 
 

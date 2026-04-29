@@ -549,6 +549,7 @@ def build_workspace_navigation(workspace_slug: str, current_role: str | None = N
         {"label": "ダッシュボード", "href": f"{base}/dashboard", "key": "workspace-dashboard"},
     ]
     monitoring_items = [
+        {"label": "ファイルツリー", "href": f"{base}/file-tree", "key": "workspace-file-tree", "icon": "tree"},
         {"label": "リポジトリ", "href": f"{base}/repositories", "key": "workspace-repositories"},
         {"label": "ブランチ", "href": f"{base}/branches", "key": "workspace-branches"},
         {"label": "競合", "href": f"{base}/conflicts", "key": "workspace-conflicts"},
@@ -1256,6 +1257,742 @@ def _build_directory_activity_data(
             {"label": "灰 = 長期間更新なし", "class": "is-stale"},
         ],
         "note": "この画面は観測済みファイルのみ表示対象です。push/webhook または手動登録で検知されたもののみ対象です。",
+        "json": json.dumps(payload, ensure_ascii=False).replace("</", "<\\/"),
+    }
+
+
+_FILE_TREE_EXCLUDED_SEGMENTS = {
+    ".git",
+    "node_modules",
+    "vendor",
+    "__pycache__",
+    ".venv",
+    "dist",
+    "build",
+    "coverage",
+}
+
+_FILE_TREE_STATUS_PRIORITY = {
+    "conflict": 0,
+    "overlap": 1,
+    "recent": 2,
+    "watch": 3,
+    "manual": 4,
+    "stale": 5,
+    "unknown": 6,
+}
+
+
+def _file_tree_is_excluded_path(path: str | None) -> bool:
+    normalized = str(path or "").strip().strip("/")
+    if not normalized:
+        return False
+    parts = [segment.lower() for segment in normalized.split("/") if segment]
+    return any(segment in _FILE_TREE_EXCLUDED_SEGMENTS for segment in parts)
+
+
+def _file_tree_source_label(source_labels: set[str]) -> str:
+    if not source_labels:
+        return "不明"
+    if source_labels == {"手動登録"}:
+        return "手動追跡"
+    if source_labels == {"Webhook"}:
+        return "Webhookで検出"
+    return "Webhookと手動登録"
+
+
+def _file_tree_change_label(change_type: str | None) -> str:
+    normalized = str(change_type or "").strip().lower()
+    if not normalized:
+        return "変更あり"
+    if normalized in {"a", "added"}:
+        return "追加"
+    if normalized in {"m", "modified", "change", "changed"}:
+        return "変更"
+    if normalized in {"d", "deleted", "removed", "remove"}:
+        return "削除"
+    if normalized.startswith("r") or normalized in {"renamed", "rename"}:
+        return "リネーム"
+    return "変更あり"
+
+
+def _file_tree_icon_key(path: str) -> str:
+    filename = path.rsplit("/", 1)[-1]
+    lowered = filename.lower()
+    if lowered == "dockerfile":
+        return "docker"
+    if lowered == "package.json":
+        return "json"
+    if lowered == "requirements.txt":
+        return "text"
+    if lowered == "docker-compose.yml":
+        return "settings"
+    if "." not in lowered:
+        return "file"
+    extension = lowered.rsplit(".", 1)[-1]
+    if extension in {"py", "js", "ts", "tsx", "jsx"}:
+        return "code"
+    if extension == "json":
+        return "json"
+    if extension == "html":
+        return "html"
+    if extension in {"css", "scss"}:
+        return "css"
+    if extension in {"yml", "yaml", "toml"}:
+        return "settings"
+    if extension == "env":
+        return "key"
+    if extension in {"md", "txt"}:
+        return "text"
+    if extension == "sql":
+        return "storage"
+    if extension in {"png", "jpg", "jpeg", "webp", "svg"}:
+        return "image"
+    if extension == "lock":
+        return "lock"
+    return "file"
+
+
+def _file_tree_status(
+    *,
+    last_updated_at,
+    is_conflict: bool,
+    is_overlap: bool,
+    is_manual_only: bool,
+    now,
+) -> str:
+    if is_conflict:
+        return "conflict"
+    if is_overlap:
+        return "overlap"
+    if last_updated_at is None:
+        return "unknown"
+    age = now - last_updated_at
+    if age <= timedelta(days=7):
+        return "recent"
+    if is_manual_only:
+        return "manual"
+    if age <= timedelta(days=28):
+        return "watch"
+    return "stale"
+
+
+def _file_tree_status_label(status: str) -> str:
+    return {
+        "conflict": "競合中",
+        "overlap": "重複編集",
+        "recent": "最近更新",
+        "watch": "変更あり",
+        "manual": "手動追跡",
+        "stale": "長期間更新なし",
+        "unknown": "不明",
+    }.get(status, "不明")
+
+
+def _file_tree_status_class(status: str) -> str:
+    return f"is-{status.replace('_', '-')}"
+
+
+def _file_tree_branch_card_status(
+    *,
+    file_status: str,
+    is_manual: bool,
+) -> tuple[str, str]:
+    if file_status == "conflict":
+        return "conflict", "競合中"
+    if file_status == "overlap":
+        return "overlap", "重複編集"
+    if is_manual:
+        return "manual", "手動追跡"
+    if file_status in {"recent", "watch"}:
+        return "changed", "変更あり"
+    return "safe", "問題なし"
+
+
+def _file_tree_status_banner(*, status: str, branch_count: int) -> dict[str, str]:
+    if status == "conflict":
+        return {
+            "tone": "is-conflict",
+            "title": "競合の可能性があります",
+            "body": f"{branch_count}件のブランチがこのファイルを変更しています。",
+        }
+    if status == "overlap":
+        return {
+            "tone": "is-overlap",
+            "title": "重複編集があります",
+            "body": "複数のブランチがこのファイルを変更しています。",
+        }
+    return {
+        "tone": "is-safe",
+        "title": "現在、このファイルに競合は検出されていません",
+        "body": "関連ブランチと最新の変更状況を確認できます。",
+    }
+
+
+def workspace_file_tree_data(db: Session, workspace: Workspace) -> dict[str, object]:
+    now = utcnow()
+    github_settings_href = f"/settings/integrations/github?workspace={workspace.slug}"
+    repositories_href = f"/workspaces/{workspace.slug}/repositories"
+    branches_href = f"/workspaces/{workspace.slug}/branches"
+    conflicts_href = f"/workspaces/{workspace.slug}/conflicts"
+
+    installations = db.scalars(
+        select(GithubInstallation).where(GithubInstallation.claimed_workspace_id == workspace.id)
+    ).all()
+    repositories = db.scalars(
+        select(Repository).where(
+            Repository.workspace_id == workspace.id,
+            Repository.deleted_at.is_(None),
+        )
+    ).all()
+    repositories.sort(
+        key=lambda repository: (
+            0 if repository.selection_status == REPOSITORY_SELECTION_ACTIVE else 1,
+            0 if repository.is_available else 1,
+            repository.display_name.lower(),
+        )
+    )
+    active_repositories = [
+        repository
+        for repository in repositories
+        if repository.selection_status == REPOSITORY_SELECTION_ACTIVE
+        and repository.is_active
+        and repository.is_available
+    ]
+    active_repository_ids = [repository.id for repository in active_repositories]
+    branches = db.scalars(
+        select(Branch).where(
+            Branch.workspace_id == workspace.id,
+            Branch.repository_id.in_(active_repository_ids) if active_repository_ids else False,
+            Branch.is_active.is_(True),
+            Branch.is_deleted.is_(False),
+        )
+    ).all()
+    open_collisions = db.scalars(
+        select(FileCollision)
+        .join(Repository, Repository.id == FileCollision.repository_id)
+        .where(
+            Repository.workspace_id == workspace.id,
+            Repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
+            Repository.is_active.is_(True),
+            Repository.is_available.is_(True),
+            FileCollision.collision_status == "open",
+        )
+    ).all()
+    open_collision_keys = {(collision.repository_id, collision.normalized_path) for collision in open_collisions}
+    branch_file_rows = db.execute(
+        select(BranchFile, Branch, Repository)
+        .join(Branch, Branch.id == BranchFile.branch_id)
+        .join(Repository, Repository.id == Branch.repository_id)
+        .where(
+            Repository.workspace_id == workspace.id,
+            Repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
+            Repository.is_active.is_(True),
+            Repository.is_available.is_(True),
+            Branch.is_active.is_(True),
+            Branch.is_deleted.is_(False),
+            BranchFile.is_active.is_(True),
+        )
+    ).all()
+
+    file_entries: dict[tuple[str, str], dict[str, object]] = {}
+    for branch_file, branch, repository in branch_file_rows:
+        normalized_path = branch_file.normalized_path or branch_file.path
+        if not normalized_path or _file_tree_is_excluded_path(normalized_path):
+            continue
+        key = (repository.id, normalized_path)
+        source_label = "手動登録" if branch.observed_via == "manual" or branch_file.source_kind == "manual_input" else "Webhook"
+        observed_at = branch_file.last_seen_at or branch_file.observed_at or branch.last_push_at or branch.updated_at
+        branch_detail_href = f"/workspaces/{workspace.slug}/branches/{branch.id}"
+        branch_diff_href = f"{branches_href}?branch={quote(branch.name, safe='')}"
+        entry = file_entries.get(key)
+        if entry is None:
+            entry = {
+                "repository_id": repository.id,
+                "repository_name": repository.display_name,
+                "repository_full_name": repository.full_name,
+                "path": branch_file.path,
+                "normalized_path": normalized_path,
+                "last_updated_at": observed_at,
+                "source_labels": {source_label},
+                "branch_map": {},
+                "is_conflict": key in open_collision_keys or bool(branch_file.is_conflict),
+            }
+            file_entries[key] = entry
+        else:
+            entry["source_labels"].add(source_label)
+            entry["is_conflict"] = bool(entry["is_conflict"]) or key in open_collision_keys or bool(branch_file.is_conflict)
+            current_last_updated = entry.get("last_updated_at")
+            if observed_at and (current_last_updated is None or observed_at > current_last_updated):
+                entry["last_updated_at"] = observed_at
+                entry["path"] = branch_file.path
+
+        entry["branch_map"][branch.id] = {
+            "id": branch.id,
+            "name": branch.name,
+            "detail_href": branch_detail_href,
+            "diff_href": branch_diff_href,
+            "repository_name": repository.display_name,
+            "last_updated_at": observed_at,
+            "source_label": "手動追跡" if source_label == "手動登録" else "Webhookで検出",
+            "change_label": _file_tree_change_label(
+                branch_file.last_change_type or branch_file.change_type or branch_file.first_seen_change_type
+            ),
+            "is_manual": source_label == "手動登録",
+        }
+
+    empty_state = {
+        "title": "まだ観測済みファイルはありません",
+        "body": "Push/Webhook または手動登録で検知されたファイルが表示されます。",
+        "action": {"label": "ブランチへ移動", "href": branches_href},
+    }
+    if not installations:
+        empty_state = {
+            "title": "GitHub App を連携するとファイルツリーが表示されます",
+            "body": "",
+            "action": {"label": "GitHub を開く", "href": github_settings_href},
+        }
+    elif not active_repositories:
+        empty_state = {
+            "title": "監視対象の repository がまだ選ばれていません",
+            "body": "リポジトリ画面で監視対象を選ぶと、観測済みファイルをここでたどれます。",
+            "action": {"label": "リポジトリへ移動", "href": repositories_href},
+        }
+    elif not branches:
+        empty_state = {
+            "title": "まだ観測済みのブランチはありません",
+            "body": "Push/Webhook または手動登録でブランチを取り込むと、ファイルツリーが表示されます。",
+            "action": {"label": "ブランチへ移動", "href": branches_href},
+        }
+
+    if not file_entries:
+        payload = {
+            "root_ids": [],
+            "nodes": [],
+            "default_expanded": [],
+            "initial_selected_id": None,
+            "branch_filter_options": [
+                {"value": "all", "label": "すべてのアクティブブランチ"},
+                {"value": "conflict", "label": "競合中のみ"},
+                {"value": "overlap", "label": "重複編集のみ"},
+                {"value": "changed", "label": "最近更新のみ"},
+                {"value": "manual", "label": "手動追跡のみ"},
+            ],
+        }
+        return {
+            "is_empty": True,
+            "empty_state": empty_state,
+            "note": "表示対象は Hotdock が観測済みのファイルのみです。GitHub リポジトリ全体の全ファイルは表示しません。",
+            "json": json.dumps(payload, ensure_ascii=False).replace("</", "<\\/"),
+        }
+
+    def _branch_sort_key(item: dict[str, object]):
+        last_updated_at = item.get("last_updated_at")
+        return (
+            0 if last_updated_at else 1,
+            -(last_updated_at.timestamp()) if last_updated_at else 0,
+            str(item["name"]).lower(),
+        )
+
+    file_nodes: list[dict[str, object]] = []
+    for entry in file_entries.values():
+        normalized_path = str(entry["normalized_path"])
+        branch_items = sorted(entry["branch_map"].values(), key=_branch_sort_key)
+        branch_count = len(branch_items)
+        status = _file_tree_status(
+            last_updated_at=entry["last_updated_at"],
+            is_conflict=bool(entry["is_conflict"]),
+            is_overlap=branch_count > 1 and not bool(entry["is_conflict"]),
+            is_manual_only=entry["source_labels"] == {"手動登録"},
+            now=now,
+        )
+        branch_cards = []
+        for item in branch_items:
+            status_key, status_label = _file_tree_branch_card_status(
+                file_status=status,
+                is_manual=bool(item["is_manual"]),
+            )
+            branch_cards.append(
+                {
+                    "id": item["id"],
+                    "name": item["name"],
+                    "detail_href": item["detail_href"],
+                    "diff_href": item["diff_href"],
+                    "repository_name": item["repository_name"],
+                    "last_updated_label": _directory_activity_relative_time(item["last_updated_at"], now),
+                    "change_label": item["change_label"],
+                    "source_label": item["source_label"],
+                    "status_key": status_key,
+                    "status_label": status_label,
+                    "status_class": _file_tree_status_class(status_key),
+                }
+            )
+        path_parts = [segment for segment in normalized_path.split("/") if segment]
+        full_path = f"{entry['repository_full_name']} / {normalized_path}"
+        file_nodes.append(
+            {
+                "id": f"file:{entry['repository_id']}:{normalized_path}",
+                "kind": "file",
+                "name": path_parts[-1] if path_parts else normalized_path,
+                "path": normalized_path,
+                "full_path": full_path,
+                "repository_id": entry["repository_id"],
+                "repository_name": entry["repository_name"],
+                "repository_full_name": entry["repository_full_name"],
+                "icon_key": _file_tree_icon_key(normalized_path),
+                "child_ids": [],
+                "status": status,
+                "status_label": _file_tree_status_label(status),
+                "status_class": _file_tree_status_class(status),
+                "last_active_at": entry["last_updated_at"],
+                "last_active_label": _directory_activity_relative_time(entry["last_updated_at"], now),
+                "source_labels": set(entry["source_labels"]),
+                "source_label": _file_tree_source_label(entry["source_labels"]),
+                "branch_map": dict(entry["branch_map"]),
+                "branch_names": [str(item["name"]) for item in branch_items],
+                "branch_cards": branch_cards,
+                "branch_count": branch_count,
+                "branch_preview": branch_cards[:2],
+                "branch_overflow": max(branch_count - 2, 0),
+                "file_count": 1,
+                "conflict_count": 1 if status == "conflict" else 0,
+                "overlap_count": 1 if status == "overlap" else 0,
+                "recent_count": 1 if status in {"recent", "watch"} else 0,
+                "manual_count": 1 if "手動登録" in entry["source_labels"] else 0,
+                "search_text": " ".join(
+                    [
+                        full_path.lower(),
+                        normalized_path.lower(),
+                        " ".join(str(item["name"]).lower() for item in branch_items),
+                    ]
+                ),
+                "problem_files": [],
+                "status_banner": _file_tree_status_banner(status=status, branch_count=branch_count),
+                "conflict_href": (
+                    f"{conflicts_href}?path={quote(normalized_path)}&repository_id={quote(str(entry['repository_id']))}"
+                    if status == "conflict"
+                    else None
+                ),
+            }
+        )
+
+    nodes: dict[str, dict[str, object]] = {}
+    root_ids: list[str] = []
+
+    def ensure_node(
+        *,
+        node_id: str,
+        kind: str,
+        name: str,
+        path: str,
+        full_path: str,
+        repository_id: str,
+        repository_name: str,
+        repository_full_name: str,
+        parent_id: str | None,
+    ) -> dict[str, object]:
+        existing = nodes.get(node_id)
+        if existing is not None:
+            return existing
+        node = {
+            "id": node_id,
+            "kind": kind,
+            "name": name,
+            "path": path,
+            "full_path": full_path,
+            "repository_id": repository_id,
+            "repository_name": repository_name,
+            "repository_full_name": repository_full_name,
+            "parent_id": parent_id,
+            "child_ids": [],
+            "branch_map": {},
+            "branch_names": [],
+            "branch_count": 0,
+            "branch_preview": [],
+            "branch_overflow": 0,
+            "branch_cards": [],
+            "source_labels": set(),
+            "source_label": "不明",
+            "status": "unknown",
+            "status_label": _file_tree_status_label("unknown"),
+            "status_class": _file_tree_status_class("unknown"),
+            "last_active_at": None,
+            "last_active_label": "不明",
+            "conflict_count": 0,
+            "overlap_count": 0,
+            "recent_count": 0,
+            "manual_count": 0,
+            "file_count": 0,
+            "search_text": full_path.lower(),
+            "problem_files": [],
+            "conflict_href": None,
+            "icon_key": "folder",
+        }
+        nodes[node_id] = node
+        if parent_id is None:
+            root_ids.append(node_id)
+        else:
+            parent = nodes[parent_id]
+            if node_id not in parent["child_ids"]:
+                parent["child_ids"].append(node_id)
+        return node
+
+    def merge_branch_maps(target: dict[str, dict[str, object]], source: dict[str, dict[str, object]]) -> None:
+        for branch_id, branch_item in source.items():
+            existing = target.get(branch_id)
+            if existing is None or (
+                branch_item.get("last_updated_at") is not None
+                and (existing.get("last_updated_at") is None or branch_item["last_updated_at"] > existing["last_updated_at"])
+            ):
+                target[branch_id] = branch_item
+
+    for file_node in file_nodes:
+        repository_id = str(file_node["repository_id"])
+        repository_name = str(file_node["repository_name"])
+        repository_full_name = str(file_node["repository_full_name"])
+        root_id = f"repository:{repository_id}"
+        ensure_node(
+            node_id=root_id,
+            kind="repository",
+            name=repository_name,
+            path=repository_name,
+            full_path=repository_full_name,
+            repository_id=repository_id,
+            repository_name=repository_name,
+            repository_full_name=repository_full_name,
+            parent_id=None,
+        )
+
+        current_parent_id = root_id
+        path_segments = [segment for segment in str(file_node["path"]).split("/") if segment]
+        directory_segments = path_segments[:-1]
+        current_prefix: list[str] = []
+        for segment in directory_segments:
+            current_prefix.append(segment)
+            directory_path = "/".join(current_prefix)
+            directory_id = f"directory:{repository_id}:{directory_path}"
+            ensure_node(
+                node_id=directory_id,
+                kind="directory",
+                name=segment,
+                path=directory_path,
+                full_path=f"{repository_full_name} / {directory_path}",
+                repository_id=repository_id,
+                repository_name=repository_name,
+                repository_full_name=repository_full_name,
+                parent_id=current_parent_id,
+            )
+            current_parent_id = directory_id
+
+        file_node["parent_id"] = current_parent_id
+        nodes[file_node["id"]] = file_node
+        parent = nodes[current_parent_id]
+        if file_node["id"] not in parent["child_ids"]:
+            parent["child_ids"].append(file_node["id"])
+
+    def finalize_node(node_id: str) -> dict[str, object]:
+        node = nodes[node_id]
+        if node["kind"] == "file":
+            return node
+
+        problem_files: list[dict[str, object]] = []
+        conflict_href = None
+        for child_id in list(node["child_ids"]):
+            child = finalize_node(child_id)
+            node["file_count"] += int(child["file_count"])
+            node["conflict_count"] += int(child["conflict_count"])
+            node["overlap_count"] += int(child["overlap_count"])
+            node["recent_count"] += int(child["recent_count"])
+            node["manual_count"] += int(child["manual_count"])
+            node["source_labels"].update(child["source_labels"])
+            merge_branch_maps(node["branch_map"], child["branch_map"])
+            if child["last_active_at"] is not None and (
+                node["last_active_at"] is None or child["last_active_at"] > node["last_active_at"]
+            ):
+                node["last_active_at"] = child["last_active_at"]
+            if child.get("conflict_href") and conflict_href is None:
+                conflict_href = child["conflict_href"]
+            if child["kind"] == "file" and child["status"] in {"conflict", "overlap", "recent", "watch"}:
+                problem_files.append(
+                    {
+                        "id": child["id"],
+                        "path": child["path"],
+                        "name": child["name"],
+                        "status": child["status"],
+                        "status_label": child["status_label"],
+                        "branch_count": child["branch_count"],
+                    }
+                )
+            problem_files.extend(child.get("problem_files", []))
+
+        if node["file_count"]:
+            child_statuses = [nodes[child_id]["status"] for child_id in node["child_ids"]]
+            node["status"] = min(
+                child_statuses,
+                key=lambda status: _FILE_TREE_STATUS_PRIORITY.get(status, 99),
+            )
+            node["status_label"] = _file_tree_status_label(node["status"])
+            node["status_class"] = _file_tree_status_class(node["status"])
+            node["last_active_label"] = _directory_activity_relative_time(node["last_active_at"], now)
+        node["source_label"] = _file_tree_source_label(node["source_labels"])
+        node["conflict_href"] = conflict_href
+        branch_items = sorted(node["branch_map"].values(), key=_branch_sort_key)
+        node["branch_names"] = [str(item["name"]) for item in branch_items]
+        node["branch_count"] = len(branch_items)
+        node["branch_preview"] = branch_items[:2]
+        node["branch_overflow"] = max(len(branch_items) - 2, 0)
+        node["branch_cards"] = [
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "detail_href": item["detail_href"],
+                "diff_href": item["diff_href"],
+                "repository_name": item["repository_name"],
+                "last_updated_label": _directory_activity_relative_time(item["last_updated_at"], now),
+                "change_label": item["change_label"],
+                "source_label": item["source_label"],
+                "status_key": (
+                    "conflict" if node["status"] == "conflict" else
+                    "overlap" if node["status"] == "overlap" else
+                    "manual" if item["is_manual"] else
+                    "changed" if node["status"] in {"recent", "watch"} else
+                    "safe"
+                ),
+                "status_label": (
+                    "競合中" if node["status"] == "conflict" else
+                    "重複編集" if node["status"] == "overlap" else
+                    "手動追跡" if item["is_manual"] else
+                    "変更あり" if node["status"] in {"recent", "watch"} else
+                    "問題なし"
+                ),
+                "status_class": _file_tree_status_class(
+                    "conflict" if node["status"] == "conflict" else
+                    "overlap" if node["status"] == "overlap" else
+                    "manual" if item["is_manual"] else
+                    "changed" if node["status"] in {"recent", "watch"} else
+                    "safe"
+                ),
+            }
+            for item in branch_items
+        ]
+        node["search_text"] = " ".join(
+            [
+                str(node["search_text"]),
+                " ".join(name.lower() for name in node["branch_names"]),
+            ]
+        ).strip()
+        node["child_ids"].sort(
+            key=lambda child_id: (
+                0 if nodes[child_id]["kind"] in {"repository", "directory"} else 1,
+                _FILE_TREE_STATUS_PRIORITY.get(str(nodes[child_id]["status"]), 99),
+                str(nodes[child_id]["name"]).lower(),
+            )
+        )
+        problem_files.sort(
+            key=lambda item: (
+                _FILE_TREE_STATUS_PRIORITY.get(str(item["status"]), 99),
+                -int(item["branch_count"]),
+                str(item["path"]).lower(),
+            )
+        )
+        deduped_problem_files: list[dict[str, object]] = []
+        seen_problem_ids: set[str] = set()
+        for item in problem_files:
+            if item["id"] in seen_problem_ids:
+                continue
+            seen_problem_ids.add(item["id"])
+            deduped_problem_files.append(item)
+        node["problem_files"] = deduped_problem_files[:8]
+        return node
+
+    for root_id in root_ids:
+        finalize_node(root_id)
+
+    root_ids.sort(
+        key=lambda node_id: (
+            _FILE_TREE_STATUS_PRIORITY.get(str(nodes[node_id]["status"]), 99),
+            str(nodes[node_id]["name"]).lower(),
+        )
+    )
+
+    serialized_nodes: list[dict[str, object]] = []
+    for node in nodes.values():
+        serialized_nodes.append(
+            {
+                "id": node["id"],
+                "kind": node["kind"],
+                "name": node["name"],
+                "path": node["path"],
+                "full_path": node["full_path"],
+                "parent_id": node.get("parent_id"),
+                "child_ids": node["child_ids"],
+                "icon_key": node.get("icon_key", "folder"),
+                "status": node["status"],
+                "status_label": node["status_label"],
+                "status_class": node["status_class"],
+                "last_active_label": node["last_active_label"],
+                "last_active_at": node["last_active_at"].isoformat() if node["last_active_at"] else "",
+                "source_label": node["source_label"],
+                "branch_names": node["branch_names"],
+                "branch_count": node["branch_count"],
+                "branch_preview": [
+                    {
+                        "id": item["id"],
+                        "name": item["name"],
+                        "detail_href": item.get("detail_href"),
+                        "diff_href": item.get("diff_href"),
+                    }
+                    for item in node["branch_preview"]
+                ],
+                "branch_overflow": node["branch_overflow"],
+                "branch_cards": node["branch_cards"],
+                "repository_id": node["repository_id"],
+                "repository_name": node["repository_name"],
+                "repository_full_name": node["repository_full_name"],
+                "search_text": node["search_text"],
+                "conflict_count": node["conflict_count"],
+                "overlap_count": node["overlap_count"],
+                "recent_count": node["recent_count"],
+                "manual_count": node["manual_count"],
+                "file_count": node["file_count"],
+                "problem_files": node["problem_files"],
+                "conflict_href": node["conflict_href"],
+                "status_banner": node.get("status_banner"),
+            }
+        )
+
+    prioritized_files = [node for node in serialized_nodes if node["kind"] == "file"]
+    prioritized_files.sort(
+        key=lambda node: (
+            _FILE_TREE_STATUS_PRIORITY.get(str(node["status"]), 99),
+            -(len(node.get("branch_cards", []))),
+            str(node["path"]).lower(),
+        )
+    )
+    initial_selected_id = prioritized_files[0]["id"] if prioritized_files else (root_ids[0] if root_ids else None)
+    default_expanded = set(root_ids)
+    current = nodes.get(initial_selected_id) if initial_selected_id else None
+    while current and current.get("parent_id"):
+        default_expanded.add(str(current["parent_id"]))
+        current = nodes.get(current["parent_id"])
+
+    payload = {
+        "root_ids": root_ids,
+        "nodes": serialized_nodes,
+        "default_expanded": sorted(default_expanded),
+        "initial_selected_id": initial_selected_id,
+        "branch_filter_options": [
+            {"value": "all", "label": "すべてのアクティブブランチ"},
+            {"value": "conflict", "label": "競合中のみ"},
+            {"value": "overlap", "label": "重複編集のみ"},
+            {"value": "changed", "label": "最近更新のみ"},
+            {"value": "manual", "label": "手動追跡のみ"},
+        ],
+    }
+    return {
+        "is_empty": False,
+        "empty_state": empty_state,
+        "note": "表示対象は Hotdock が観測済みのファイルのみです。push / webhook または手動登録で検知されたものを表示します。",
         "json": json.dumps(payload, ensure_ascii=False).replace("</", "<\\/"),
     }
 

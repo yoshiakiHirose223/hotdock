@@ -1,13 +1,5 @@
 <header class="app-header">
     <button class="sidebar-toggle" type="button" data-app-sidebar-toggle>Menu</button>
-    <div>
-        <div class="app-header-title-row">
-            <h1>{{ page_heading }}</h1>
-            {% if active_nav == "workspace-dashboard" %}
-            <span class="app-header-chip">プレビュー</span>
-            {% endif %}
-        </div>
-    </div>
     <div class="app-header-meta">
         {% if current_user %}
         <span class="app-header-chip app-header-chip-muted">{{ current_user.email }}</span>

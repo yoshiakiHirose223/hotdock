@@ -541,6 +541,169 @@ def test_workspace_repositories_ready_hides_status_helpers_and_last_sync_column(
     assert "ブランチ補助導線" not in response.text
 
 
+def test_workspace_file_tree_unconnected_shows_installation_cta(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "File Tree User",
+            "email": "file-tree@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "File Tree Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    response = client.get("/workspaces/file-tree-team/file-tree")
+
+    assert response.status_code == 200
+    assert "ファイルツリー" in response.text
+    assert "EXPLORER" in response.text
+    assert "GitHub App を連携するとファイルツリーが表示されます" in response.text
+    assert "GitHub を開く" in response.text
+    assert "/workspaces/file-tree-team/file-tree" in response.text
+
+
+def test_workspace_file_tree_renders_observed_files_and_branch_links(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Tree Data User",
+            "email": "tree-data@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Tree Data Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="tree-data-team").one()
+    installation = GithubInstallation(
+        installation_id=9301,
+        github_account_id=88301,
+        github_account_login="tree-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=99301,
+        full_name="tree-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.flush()
+    branch_a = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/auth-refactor",
+        current_head_sha="abc123",
+        last_push_at=datetime.utcnow(),
+        touched_files_count=1,
+        conflict_files_count=1,
+        branch_status="has_conflict",
+        observed_via="webhook",
+    )
+    branch_b = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/header-z-index",
+        current_head_sha="def456",
+        last_push_at=datetime.utcnow() - timedelta(hours=1),
+        touched_files_count=2,
+        conflict_files_count=1,
+        branch_status="has_conflict",
+        observed_via="manual",
+    )
+    db.add_all([branch_a, branch_b])
+    db.flush()
+    db.add_all(
+        [
+            BranchFile(
+                workspace_id=workspace.id,
+                repository_id=repository.id,
+                branch_id=branch_a.id,
+                path="src/app/main.ts",
+                normalized_path="src/app/main.ts",
+                change_type="modified",
+                last_change_type="modified",
+                source_kind="webhook_compare",
+                last_seen_at=datetime.utcnow(),
+                is_active=True,
+                is_conflict=True,
+            ),
+            BranchFile(
+                workspace_id=workspace.id,
+                repository_id=repository.id,
+                branch_id=branch_b.id,
+                path="src/app/main.ts",
+                normalized_path="src/app/main.ts",
+                change_type="modified",
+                last_change_type="modified",
+                source_kind="manual_input",
+                last_seen_at=datetime.utcnow() - timedelta(minutes=20),
+                is_active=True,
+                is_conflict=True,
+            ),
+            BranchFile(
+                workspace_id=workspace.id,
+                repository_id=repository.id,
+                branch_id=branch_b.id,
+                path="package.json",
+                normalized_path="package.json",
+                change_type="modified",
+                last_change_type="modified",
+                source_kind="manual_input",
+                last_seen_at=datetime.utcnow() - timedelta(days=2),
+                is_active=True,
+                is_conflict=False,
+            ),
+        ]
+    )
+    db.add(
+        FileCollision(
+            repository_id=repository.id,
+            normalized_path="src/app/main.ts",
+            active_branch_count=2,
+            collision_status="open",
+        )
+    )
+    db.commit()
+    db.close()
+
+    response = client.get("/workspaces/tree-data-team/file-tree")
+
+    assert response.status_code == 200
+    assert "src/app/main.ts" in response.text
+    assert "package.json" in response.text
+    assert "feature/auth-refactor" in response.text
+    assert "feature/header-z-index" in response.text
+    assert "/workspaces/tree-data-team/branches?branch=feature%2Fauth-refactor" in response.text
+    assert "差分を見る" in response.text
+
+
 def test_workspace_branches_hides_manual_register_when_github_not_connected(client):
     register_page = client.get("/register")
     anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
