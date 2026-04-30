@@ -205,6 +205,164 @@ body.page-app {
     padding: 1.5rem 2rem 2rem;
 }
 
+.app-content-body {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+}
+
+.integration-callout-slot {
+    width: 100%;
+    height: auto;
+    flex: 0 0 auto;
+    box-sizing: border-box;
+}
+
+.integration-callout {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 108px;
+    padding: 16px;
+    background: #ffffff;
+    border: 1px solid #c2c6d6;
+    border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(20, 28, 37, 0.06);
+    font-family: "Noto Sans JP", "Inter", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.integration-callout__icon {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: #ecf4ff;
+    color: #0051ae;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.integration-callout__icon .material-symbols-outlined {
+    font-size: 24px;
+}
+
+.integration-callout__content {
+    flex: 1 1 auto;
+    min-width: 0;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+}
+
+.integration-callout__heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 0;
+}
+
+.integration-callout__badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: #d8e0eb;
+    color: #5b636d;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    letter-spacing: 0.05em;
+}
+
+.integration-callout__title {
+    margin: 0;
+    color: #141c25;
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 24px;
+    letter-spacing: -0.01em;
+}
+
+.integration-callout__description {
+    max-width: 720px;
+    margin: 0;
+    color: #424753;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 20px;
+}
+
+.integration-callout__actions {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    align-self: center;
+    gap: 8px;
+}
+
+.integration-callout__button {
+    min-height: 40px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 20px;
+    border: 1px solid transparent;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.integration-callout__button:active {
+    opacity: 0.7;
+}
+
+.integration-callout__button--github {
+    background: #24292f;
+    color: #ffffff;
+    border-color: #24292f;
+}
+
+.integration-callout__button--github:hover {
+    background: #000000;
+    border-color: #000000;
+    color: #ffffff;
+}
+
+.integration-callout__github-icon {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+}
+
+.integration-callout__button--backlog {
+    background: #ffffff;
+    color: #0f766e;
+    border-color: #2bbbad;
+}
+
+.integration-callout__button--backlog:hover {
+    background: #f0fdfb;
+    color: #0f766e;
+}
+
+.integration-callout__button--backlog .material-symbols-outlined {
+    font-size: 18px;
+}
+
 .empty-state-actions {
     margin-top: 1.25rem;
 }
@@ -970,8 +1128,13 @@ body.page-app {
 }
 
 .page-workspace .app-content {
-    display: grid;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     gap: 1.5rem;
+    padding: 1.5rem 2rem 2rem;
+    min-width: 0;
+    min-height: 0;
 }
 
 @media (max-width: 980px) {
@@ -1021,5 +1184,21 @@ body.page-app {
 
     .branch-filter-actions {
         justify-content: flex-start;
+    }
+
+    .integration-callout {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .integration-callout__actions {
+        width: 100%;
+        flex-direction: column;
+        align-items: stretch;
+        align-self: stretch;
+    }
+
+    .integration-callout__button {
+        width: 100%;
     }
 }

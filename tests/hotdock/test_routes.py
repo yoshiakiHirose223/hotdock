@@ -346,16 +346,15 @@ def test_workspace_dashboard_zero_state_surfaces_next_action(client):
     response = client.get("/workspaces/zero-state-team/dashboard")
 
     assert response.status_code == 200
-    assert "GitHub App が未接続です" in response.text
-    assert "GitHub App を連携" in response.text
-    assert "Backlogから連携" in response.text
-    assert "Git導入" in response.text
+    assert "Git連携がまだ完了していません" in response.text
+    assert "GitHub Appを連携" in response.text
+    assert "Backlogを連携" in response.text
     assert "ディレクトリ更新状況" in response.text
-    assert "まだ観測済みファイルはありません" in response.text
-    assert "Push/Webhook または手動登録で検知されたファイルが表示されます" in response.text
-    assert "現在の状態" in response.text
+    assert "まだ観測済みファイルはありません" not in response.text
+    assert "Push/Webhook または手動登録で検知されたファイルが表示されます" not in response.text
+    assert "ブランチへ移動" not in response.text
+    assert "現在の状態" not in response.text
     assert 'aria-label="Breadcrumb"' not in response.text
-    assert "競合と監視状況の概要" not in response.text
     assert "次に取る行動" not in response.text
     assert "GitHub App 接続" not in response.text
     assert "利用開始ガイド" not in response.text
@@ -385,21 +384,46 @@ def test_workspace_repositories_unconnected_focuses_on_installation_cta(client):
     response = client.get("/workspaces/repository-team/repositories")
 
     assert response.status_code == 200
-    assert "GitHub App が未接続です" in response.text
-    assert "GitHub App を連携" in response.text
+    assert "Git連携がまだ完了していません" in response.text
+    assert "GitHub Appを連携" in response.text
+    assert "Backlogを連携" in response.text
     assert "現在の状態" not in response.text
     assert "接続状態" not in response.text
     assert "候補数" not in response.text
-    assert "監視対象" not in response.text
     assert "開始までの流れ" not in response.text
-    assert "連携する" not in response.text
     assert "Git未連携です" in response.text
+    assert "GitHub App が未接続です" not in response.text
     assert "詳細を見る" not in response.text
     assert "No claimed installations" not in response.text
     assert "連携された repository はページ表示時に候補一覧として同期します。" not in response.text
     assert "repository を選択したあと、その repository への push webhook を受けた branch だけが" not in response.text
     assert "Visibility" not in response.text
     assert "Webhook Sync" not in response.text
+
+
+def test_workspace_branches_unconnected_shows_shared_git_integration_callout(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Branch Callout User",
+            "email": "branch-callout@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Branch Callout Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    response = client.get("/workspaces/branch-callout-team/branches")
+
+    assert response.status_code == 200
+    assert "Git連携がまだ完了していません" in response.text
+    assert "GitHub Appを連携" in response.text
+    assert "Backlogを連携" in response.text
 
 
 def test_workspace_repositories_connected_without_candidates_shows_compact_empty_state(client, monkeypatch):
@@ -563,8 +587,8 @@ def test_workspace_file_tree_unconnected_shows_installation_cta(client):
     assert response.status_code == 200
     assert "ファイルツリー" in response.text
     assert "EXPLORER" in response.text
-    assert "GitHub App を連携するとファイルツリーが表示されます" in response.text
-    assert "GitHub を開く" in response.text
+    assert "GitHub App を連携するとファイルツリーが表示されます" not in response.text
+    assert "GitHub を開く" not in response.text
     assert "/workspaces/file-tree-team/file-tree" in response.text
 
 

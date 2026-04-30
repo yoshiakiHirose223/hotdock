@@ -1,6 +1,144 @@
 {% extends "hotdock/layouts/app_base.html" %}
 
 {% block content %}
+<style>
+    .repository-catalog-list {
+        display: grid;
+        gap: 0.75rem;
+    }
+
+    .repository-catalog-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1rem;
+        border: 1px solid #d0d7de;
+        border-radius: 0.5rem;
+        background: #fff;
+        transition: border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .repository-catalog-row:hover {
+        border-color: #0969da;
+        box-shadow: 0 1px 2px rgba(9, 105, 218, 0.08);
+    }
+
+    .repository-catalog-main {
+        display: flex;
+        align-items: flex-start;
+        gap: 1rem;
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .repository-catalog-icon {
+        width: 44px;
+        height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        border: 1px solid #d0d7de;
+        border-radius: 0.25rem;
+        background: #f6f8fa;
+        color: #141c25;
+    }
+
+    .repository-catalog-copy {
+        display: grid;
+        gap: 0.35rem;
+        min-width: 0;
+    }
+
+    .repository-catalog-title-row {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        flex-wrap: wrap;
+        min-width: 0;
+    }
+
+    .repository-catalog-name {
+        color: #0969da;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 0.95rem;
+        font-weight: 700;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
+    }
+
+    .repository-catalog-visibility {
+        font-size: 0.95rem;
+        color: #94a3b8;
+        flex: 0 0 auto;
+    }
+
+    .repository-catalog-full-name {
+        color: #5f6b7a;
+        font-size: 0.83rem;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+    }
+
+    .repository-catalog-meta {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        flex-wrap: wrap;
+        color: #64748b;
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+    }
+
+    .repository-catalog-meta-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+
+    .repository-catalog-meta-item .material-symbols-outlined {
+        font-size: 0.95rem;
+    }
+
+    .repository-catalog-meta-divider {
+        color: #cbd5e1;
+    }
+
+    .repository-catalog-helper {
+        color: #64748b;
+        font-size: 0.76rem;
+        line-height: 1.4;
+    }
+
+    .repository-catalog-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex: 0 0 auto;
+        align-self: center;
+    }
+
+    .repository-catalog-actions .button {
+        min-width: 6rem;
+        justify-content: center;
+    }
+
+    @media (max-width: 720px) {
+        .repository-catalog-row {
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .repository-catalog-actions {
+            width: 100%;
+            justify-content: flex-end;
+        }
+    }
+</style>
+{% if not (workspace_integration_callout and repositories_page.catalog_state == "unconnected") %}
 <section class="panel repository-state-banner {{ repositories_page.state_banner.tone }}">
     <div class="repository-state-copy">
         <h2>{{ repositories_page.state_banner.title }}</h2>
@@ -22,6 +160,7 @@
         {% endif %}
     </div>
 </section>
+{% endif %}
 
 {% if repositories_page.catalog_state != "unconnected" %}
 <section class="panel repository-summary-strip">
@@ -76,54 +215,65 @@
         </div>
     </div>
     {% else %}
-    <div class="table-wrap">
-        <table class="app-table">
-            <thead>
-                <tr>
-                    <th>Repository</th>
-                    <th>Visibility</th>
-                    <th>Default Branch</th>
-                    <th>状態</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for repository in repositories_page.repositories %}
-                <tr>
-                    <td>
-                        <strong>{{ repository.display_name }}</strong>
-                        <div class="muted-copy">{{ repository.full_name }}</div>
-                    </td>
-                    <td>{{ repository.visibility }}</td>
-                    <td>{{ repository.default_branch }}</td>
-                    <td>
-                        <span class="status-badge {{ repository.status_class }}">{{ repository.status_label }}</span>
-                        {% if repository.helper_text %}
-                        <div class="muted-copy">{{ repository.helper_text }}</div>
+    <div class="repository-catalog-list">
+        {% for repository in repositories_page.repositories %}
+        <article class="repository-catalog-row">
+            <div class="repository-catalog-main">
+                <div class="repository-catalog-icon" aria-hidden="true">
+                    <span class="material-symbols-outlined">
+                        {% if repository.status_label == "エラー" %}
+                        sync_problem
+                        {% elif repository.default_branch in ["main", "master"] %}
+                        terminal
+                        {% else %}
+                        source
                         {% endif %}
-                    </td>
-                    <td>
-                        <div class="button-stack">
-                            {% if current_membership and current_membership.role in ["owner", "admin"] %}
-                                {% if repository.is_active %}
-                                <span class="button button-ghost is-disabled">監視中</span>
-                                {% elif repository.can_activate %}
-                                <form method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ repository.id }}/activate">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                    <button class="button button-primary" type="submit">選択</button>
-                                </form>
-                                {% else %}
-                                <span class="button button-ghost is-disabled">操作できません</span>
-                                {% endif %}
+                    </span>
+                </div>
+                <div class="repository-catalog-copy">
+                    <div class="repository-catalog-title-row">
+                        <strong class="repository-catalog-name">{{ repository.display_name }}</strong>
+                        <span class="material-symbols-outlined repository-catalog-visibility" aria-hidden="true">
+                            {% if repository.visibility == "public" %}
+                            public
                             {% else %}
-                            <span class="muted-copy">owner / admin が操作できます</span>
+                            lock
                             {% endif %}
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                        </span>
+                        <span class="status-badge {{ repository.status_class }}">{{ repository.status_label }}</span>
+                    </div>
+                    <div class="repository-catalog-full-name">{{ repository.full_name }}</div>
+                    <div class="repository-catalog-meta">
+                        <span class="repository-catalog-meta-item">
+                            <span class="material-symbols-outlined" aria-hidden="true">account_tree</span>
+                            {{ repository.default_branch }}
+                        </span>
+                        <span class="repository-catalog-meta-divider" aria-hidden="true">•</span>
+                        <span class="repository-catalog-meta-item">{{ repository.visibility }}</span>
+                    </div>
+                    {% if repository.helper_text %}
+                    <div class="repository-catalog-helper">{{ repository.helper_text }}</div>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="repository-catalog-actions">
+                {% if current_membership and current_membership.role in ["owner", "admin"] %}
+                    {% if repository.is_active %}
+                    <span class="button button-ghost is-disabled">監視中</span>
+                    {% elif repository.can_activate %}
+                    <form method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ repository.id }}/activate">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="button button-primary" type="submit">選択</button>
+                    </form>
+                    {% else %}
+                    <span class="button button-ghost is-disabled">操作できません</span>
+                    {% endif %}
+                {% else %}
+                <span class="muted-copy">owner / admin が操作できます</span>
+                {% endif %}
+            </div>
+        </article>
+        {% endfor %}
     </div>
     {% endif %}
 </section>

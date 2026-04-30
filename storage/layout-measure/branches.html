@@ -1,6 +1,198 @@
-{% extends "hotdock/layouts/app_base.html" %}
-
-{% block content %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Measure UI Team | ブランチ | Hotdock</title>
+    <meta name="description" content="workspace branch 一覧。">
+    <script>
+        window.tailwind = window.tailwind || {};
+        window.tailwind.config = {
+            corePlugins: {
+                preflight: false,
+            },
+        };
+    </script>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/hotdock/css/tokens.css?v=1777469266">
+    <link rel="stylesheet" href="/static/hotdock/css/base.css?v=1777469273">
+    <link rel="stylesheet" href="/static/hotdock/css/layout.css?v=1776128813">
+    <link rel="stylesheet" href="/static/hotdock/css/components.css?v=1776518396">
+    <link rel="stylesheet" href="/static/hotdock/css/app.css?v=1777507779">
+</head>
+<body class="page-app page-workspace">
+    <div class="app-shell">
+        <aside class="app-sidebar" data-app-sidebar>
+    <div class="app-sidebar-head">
+        <a class="brand-mark" href="/">Hotdock</a>
+    </div>
+    <div class="app-sidebar-workspace">
+        <p class="eyebrow">Workspace</p>
+        <strong>Measure UI Team</strong>
+        <span>監視対象と競合をまとめて管理</span>
+    </div>
+    <nav class="app-sidebar-nav" aria-label="App">
+        
+        
+        <div class="sidebar-section">
+            <p class="sidebar-section-title">概要</p>
+            
+            <a class="" href="/workspaces/measure-ui-team/dashboard">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    dashboard
+                </span>
+                
+                <span>ダッシュボード</span>
+            </a>
+            
+        </div>
+        
+        
+        
+        <div class="sidebar-section">
+            <p class="sidebar-section-title">監視</p>
+            
+            <a class="" href="/workspaces/measure-ui-team/file-tree">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    account_tree
+                </span>
+                
+                <span>ファイルツリー</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/repositories">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    source
+                </span>
+                
+                <span>リポジトリ</span>
+            </a>
+            
+            <a class="is-active" href="/workspaces/measure-ui-team/branches">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    fork_right
+                </span>
+                
+                <span>ブランチ</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/conflicts">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    warning
+                </span>
+                
+                <span>競合</span>
+            </a>
+            
+        </div>
+        
+        
+        
+        <div class="sidebar-section">
+            <p class="sidebar-section-title">ワークスペース</p>
+            
+            <a class="" href="/workspaces/measure-ui-team/members">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    groups
+                </span>
+                
+                <span>メンバー</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/settings">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    settings
+                </span>
+                
+                <span>設定</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/billing">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    payments
+                </span>
+                
+                <span>請求</span>
+            </a>
+            
+            <a class="" href="/settings/integrations/github?workspace=measure-ui-team">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    integration_instructions
+                </span>
+                
+                <span>GitHub</span>
+            </a>
+            
+        </div>
+        
+        
+    </nav>
+</aside>
+        <div class="app-shell-main">
+            <header class="app-header">
+    <button class="sidebar-toggle" type="button" data-app-sidebar-toggle>
+        <span class="material-symbols-outlined" aria-hidden="true">menu</span>
+        <span>Menu</span>
+    </button>
+    <div class="app-header-meta">
+        
+        <span class="app-header-chip app-header-chip-muted">
+            <span class="material-symbols-outlined" aria-hidden="true">mail</span>
+            <span>measure-ui@example.com</span>
+        </span>
+        <form class="inline-form" method="post" action="/logout">
+            <input type="hidden" name="csrf_token" value="0aVUNXQoDVJGi-TxRIpnB2PbmSLH0jwgNS0ElG5xkwY">
+            <button class="button button-ghost button-small" type="submit">
+                <span class="material-symbols-outlined" aria-hidden="true">logout</span>
+                <span>ログアウト</span>
+            </button>
+        </form>
+        
+    </div>
+</header>
+            <main class="app-content">
+                
+                
+                <section class="integration-callout" aria-label="Git未連携案内">
+                    <div class="integration-callout__icon">
+                        <span class="material-symbols-outlined" aria-hidden="true">link</span>
+                    </div>
+                    <div class="integration-callout__content">
+                        <div class="integration-callout__heading">
+                            <span class="integration-callout__badge">未連携</span>
+                            <h2 class="integration-callout__title">Git連携がまだ完了していません</h2>
+                        </div>
+                        <p class="integration-callout__description">GitHub App または Backlog を連携すると、ブランチ状況や競合リスクをダッシュボードで確認できます。</p>
+                    </div>
+                    <div class="integration-callout__actions">
+                        <a class="integration-callout__button integration-callout__button--github" href="/settings/integrations/github?workspace=measure-ui-team">
+                            <svg class="integration-callout__github-icon" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.042-1.416-4.042-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path>
+                            </svg>
+                            <span>GitHub Appを連携</span>
+                        </a>
+                        <button type="button" class="integration-callout__button integration-callout__button--backlog">
+                            <span class="material-symbols-outlined" aria-hidden="true">hub</span>
+                            <span>Backlogを連携</span>
+                        </button>
+                    </div>
+                </section>
+                
+                
 <style>
     .workspace-branches {
         display: grid;
@@ -601,33 +793,43 @@
 <div class="workspace-branches" data-branch-workbench>
     <div class="branch-workbench-toolbar">
         <div class="branch-workbench-meta">
-            {% if active_repository %}
-            <span class="branch-workbench-chip">
-                <span class="material-symbols-outlined" aria-hidden="true">source</span>
-                監視中: {{ active_repository.display_name }}
-            </span>
-            {% endif %}
+            
         </div>
-        {% if active_repository and current_membership and current_membership.role in ["owner", "admin"] %}
-        <button class="button button-primary" type="button" data-branch-modal-open>
-            <span class="material-symbols-outlined" aria-hidden="true">add</span>
-            Add Branch
-        </button>
-        {% endif %}
+        
     </div>
 
     <div class="branches-summary-grid">
-        {% for card in branch_summary_cards %}
-        <article class="branches-summary-card {% if card.class == 'is-conflict' %}branches-summary-card--conflict{% elif card.class == 'is-active' %}branches-summary-card--active{% endif %}">
+        
+        <article class="branches-summary-card ">
             <div class="branches-summary-card__icon">
-                <span class="material-symbols-outlined" aria-hidden="true">{{ card.icon }}</span>
+                <span class="material-symbols-outlined" aria-hidden="true">account_tree</span>
             </div>
             <div class="branches-summary-card__body">
-                <div class="branches-summary-card__label">{{ card.label }}</div>
-                <div class="branches-summary-card__value">{{ card.value }}</div>
+                <div class="branches-summary-card__label">ブランチ数</div>
+                <div class="branches-summary-card__value">0</div>
             </div>
         </article>
-        {% endfor %}
+        
+        <article class="branches-summary-card branches-summary-card--conflict">
+            <div class="branches-summary-card__icon">
+                <span class="material-symbols-outlined" aria-hidden="true">warning</span>
+            </div>
+            <div class="branches-summary-card__body">
+                <div class="branches-summary-card__label">競合数</div>
+                <div class="branches-summary-card__value">0</div>
+            </div>
+        </article>
+        
+        <article class="branches-summary-card branches-summary-card--active">
+            <div class="branches-summary-card__icon">
+                <span class="material-symbols-outlined" aria-hidden="true">bolt</span>
+            </div>
+            <div class="branches-summary-card__body">
+                <div class="branches-summary-card__label">アクティブ(1週間以内)</div>
+                <div class="branches-summary-card__value">0</div>
+            </div>
+        </article>
+        
     </div>
 
     <section class="panel branch-list-surface" data-branch-browser>
@@ -636,15 +838,25 @@
                 <div class="branches-filter-search">
                     <label class="branch-visually-hidden" for="branch-search">ブランチ名を検索</label>
                     <span class="material-symbols-outlined branches-filter-search__icon" aria-hidden="true">search</span>
-                    <input id="branch-search" type="search" class="branches-filter-search__input" placeholder="名前で検索..." data-branch-search value="{{ branch_search_query or '' }}">
+                    <input id="branch-search" type="search" class="branches-filter-search__input" placeholder="名前で検索..." data-branch-search value="">
                 </div>
 
                 <label class="branches-filter-select" for="branch-status-filter">
                     <span class="material-symbols-outlined branches-filter-select__icon" aria-hidden="true">filter_list</span>
                     <select id="branch-status-filter" class="branches-filter-select__control" data-branch-status-filter>
-                        {% for option in branch_filter_options %}
-                        <option value="{{ option.value }}">{{ option.label }}</option>
-                        {% endfor %}
+                        
+                        <option value="all">状態: すべて</option>
+                        
+                        <option value="conflict">状態: 競合中</option>
+                        
+                        <option value="warning">状態: エラー / 要確認</option>
+                        
+                        <option value="pending">状態: 比較待ち / 要確認</option>
+                        
+                        <option value="manual">状態: 手動登録</option>
+                        
+                        <option value="active">状態: 監視中</option>
+                        
                     </select>
                 </label>
 
@@ -661,148 +873,15 @@
             </div>
         </div>
 
-        {% if branches %}
-        <div class="branch-table-shell">
-            <div class="table-wrap">
-                <table class="branch-workbench-table">
-                    <thead>
-                        <tr>
-                            <th>ブランチ名</th>
-                            <th>最終更新</th>
-                            <th>編集ファイル</th>
-                            <th class="branch-actions-cell">操作</th>
-                        </tr>
-                    </thead>
-                    <tbody data-branch-table-body>
-                        {% for branch in branches %}
-                        <tr
-                            data-branch-row
-                            data-branch-id="{{ branch.id }}"
-                            data-branch-name="{{ branch.name|lower }}"
-                            data-branch-search-text="{{ branch.search_text }}"
-                            data-branch-status="{{ branch.list_status_key }}"
-                            data-last-push-sort="{{ branch.last_push_sort }}"
-                            data-conflicts="{{ branch.conflict_files_count }}"
-                            class="{% if branch.is_conflict %}is-conflict{% endif %}"
-                        >
-                            <td>
-                                <div class="branch-name-cell">
-                                    <span class="material-symbols-outlined branch-name-icon {{ branch.row_icon_class }}" aria-hidden="true">{{ branch.row_icon }}</span>
-                                    <div class="branch-name-copy">
-                                        <a class="branch-name-link {% if branch.is_conflict %}is-conflict{% endif %}" href="{{ branch.detail_href }}">{{ branch.name }}</a>
-                                        <div class="branch-subcopy">
-                                            <span>{{ branch.subline }}</span>
-                                            {% if branch.list_status_key != "active" %}
-                                            <span class="branch-status-pill {{ branch.list_status_class }}">{{ branch.list_status_label }}</span>
-                                            {% endif %}
-                                        </div>
-                                    </div>
-                                </div>
-                            </td>
-                            <td>
-                                <div class="branch-updated-copy">
-                                    <strong>{{ branch.last_push_relative }}</strong>
-                                    <span>{{ branch.last_push_display }}</span>
-                                </div>
-                            </td>
-                            <td>
-                                <div class="branch-files-cell">
-                                    <strong>{{ branch.touched_files_count }} ファイル</strong>
-                                    <span class="branch-activity-meter {{ branch.activity_class }}" aria-hidden="true">
-                                        {% for _ in range(branch.activity_segments) %}
-                                        <span></span>
-                                        {% endfor %}
-                                    </span>
-                                </div>
-                            </td>
-                            <td class="branch-actions-cell">
-                                <div class="branch-actions">
-                                    {% if branch.is_conflict %}
-                                    <a class="button button-secondary button-small" href="{{ branch.conflict_detail_href }}">詳細</a>
-                                    {% endif %}
-                                    <button class="button button-ghost button-small" type="button" data-branch-ignore="{{ branch.id }}">Ignore</button>
-                                    <button class="branch-delete-button" type="button" data-branch-delete="{{ branch.id }}" aria-label="削除">
-                                        <span class="material-symbols-outlined" aria-hidden="true">delete</span>
-                                    </button>
-                                </div>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            <div class="branch-table-footer">
-                <span data-branch-pagination-summary></span>
-                <div class="branch-pagination">
-                    <button class="button button-ghost button-small" type="button" data-branch-prev>前へ</button>
-                    <button class="button button-ghost button-small" type="button" data-branch-next>次へ</button>
-                </div>
-            </div>
-        </div>
-        <div class="empty-inline branch-hidden" data-branch-empty-search>一致するブランチはありません。</div>
-        {% else %}
+        
         <div class="empty-state">
             <h3>ブランチはまだありません</h3>
+            <p>監視対象 repository を選んだあと、その repository への push webhook が届くとブランチが作成されます。</p>
         </div>
-        {% endif %}
+        
     </section>
 
-    {% if active_repository and current_membership and current_membership.role in ["owner", "admin"] %}
-    <div class="branch-modal" hidden data-branch-modal {% if manual_branch_result %}data-open-on-load="true"{% endif %}>
-        <div class="branch-modal-backdrop" data-branch-modal-close></div>
-        <div class="branch-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="branch-modal-title">
-            <div class="branch-modal-head">
-                <div>
-                    <h3 id="branch-modal-title">ブランチを手動登録</h3>
-                    <p>既存ブランチを補助的に登録し、touched files をその時点の snapshot として反映します。</p>
-                </div>
-                <button class="branch-modal-close" type="button" data-branch-modal-close aria-label="閉じる">✕</button>
-            </div>
-
-            <div class="branch-modal-grid">
-                <div class="branch-modal-card">
-                    <strong>コマンド例</strong>
-                    <p>このコマンドの出力をそのまま貼り付けてください。</p>
-                    <pre class="code-block">{{ manual_branch_command_example }}</pre>
-                </div>
-                <div class="branch-modal-card">
-                    <strong>受け入れ可能な出力例</strong>
-                    <p>1行目は `BRANCH:&lt;branch_name&gt;`、2行目以降は `git diff --name-status` の結果です。</p>
-                    <pre class="code-block">{{ manual_branch_output_example }}</pre>
-                </div>
-            </div>
-
-            <form class="form-stack manual-branch-form" method="post" action="/workspaces/{{ workspace.slug }}/repositories/{{ active_repository.id }}/branches/manual-register">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="next_path" value="/workspaces/{{ workspace.slug }}/branches">
-                <label for="manual_branch_input">出力結果</label>
-                <textarea
-                    id="manual_branch_input"
-                    name="manual_branch_input"
-                    rows="12"
-                    placeholder="{{ manual_branch_output_example }}"
-                    required
-                ></textarea>
-                <div class="button-row">
-                    <button class="button button-primary" type="submit">登録する</button>
-                </div>
-            </form>
-
-            <div class="branch-modal-result {% if manual_branch_result and manual_branch_result.status == 'error' %}is-error{% endif %}">
-                {% if manual_branch_result and manual_branch_result.status == "success" %}
-                <p><strong>登録成功:</strong> {{ manual_branch_result.branch_name }}</p>
-                <p class="muted-copy">反映ファイル数: {{ manual_branch_result.applied_file_count }} / parsed {{ manual_branch_result.parsed_file_count }}</p>
-                <p class="muted-copy">再活性化: {{ "はい" if manual_branch_result.reactivated else "いいえ" }}</p>
-                {% elif manual_branch_result and manual_branch_result.status == "error" %}
-                <p><strong>登録失敗</strong></p>
-                <p class="muted-copy">{{ manual_branch_result.message }}</p>
-                {% else %}
-                <p class="muted-copy">登録結果はここに表示されます。</p>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-    {% endif %}
+    
 </div>
 
 <script>
@@ -972,4 +1051,10 @@
         }
     });
 </script>
-{% endblock %}
+
+            </main>
+        </div>
+    </div>
+    <script src="/static/hotdock/js/app.js?v=1776131625" defer></script>
+</body>
+</html>

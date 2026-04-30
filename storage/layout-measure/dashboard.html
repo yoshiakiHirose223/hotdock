@@ -1,8 +1,201 @@
-{% extends "hotdock/layouts/app_base.html" %}
-
-{% block content %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Measure UI Team | ダッシュボード | Hotdock</title>
+    <meta name="description" content="競合と監視状況の概要">
+    <script>
+        window.tailwind = window.tailwind || {};
+        window.tailwind.config = {
+            corePlugins: {
+                preflight: false,
+            },
+        };
+    </script>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/hotdock/css/tokens.css?v=1777469266">
+    <link rel="stylesheet" href="/static/hotdock/css/base.css?v=1777469273">
+    <link rel="stylesheet" href="/static/hotdock/css/layout.css?v=1776128813">
+    <link rel="stylesheet" href="/static/hotdock/css/components.css?v=1776518396">
+    <link rel="stylesheet" href="/static/hotdock/css/app.css?v=1777507779">
+</head>
+<body class="page-app page-workspace">
+    <div class="app-shell">
+        <aside class="app-sidebar" data-app-sidebar>
+    <div class="app-sidebar-head">
+        <a class="brand-mark" href="/">Hotdock</a>
+    </div>
+    <div class="app-sidebar-workspace">
+        <p class="eyebrow">Workspace</p>
+        <strong>Measure UI Team</strong>
+        <span>監視対象と競合をまとめて管理</span>
+    </div>
+    <nav class="app-sidebar-nav" aria-label="App">
+        
+        
+        <div class="sidebar-section">
+            <p class="sidebar-section-title">概要</p>
+            
+            <a class="is-active" href="/workspaces/measure-ui-team/dashboard">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    dashboard
+                </span>
+                
+                <span>ダッシュボード</span>
+            </a>
+            
+        </div>
+        
+        
+        
+        <div class="sidebar-section">
+            <p class="sidebar-section-title">監視</p>
+            
+            <a class="" href="/workspaces/measure-ui-team/file-tree">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    account_tree
+                </span>
+                
+                <span>ファイルツリー</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/repositories">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    source
+                </span>
+                
+                <span>リポジトリ</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/branches">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    fork_right
+                </span>
+                
+                <span>ブランチ</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/conflicts">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    warning
+                </span>
+                
+                <span>競合</span>
+            </a>
+            
+        </div>
+        
+        
+        
+        <div class="sidebar-section">
+            <p class="sidebar-section-title">ワークスペース</p>
+            
+            <a class="" href="/workspaces/measure-ui-team/members">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    groups
+                </span>
+                
+                <span>メンバー</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/settings">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    settings
+                </span>
+                
+                <span>設定</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/billing">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    payments
+                </span>
+                
+                <span>請求</span>
+            </a>
+            
+            <a class="" href="/settings/integrations/github?workspace=measure-ui-team">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    integration_instructions
+                </span>
+                
+                <span>GitHub</span>
+            </a>
+            
+        </div>
+        
+        
+    </nav>
+</aside>
+        <div class="app-shell-main">
+            <header class="app-header">
+    <button class="sidebar-toggle" type="button" data-app-sidebar-toggle>
+        <span class="material-symbols-outlined" aria-hidden="true">menu</span>
+        <span>Menu</span>
+    </button>
+    <div class="app-header-meta">
+        
+        <span class="app-header-chip app-header-chip-muted">
+            <span class="material-symbols-outlined" aria-hidden="true">mail</span>
+            <span>measure-ui@example.com</span>
+        </span>
+        <form class="inline-form" method="post" action="/logout">
+            <input type="hidden" name="csrf_token" value="0aVUNXQoDVJGi-TxRIpnB2PbmSLH0jwgNS0ElG5xkwY">
+            <button class="button button-ghost button-small" type="submit">
+                <span class="material-symbols-outlined" aria-hidden="true">logout</span>
+                <span>ログアウト</span>
+            </button>
+        </form>
+        
+    </div>
+</header>
+            <main class="app-content">
+                
+                
+                <section class="integration-callout" aria-label="Git未連携案内">
+                    <div class="integration-callout__icon">
+                        <span class="material-symbols-outlined" aria-hidden="true">link</span>
+                    </div>
+                    <div class="integration-callout__content">
+                        <div class="integration-callout__heading">
+                            <span class="integration-callout__badge">未連携</span>
+                            <h2 class="integration-callout__title">Git連携がまだ完了していません</h2>
+                        </div>
+                        <p class="integration-callout__description">GitHub App または Backlog を連携すると、ブランチ状況や競合リスクをダッシュボードで確認できます。</p>
+                    </div>
+                    <div class="integration-callout__actions">
+                        <a class="integration-callout__button integration-callout__button--github" href="/settings/integrations/github?workspace=measure-ui-team">
+                            <svg class="integration-callout__github-icon" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.042-1.416-4.042-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path>
+                            </svg>
+                            <span>GitHub Appを連携</span>
+                        </a>
+                        <button type="button" class="integration-callout__button integration-callout__button--backlog">
+                            <span class="material-symbols-outlined" aria-hidden="true">hub</span>
+                            <span>Backlogを連携</span>
+                        </button>
+                    </div>
+                </section>
+                
+                
 <style>
     .directory-activity-shell {
+        margin-top: 1.5rem;
         padding: 1.5rem;
         display: grid;
         gap: 1.25rem;
@@ -567,22 +760,7 @@
     }
 </style>
 
-{% if dashboard.is_unconnected and not workspace_integration_callout %}
-<section class="panel dashboard-state-banner {{ dashboard.state_banner.tone }}">
-    <div class="dashboard-state-copy">
-        <h2>{{ dashboard.state_banner.title }}</h2>
-        {% if dashboard.state_banner.subtitle %}
-        <p>{{ dashboard.state_banner.subtitle }}</p>
-        {% endif %}
-    </div>
-    <div class="dashboard-state-actions">
-        <a class="button {% if dashboard.state_banner.action.variant == 'primary' %}button-primary{% else %}button-secondary{% endif %}" href="{{ dashboard.state_banner.action.href }}">{{ dashboard.state_banner.action.label }}</a>
-        {% for action in dashboard.state_banner.extra_actions %}
-        <a class="button {% if action.variant == 'backlog' %}button-backlog{% elif action.variant == 'git' %}button-git{% else %}button-secondary{% endif %}" href="{{ action.href }}">{{ action.label }}</a>
-        {% endfor %}
-    </div>
-</section>
-{% endif %}
+
 
 <section class="panel directory-activity-shell" data-directory-activity-root>
     <div class="directory-activity-heading">
@@ -591,86 +769,95 @@
     </div>
 
     <div class="directory-activity-summary-grid">
-        {% for card in dashboard.directory_activity.summary_cards %}
-        <article class="directory-activity-summary-card {{ card.class }}">
-            <span class="directory-activity-summary-card-label">{{ card.label }}</span>
-            <strong>{{ card.value }}</strong>
-            <span>{{ card.meta }}</span>
+        
+        <article class="directory-activity-summary-card is-conflict">
+            <span class="directory-activity-summary-card-label">競合</span>
+            <strong>0</strong>
+            <span>競合中のパス</span>
         </article>
-        {% endfor %}
+        
+        <article class="directory-activity-summary-card ">
+            <span class="directory-activity-summary-card-label">7日以内更新</span>
+            <strong>0</strong>
+            <span>最近更新されたパス</span>
+        </article>
+        
+        <article class="directory-activity-summary-card ">
+            <span class="directory-activity-summary-card-label">28日以内更新</span>
+            <strong>0</strong>
+            <span>観測済みのパス</span>
+        </article>
+        
+        <article class="directory-activity-summary-card ">
+            <span class="directory-activity-summary-card-label">長期間更新なし</span>
+            <strong>0</strong>
+            <span>28日以上更新なし</span>
+        </article>
+        
+        <article class="directory-activity-summary-card ">
+            <span class="directory-activity-summary-card-label">手動追跡</span>
+            <strong>0</strong>
+            <span>手動登録ソース</span>
+        </article>
+        
     </div>
 
     <div class="directory-activity-filters">
         <div class="directory-activity-filter-field is-search">
             <label for="directory-activity-search">検索</label>
-            <input id="directory-activity-search" type="search" placeholder="path またはブランチを検索" data-directory-filter="search" {% if dashboard.directory_activity.is_empty %}disabled{% endif %}>
+            <input id="directory-activity-search" type="search" placeholder="path またはブランチを検索" data-directory-filter="search" disabled>
         </div>
         <div class="directory-activity-filter-field">
             <label for="directory-activity-branch">ブランチ</label>
-            <select id="directory-activity-branch" data-directory-filter="branch" {% if dashboard.directory_activity.is_empty %}disabled{% endif %}>
+            <select id="directory-activity-branch" data-directory-filter="branch" disabled>
                 <option value="">すべてのブランチ</option>
             </select>
         </div>
         <div class="directory-activity-filter-field">
             <label for="directory-activity-status">状態</label>
-            <select id="directory-activity-status" data-directory-filter="status" {% if dashboard.directory_activity.is_empty %}disabled{% endif %}>
+            <select id="directory-activity-status" data-directory-filter="status" disabled>
                 <option value="">すべての状態</option>
             </select>
         </div>
         <div class="directory-activity-filter-field">
             <label for="directory-activity-directory">ディレクトリ</label>
-            <select id="directory-activity-directory" data-directory-filter="directory" {% if dashboard.directory_activity.is_empty %}disabled{% endif %}>
+            <select id="directory-activity-directory" data-directory-filter="directory" disabled>
                 <option value="">すべてのディレクトリ</option>
             </select>
         </div>
-        <button class="button button-ghost button-small" type="button" data-directory-clear {% if dashboard.directory_activity.is_empty %}disabled{% endif %}>クリア</button>
+        <button class="button button-ghost button-small" type="button" data-directory-clear disabled>クリア</button>
     </div>
 
-    {% if not dashboard.directory_activity.is_empty %}
-    <div class="directory-activity-main">
-        <section class="directory-activity-tree">
-            <div class="directory-activity-tree-head">
-                <div>
-                    <strong>観測済みツリー</strong>
-                    <span>競合と最近更新を優先して、上位ディレクトリから絞り込めます</span>
-                </div>
-                <span class="directory-activity-tree-results" data-directory-results></span>
-            </div>
-            <div class="directory-activity-viewport" data-directory-viewport>
-                <div data-directory-top-spacer></div>
-                <div class="directory-activity-list" data-directory-list></div>
-                <div data-directory-bottom-spacer></div>
-            </div>
-        </section>
-
-        <aside class="directory-activity-detail" data-directory-detail>
-            <div class="directory-activity-detail-head">
-                <div>
-                    <strong>詳細</strong>
-                    <span>ファイルまたはディレクトリを選択すると、関連ブランチと更新状態を確認できます</span>
-                </div>
-            </div>
-            <div class="directory-activity-detail-empty">
-                <strong>ファイルまたはディレクトリを選択してください</strong>
-                <p>左側のツリーから対象を選ぶと、フルパス、状態、取り込み元、ブランチ一覧をここに表示します。</p>
-            </div>
-        </aside>
-    </div>
-    {% endif %}
+    
 
     <div class="directory-activity-footer">
         <div class="directory-activity-legend">
-            {% for item in dashboard.directory_activity.legend_items %}
-            <span class="directory-activity-legend-item {{ item.class }}">
+            
+            <span class="directory-activity-legend-item is-conflict">
                 <span class="directory-activity-legend-dot"></span>
-                {{ item.label }}
+                赤 = 競合
             </span>
-            {% endfor %}
+            
+            <span class="directory-activity-legend-item is-recent-7">
+                <span class="directory-activity-legend-dot"></span>
+                緑 = 7日以内に更新
+            </span>
+            
+            <span class="directory-activity-legend-item is-recent-28">
+                <span class="directory-activity-legend-dot"></span>
+                黄 = 28日以内に更新
+            </span>
+            
+            <span class="directory-activity-legend-item is-stale">
+                <span class="directory-activity-legend-dot"></span>
+                灰 = 長期間更新なし
+            </span>
+            
         </div>
-        <p class="directory-activity-note">{{ dashboard.directory_activity.note }}</p>
+        <p class="directory-activity-note">この画面は観測済みファイルのみ表示対象です。push/webhook または手動登録で検知されたもののみ対象です。</p>
     </div>
 
-    <script id="dashboard-directory-activity-data" type="application/json">{{ dashboard.directory_activity.json | safe }}</script>
+    <script id="dashboard-directory-activity-data" type="application/json">{"filters": {"branches": [], "statuses": [{"value": "conflict", "label": "競合"}, {"value": "recent_7", "label": "7日以内に更新"}, {"value": "recent_28", "label": "28日以内に更新"}, {"value": "stale", "label": "長期間更新なし"}, {"value": "unknown", "label": "不明"}], "directories": []}, "root_ids": [], "nodes": [], "default_expanded": [], "initial_selected_id": null}</script>
     <script>
         document.addEventListener("DOMContentLoaded", () => {
             const root = document.querySelector("[data-directory-activity-root]");
@@ -1094,4 +1281,10 @@
         });
     </script>
 </section>
-{% endblock %}
+
+            </main>
+        </div>
+    </div>
+    <script src="/static/hotdock/js/app.js?v=1776131625" defer></script>
+</body>
+</html>

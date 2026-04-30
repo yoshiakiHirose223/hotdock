@@ -1,6 +1,198 @@
-{% extends "hotdock/layouts/app_base.html" %}
-
-{% block content %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Measure UI Team | ファイルツリー | Hotdock</title>
+    <meta name="description" content="観測済みファイルの階層と関連ブランチを確認します。">
+    <script>
+        window.tailwind = window.tailwind || {};
+        window.tailwind.config = {
+            corePlugins: {
+                preflight: false,
+            },
+        };
+    </script>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/hotdock/css/tokens.css?v=1777469266">
+    <link rel="stylesheet" href="/static/hotdock/css/base.css?v=1777469273">
+    <link rel="stylesheet" href="/static/hotdock/css/layout.css?v=1776128813">
+    <link rel="stylesheet" href="/static/hotdock/css/components.css?v=1776518396">
+    <link rel="stylesheet" href="/static/hotdock/css/app.css?v=1777507779">
+</head>
+<body class="page-app page-workspace">
+    <div class="app-shell">
+        <aside class="app-sidebar" data-app-sidebar>
+    <div class="app-sidebar-head">
+        <a class="brand-mark" href="/">Hotdock</a>
+    </div>
+    <div class="app-sidebar-workspace">
+        <p class="eyebrow">Workspace</p>
+        <strong>Measure UI Team</strong>
+        <span>監視対象と競合をまとめて管理</span>
+    </div>
+    <nav class="app-sidebar-nav" aria-label="App">
+        
+        
+        <div class="sidebar-section">
+            <p class="sidebar-section-title">概要</p>
+            
+            <a class="" href="/workspaces/measure-ui-team/dashboard">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    dashboard
+                </span>
+                
+                <span>ダッシュボード</span>
+            </a>
+            
+        </div>
+        
+        
+        
+        <div class="sidebar-section">
+            <p class="sidebar-section-title">監視</p>
+            
+            <a class="is-active" href="/workspaces/measure-ui-team/file-tree">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    account_tree
+                </span>
+                
+                <span>ファイルツリー</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/repositories">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    source
+                </span>
+                
+                <span>リポジトリ</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/branches">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    fork_right
+                </span>
+                
+                <span>ブランチ</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/conflicts">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    warning
+                </span>
+                
+                <span>競合</span>
+            </a>
+            
+        </div>
+        
+        
+        
+        <div class="sidebar-section">
+            <p class="sidebar-section-title">ワークスペース</p>
+            
+            <a class="" href="/workspaces/measure-ui-team/members">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    groups
+                </span>
+                
+                <span>メンバー</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/settings">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    settings
+                </span>
+                
+                <span>設定</span>
+            </a>
+            
+            <a class="" href="/workspaces/measure-ui-team/billing">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    payments
+                </span>
+                
+                <span>請求</span>
+            </a>
+            
+            <a class="" href="/settings/integrations/github?workspace=measure-ui-team">
+                
+                <span class="sidebar-inline-icon material-symbols-outlined" aria-hidden="true">
+                    integration_instructions
+                </span>
+                
+                <span>GitHub</span>
+            </a>
+            
+        </div>
+        
+        
+    </nav>
+</aside>
+        <div class="app-shell-main">
+            <header class="app-header">
+    <button class="sidebar-toggle" type="button" data-app-sidebar-toggle>
+        <span class="material-symbols-outlined" aria-hidden="true">menu</span>
+        <span>Menu</span>
+    </button>
+    <div class="app-header-meta">
+        
+        <span class="app-header-chip app-header-chip-muted">
+            <span class="material-symbols-outlined" aria-hidden="true">mail</span>
+            <span>measure-ui@example.com</span>
+        </span>
+        <form class="inline-form" method="post" action="/logout">
+            <input type="hidden" name="csrf_token" value="0aVUNXQoDVJGi-TxRIpnB2PbmSLH0jwgNS0ElG5xkwY">
+            <button class="button button-ghost button-small" type="submit">
+                <span class="material-symbols-outlined" aria-hidden="true">logout</span>
+                <span>ログアウト</span>
+            </button>
+        </form>
+        
+    </div>
+</header>
+            <main class="app-content">
+                
+                
+                <section class="integration-callout" aria-label="Git未連携案内">
+                    <div class="integration-callout__icon">
+                        <span class="material-symbols-outlined" aria-hidden="true">link</span>
+                    </div>
+                    <div class="integration-callout__content">
+                        <div class="integration-callout__heading">
+                            <span class="integration-callout__badge">未連携</span>
+                            <h2 class="integration-callout__title">Git連携がまだ完了していません</h2>
+                        </div>
+                        <p class="integration-callout__description">GitHub App または Backlog を連携すると、ブランチ状況や競合リスクをダッシュボードで確認できます。</p>
+                    </div>
+                    <div class="integration-callout__actions">
+                        <a class="integration-callout__button integration-callout__button--github" href="/settings/integrations/github?workspace=measure-ui-team">
+                            <svg class="integration-callout__github-icon" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.042-1.416-4.042-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path>
+                            </svg>
+                            <span>GitHub Appを連携</span>
+                        </a>
+                        <button type="button" class="integration-callout__button integration-callout__button--backlog">
+                            <span class="material-symbols-outlined" aria-hidden="true">hub</span>
+                            <span>Backlogを連携</span>
+                        </button>
+                    </div>
+                </section>
+                
+                
 <style>
     .file-tree-page {
         display: grid;
@@ -746,27 +938,25 @@
             </div>
             <div class="file-tree-search">
                 <label for="file-tree-search">検索</label>
-                <input id="file-tree-search" type="search" placeholder="ファイルまたはパスを検索" data-file-tree-search {% if file_tree.is_empty %}disabled{% endif %}>
+                <input id="file-tree-search" type="search" placeholder="ファイルまたはパスを検索" data-file-tree-search disabled>
             </div>
             <div class="file-tree-results" data-file-tree-results></div>
-            <div class="file-tree-viewport {% if file_tree.is_empty %}is-empty{% endif %}" data-file-tree-viewport>
+            <div class="file-tree-viewport is-empty" data-file-tree-viewport>
                 <div data-file-tree-top-spacer></div>
-                <div class="file-tree-list {% if file_tree.is_empty %}is-empty{% endif %}" data-file-tree-list>
+                <div class="file-tree-list is-empty" data-file-tree-list>
                 </div>
                 <div data-file-tree-bottom-spacer></div>
             </div>
         </section>
 
-        <aside class="file-tree-detail {% if file_tree.is_empty %}is-empty{% endif %}" data-file-tree-detail>
+        <aside class="file-tree-detail is-empty" data-file-tree-detail>
             <div class="file-tree-detail-head">
                 <div>
                     <strong>詳細</strong>
                 </div>
             </div>
             <div class="file-tree-detail-empty">
-                {% if not file_tree.is_empty %}
-                <strong>ファイルを選択してください</strong>
-                {% endif %}
+                
             </div>
         </aside>
     </div>
@@ -780,10 +970,10 @@
             <span class="file-tree-legend-item"><span class="file-tree-legend-dot is-manual"></span>手動追跡</span>
             <span class="file-tree-legend-item"><span class="file-tree-legend-dot is-stale"></span>長期間更新なし</span>
         </div>
-        <p class="file-tree-note">{{ file_tree.note }}</p>
+        <p class="file-tree-note">表示対象は Hotdock が観測済みのファイルのみです。GitHub リポジトリ全体の全ファイルは表示しません。</p>
     </div>
 
-    <script id="workspace-file-tree-data" type="application/json">{{ file_tree.json | safe }}</script>
+    <script id="workspace-file-tree-data" type="application/json">{"root_ids": [], "nodes": [], "default_expanded": [], "initial_selected_id": null, "branch_filter_options": [{"value": "all", "label": "すべてのアクティブブランチ"}, {"value": "conflict", "label": "競合中のみ"}, {"value": "overlap", "label": "重複編集のみ"}, {"value": "changed", "label": "最近更新のみ"}, {"value": "manual", "label": "手動追跡のみ"}]}</script>
     <script>
         document.addEventListener("DOMContentLoaded", () => {
             const root = document.querySelector("[data-file-tree-page]");
@@ -1309,4 +1499,10 @@
         });
     </script>
 </div>
-{% endblock %}
+
+            </main>
+        </div>
+    </div>
+    <script src="/static/hotdock/js/app.js?v=1776131625" defer></script>
+</body>
+</html>

@@ -66,6 +66,18 @@ def render_app(template_name: str, context: dict[str, Any]):
     )
 
 
+def _workspace_integration_callout(workspace: Workspace, claimed_installations: list[GithubInstallation]) -> dict[str, Any] | None:
+    if claimed_installations:
+        return None
+    return {
+        "badge": "未連携",
+        "title": "Git連携がまだ完了していません",
+        "description": "GitHub App または Backlog を連携すると、ブランチ状況や競合リスクをダッシュボードで確認できます。",
+        "github_href": f"/settings/integrations/github?workspace={workspace.slug}",
+        "backlog_href": "#",
+    }
+
+
 def workspace_page_context(
     request: Request,
     db: Session,
@@ -79,6 +91,9 @@ def workspace_page_context(
     current_membership,
 ) -> dict[str, Any]:
     auth = attach_auth_context(request, db)
+    claimed_installations = db.scalars(
+        select(GithubInstallation).where(GithubInstallation.claimed_workspace_id == workspace.id)
+    ).all()
     context = build_app_context(
         request,
         page_title=page_title,
@@ -98,6 +113,7 @@ def workspace_page_context(
             "flash": get_flash(request),
             "csrf_token": auth.csrf_token,
             "sidebar_bookmarks": {"items": [], "remaining_count": 0},
+            "workspace_integration_callout": _workspace_integration_callout(workspace, claimed_installations),
         }
     )
     return context
