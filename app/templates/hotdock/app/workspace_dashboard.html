@@ -2,1096 +2,364 @@
 
 {% block content %}
 <style>
-    .directory-activity-shell {
-        padding: 1.5rem;
+    .dashboard-top-shell {
         display: grid;
         gap: 1.25rem;
-        border: 1px solid rgba(15, 23, 42, 0.08);
     }
 
-    .directory-activity-heading {
+    .dashboard-top-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+    }
+
+    .dashboard-top-card {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        min-height: 112px;
+        padding: 1.15rem 1.25rem;
+        border: 1px solid #d8e1ec;
+        border-radius: 12px;
+        background: #ffffff;
+        box-shadow: 0 1px 2px rgba(20, 28, 37, 0.04);
+    }
+
+    .dashboard-top-card.is-conflict {
+        border-color: rgba(220, 38, 38, 0.22);
+        box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.04);
+    }
+
+    .dashboard-top-card__icon {
+        width: 52px;
+        height: 52px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        background: #ecf4ff;
+        color: #0051ae;
+    }
+
+    .dashboard-top-card__icon .material-symbols-outlined {
+        font-size: 24px;
+    }
+
+    .dashboard-top-card.is-conflict .dashboard-top-card__icon {
+        background: #fff1f1;
+        color: #ba1a1a;
+    }
+
+    .dashboard-top-card.is-branch .dashboard-top-card__icon {
+        background: #eef3ff;
+        color: #365fbe;
+    }
+
+    .dashboard-top-card__body {
         display: grid;
         gap: 0.35rem;
+        min-width: 0;
     }
 
-    .directory-activity-heading h2 {
-        margin: 0;
-        font-size: 1.55rem;
-        line-height: 1.15;
-        letter-spacing: -0.02em;
-        color: #0f172a;
-    }
-
-    .directory-activity-heading p {
+    .dashboard-top-card__label {
         margin: 0;
         color: #64748b;
-        font-size: 0.95rem;
-    }
-
-    .directory-activity-summary-grid {
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 0.85rem;
-    }
-
-    .directory-activity-summary-card {
-        min-height: 124px;
-        padding: 1rem 1.05rem;
-        border: 1px solid rgba(15, 23, 42, 0.08);
-        border-radius: 16px;
-        background: #fff;
-        display: grid;
-        align-content: space-between;
-        gap: 0.55rem;
-    }
-
-    .directory-activity-summary-card.is-conflict {
-        border-color: rgba(220, 38, 38, 0.18);
-        box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.05);
-    }
-
-    .directory-activity-summary-card-label {
-        font-size: 0.79rem;
+        font-size: 0.76rem;
+        font-weight: 700;
+        line-height: 1.2;
+        letter-spacing: 0.06em;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: #64748b;
     }
 
-    .directory-activity-summary-card strong {
-        display: block;
-        font-size: 2rem;
-        line-height: 1;
+    .dashboard-top-card__value {
+        margin: 0;
         color: #0f172a;
+        font-size: 2rem;
+        font-weight: 800;
+        line-height: 1;
+        letter-spacing: -0.03em;
     }
 
-    .directory-activity-summary-card span {
+    .dashboard-top-card__meta {
+        margin: 0;
         color: #64748b;
-        font-size: 0.87rem;
+        font-size: 0.88rem;
+        line-height: 1.45;
     }
 
-    .directory-activity-filters {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.75rem;
-        align-items: center;
-        padding: 0.95rem 0;
-        border-top: 1px solid rgba(15, 23, 42, 0.08);
-        border-bottom: 1px solid rgba(15, 23, 42, 0.08);
-    }
-
-    .directory-activity-filter-field {
+    .dashboard-top-sections {
         display: grid;
-        gap: 0.3rem;
-        min-width: 0;
-    }
-
-    .directory-activity-filter-field label {
-        font-size: 0.78rem;
-        color: #64748b;
-    }
-
-    .directory-activity-filter-field.is-search {
-        flex: 1 1 320px;
-    }
-
-    .directory-activity-filter-field input,
-    .directory-activity-filter-field select {
-        width: 100%;
-        min-width: 0;
-    }
-
-    .directory-activity-main {
-        display: grid;
-        grid-template-columns: minmax(0, 2.05fr) minmax(280px, 1fr);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 1rem;
-        align-items: start;
     }
 
-    .directory-activity-tree,
-    .directory-activity-detail {
-        border: 1px solid rgba(15, 23, 42, 0.08);
-        border-radius: 18px;
-        background: #fff;
-    }
-
-    .directory-activity-tree {
-        display: grid;
+    .dashboard-top-panel {
+        padding: 0;
         overflow: hidden;
+        border: 1px solid #d8e1ec;
+        border-radius: 12px;
+        background: #ffffff;
+        box-shadow: 0 1px 2px rgba(20, 28, 37, 0.04);
     }
 
-    .directory-activity-tree-head,
-    .directory-activity-detail-head {
+    .dashboard-top-panel__head {
         display: flex;
+        align-items: center;
         justify-content: space-between;
         gap: 1rem;
-        align-items: start;
-        padding: 1rem 1rem 0.85rem;
+        padding: 1rem 1.25rem;
         border-bottom: 1px solid rgba(15, 23, 42, 0.08);
     }
 
-    .directory-activity-tree-head strong,
-    .directory-activity-detail-head strong {
-        display: block;
-        margin-bottom: 0.2rem;
-        color: #0f172a;
+    .dashboard-top-panel__title {
+        margin: 0;
+        color: #141c25;
+        font-size: 1rem;
+        font-weight: 700;
+        line-height: 1.3;
     }
 
-    .directory-activity-tree-head span,
-    .directory-activity-detail-head span,
-    .directory-activity-tree-results {
-        color: #64748b;
-        font-size: 0.87rem;
-    }
-
-    .directory-activity-viewport {
-        max-height: 680px;
-        overflow: auto;
-        background: linear-gradient(180deg, rgba(248, 250, 252, 0.6), rgba(255, 255, 255, 0));
-    }
-
-    .directory-activity-list {
-        display: grid;
-    }
-
-    .directory-activity-row {
-        display: grid;
-        grid-template-columns: minmax(0, 1.7fr) minmax(180px, 1fr) auto;
-        align-items: center;
-        min-height: 56px;
-        padding: 0 1rem;
-        border-bottom: 1px solid rgba(15, 23, 42, 0.06);
-        position: relative;
-        background: #fff;
-    }
-
-    .directory-activity-row:last-child {
-        border-bottom: 0;
-    }
-
-    .directory-activity-row.is-selected {
-        background: rgba(15, 23, 42, 0.03);
-    }
-
-    .directory-activity-row.is-root {
-        background: rgba(248, 250, 252, 0.85);
-    }
-
-    .directory-activity-row.is-root.is-selected {
-        background: rgba(226, 232, 240, 0.7);
-    }
-
-    .directory-activity-row.is-root .directory-activity-name {
-        font-size: 0.97rem;
-        letter-spacing: -0.01em;
-    }
-
-    .directory-activity-row.is-root .directory-activity-node-icon {
-        color: #0f172a;
-    }
-
-    .directory-activity-repository-chip {
+    .dashboard-top-panel__count {
         display: inline-flex;
         align-items: center;
+        justify-content: center;
         padding: 0.18rem 0.5rem;
         border-radius: 999px;
-        background: rgba(15, 23, 42, 0.06);
-        color: #475569;
-        font-size: 0.72rem;
-        line-height: 1.2;
-        border: 1px solid rgba(15, 23, 42, 0.08);
+        background: #eef3ff;
+        color: #365fbe;
+        font-size: 0.75rem;
+        font-weight: 700;
         white-space: nowrap;
     }
 
-    .directory-activity-row::before {
-        content: "";
-        position: absolute;
-        left: 0;
-        top: 10px;
-        bottom: 10px;
-        width: 3px;
-        border-radius: 999px;
-        background: transparent;
+    .dashboard-top-list {
+        display: grid;
     }
 
-    .directory-activity-row.is-conflict::before {
-        background: #dc2626;
+    .dashboard-top-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.85rem 1rem;
+        padding: 1rem 1.25rem;
+        border-top: 1px solid rgba(15, 23, 42, 0.08);
+        align-items: start;
     }
 
-    .directory-activity-row.is-recent-7::before {
-        background: #16a34a;
+    .dashboard-top-row:first-child {
+        border-top: 0;
     }
 
-    .directory-activity-row.is-recent-28::before {
-        background: #d97706;
-    }
-
-    .directory-activity-row.is-stale::before {
-        background: #94a3b8;
-    }
-
-    .directory-activity-row.is-unknown::before {
-        background: #cbd5e1;
-    }
-
-    .directory-activity-row-main {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
+    .dashboard-top-row__main {
+        display: grid;
+        gap: 0.45rem;
         min-width: 0;
     }
 
-    .directory-activity-row-button,
-    .directory-activity-row-directory-button {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        min-width: 0;
-        padding: 0;
-        border: 0;
-        background: transparent;
-        color: inherit;
-        text-align: left;
-        font: inherit;
-        cursor: pointer;
-    }
-
-    .directory-activity-row-directory-button {
-        width: 100%;
-    }
-
-    .directory-activity-indent {
-        width: calc(var(--depth, 0) * 18px);
-        flex: 0 0 auto;
-    }
-
-    .directory-activity-chevron,
-    .directory-activity-node-icon {
-        flex: 0 0 auto;
-        color: #94a3b8;
-        font-size: 0.88rem;
-    }
-
-    .directory-activity-name {
-        color: #0f172a;
-        font-weight: 600;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .directory-activity-status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 999px;
-        background: currentColor;
-        opacity: 0.9;
-        flex: 0 0 auto;
-    }
-
-    .directory-activity-row.is-conflict .directory-activity-status-dot {
-        color: #dc2626;
-    }
-
-    .directory-activity-row.is-recent-7 .directory-activity-status-dot {
-        color: #16a34a;
-    }
-
-    .directory-activity-row.is-recent-28 .directory-activity-status-dot {
-        color: #d97706;
-    }
-
-    .directory-activity-row.is-stale .directory-activity-status-dot {
-        color: #94a3b8;
-    }
-
-    .directory-activity-row.is-unknown .directory-activity-status-dot {
-        color: #cbd5e1;
-    }
-
-    .directory-activity-row-metrics,
-    .directory-activity-row-branches {
+    .dashboard-top-row__headline {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.45rem;
         align-items: center;
-        justify-content: flex-start;
+        gap: 0.5rem;
         min-width: 0;
     }
 
-    .directory-activity-chip,
-    .directory-activity-branch-link,
-    .directory-activity-source-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.3rem;
-        padding: 0.22rem 0.55rem;
-        border-radius: 999px;
-        font-size: 0.76rem;
-        line-height: 1.2;
-        border: 1px solid rgba(148, 163, 184, 0.22);
-        background: #f8fafc;
-        color: #475569;
-        white-space: nowrap;
-        text-decoration: none;
-    }
-
-    .directory-activity-chip.is-conflict {
-        border-color: rgba(220, 38, 38, 0.18);
-        background: rgba(254, 242, 242, 0.9);
-        color: #b91c1c;
-    }
-
-    .directory-activity-branch-link:hover,
-    .directory-activity-chip:hover {
-        background: #eef2ff;
-        color: #1e3a8a;
-    }
-
-    .directory-activity-source-chip {
-        background: #fff;
-    }
-
-    .directory-activity-row-time {
-        color: #64748b;
-        font-size: 0.82rem;
-        justify-self: end;
-        white-space: nowrap;
-    }
-
-    .directory-activity-detail {
-        display: grid;
-        align-content: start;
-        min-height: 680px;
-    }
-
-    .directory-activity-detail-body {
-        display: grid;
-        gap: 1rem;
-        padding: 1rem;
-    }
-
-    .directory-activity-detail-body h3 {
-        margin: 0;
-        font-size: 1.15rem;
+    .dashboard-top-row__headline strong {
+        min-width: 0;
         color: #0f172a;
-    }
-
-    .directory-activity-detail-path {
-        margin: 0.3rem 0 0;
-        color: #64748b;
-        font-size: 0.87rem;
+        font-size: 0.97rem;
+        line-height: 1.35;
+        letter-spacing: -0.01em;
         word-break: break-word;
     }
 
-    .directory-activity-detail-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 0.75rem;
-    }
-
-    .directory-activity-detail-stat {
-        display: grid;
-        gap: 0.18rem;
-        padding: 0.85rem;
-        border: 1px solid rgba(15, 23, 42, 0.08);
-        border-radius: 14px;
-        background: rgba(248, 250, 252, 0.55);
-    }
-
-    .directory-activity-detail-stat span {
-        font-size: 0.76rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
+    .dashboard-top-row__subline,
+    .dashboard-top-row__meta {
+        margin: 0;
         color: #64748b;
+        font-size: 0.85rem;
+        line-height: 1.45;
     }
 
-    .directory-activity-detail-stat strong {
-        font-size: 0.96rem;
-        color: #0f172a;
-    }
-
-    .directory-activity-detail-section {
-        display: grid;
-        gap: 0.7rem;
-    }
-
-    .directory-activity-detail-section-title {
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: #64748b;
-    }
-
-    .directory-activity-branch-list {
+    .dashboard-top-row__meta {
         display: flex;
         flex-wrap: wrap;
         gap: 0.5rem;
     }
 
-    .directory-activity-empty,
-    .directory-activity-no-results,
-    .directory-activity-detail-empty {
-        display: grid;
-        place-items: center;
-        gap: 0.6rem;
-        padding: 2rem 1.5rem;
-        text-align: center;
-        color: #475569;
-    }
-
-    .directory-activity-empty h3,
-    .directory-activity-no-results strong,
-    .directory-activity-detail-empty strong {
-        margin: 0;
-        color: #0f172a;
-    }
-
-    .directory-activity-empty p,
-    .directory-activity-no-results p,
-    .directory-activity-detail-empty p {
-        margin: 0;
-        max-width: 44ch;
+    .dashboard-top-row__time {
         color: #64748b;
+        font-size: 0.82rem;
+        line-height: 1.3;
+        white-space: nowrap;
+        justify-self: end;
     }
 
-    .directory-activity-empty-icon {
-        width: 48px;
-        height: 48px;
-        border-radius: 16px;
-        display: grid;
-        place-items: center;
-        background: rgba(15, 23, 42, 0.04);
-        color: #475569;
-        font-weight: 700;
-    }
-
-    .directory-activity-footer {
-        display: grid;
-        gap: 0.75rem;
-        padding-top: 0.2rem;
-    }
-
-    .directory-activity-legend {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.75rem;
-    }
-
-    .directory-activity-legend-item {
+    .dashboard-top-badge {
         display: inline-flex;
         align-items: center;
-        gap: 0.45rem;
-        color: #475569;
-        font-size: 0.84rem;
-    }
-
-    .directory-activity-legend-dot {
-        width: 8px;
-        height: 8px;
+        justify-content: center;
+        gap: 0.25rem;
+        min-height: 26px;
+        padding: 0.22rem 0.6rem;
         border-radius: 999px;
-        background: #cbd5e1;
-    }
-
-    .directory-activity-legend-item.is-conflict .directory-activity-legend-dot {
-        background: #dc2626;
-    }
-
-    .directory-activity-legend-item.is-recent-7 .directory-activity-legend-dot {
-        background: #16a34a;
-    }
-
-    .directory-activity-legend-item.is-recent-28 .directory-activity-legend-dot {
-        background: #d97706;
-    }
-
-    .directory-activity-legend-item.is-stale .directory-activity-legend-dot {
-        background: #94a3b8;
-    }
-
-    .directory-activity-note {
-        margin: 0;
-        color: #64748b;
-        font-size: 0.86rem;
-    }
-
-    .directory-activity-visually-hidden {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        background: #f8fafc;
+        color: #475569;
+        font-size: 0.75rem;
+        font-weight: 700;
+        line-height: 1.2;
         white-space: nowrap;
-        border: 0;
     }
 
-    @media (max-width: 1180px) {
-        .directory-activity-summary-grid {
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-        }
+    .dashboard-top-badge.is-conflict {
+        border-color: rgba(220, 38, 38, 0.2);
+        background: #fff1f1;
+        color: #ba1a1a;
+    }
 
-        .directory-activity-main {
+    .dashboard-top-badge.is-resolved {
+        border-color: rgba(22, 163, 74, 0.2);
+        background: #effcf3;
+        color: #177d35;
+    }
+
+    .dashboard-top-badge.is-safe {
+        border-color: rgba(21, 128, 61, 0.16);
+        background: #effcf3;
+        color: #177d35;
+    }
+
+    .dashboard-top-empty {
+        padding: 1.5rem 1.25rem;
+        color: #64748b;
+        font-size: 0.9rem;
+        line-height: 1.5;
+    }
+
+    @media (max-width: 1100px) {
+        .dashboard-top-sections {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
+
+    @media (max-width: 820px) {
+        .dashboard-top-metrics {
             grid-template-columns: minmax(0, 1fr);
         }
 
-        .directory-activity-detail {
-            min-height: 0;
-        }
-    }
-
-    @media (max-width: 780px) {
-        .directory-activity-shell {
-            padding: 1rem;
-        }
-
-        .directory-activity-summary-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .directory-activity-row {
+        .dashboard-top-row {
             grid-template-columns: minmax(0, 1fr);
-            gap: 0.55rem;
-            padding-top: 0.7rem;
-            padding-bottom: 0.7rem;
         }
 
-        .directory-activity-row-time {
+        .dashboard-top-row__time {
             justify-self: start;
-        }
-
-        .directory-activity-detail-grid {
-            grid-template-columns: minmax(0, 1fr);
         }
     }
 </style>
 
-{% if dashboard.is_unconnected and not workspace_integration_callout %}
-<section class="panel dashboard-state-banner {{ dashboard.state_banner.tone }}">
-    <div class="dashboard-state-copy">
-        <h2>{{ dashboard.state_banner.title }}</h2>
-        {% if dashboard.state_banner.subtitle %}
-        <p>{{ dashboard.state_banner.subtitle }}</p>
-        {% endif %}
-    </div>
-    <div class="dashboard-state-actions">
-        <a class="button {% if dashboard.state_banner.action.variant == 'primary' %}button-primary{% else %}button-secondary{% endif %}" href="{{ dashboard.state_banner.action.href }}">{{ dashboard.state_banner.action.label }}</a>
-        {% for action in dashboard.state_banner.extra_actions %}
-        <a class="button {% if action.variant == 'backlog' %}button-backlog{% elif action.variant == 'git' %}button-git{% else %}button-secondary{% endif %}" href="{{ action.href }}">{{ action.label }}</a>
-        {% endfor %}
-    </div>
-</section>
-{% endif %}
-
-<section class="panel directory-activity-shell" data-directory-activity-root>
-    <div class="directory-activity-heading">
-        <h2>ディレクトリ更新状況</h2>
-        <p>Webhook または手動登録で観測されたファイルの変更状況を表示します</p>
-    </div>
-
-    <div class="directory-activity-summary-grid">
-        {% for card in dashboard.directory_activity.summary_cards %}
-        <article class="directory-activity-summary-card {{ card.class }}">
-            <span class="directory-activity-summary-card-label">{{ card.label }}</span>
-            <strong>{{ card.value }}</strong>
-            <span>{{ card.meta }}</span>
+<section class="dashboard-top-shell">
+    <div class="dashboard-top-metrics">
+        <article class="panel dashboard-top-card">
+            <div class="dashboard-top-card__icon">
+                <span class="material-symbols-outlined" aria-hidden="true">{{ dashboard.push_card.icon }}</span>
+            </div>
+            <div class="dashboard-top-card__body">
+                <p class="dashboard-top-card__label">{{ dashboard.push_card.label }}</p>
+                <p class="dashboard-top-card__value">{{ dashboard.push_card.value }} / {{ dashboard.push_card.limit }}</p>
+                {% if dashboard.push_card.meta %}
+                <p class="dashboard-top-card__meta">{{ dashboard.push_card.meta }}</p>
+                {% endif %}
+            </div>
         </article>
-        {% endfor %}
+
+        <article class="panel dashboard-top-card is-branch">
+            <div class="dashboard-top-card__icon">
+                <span class="material-symbols-outlined" aria-hidden="true">{{ dashboard.tracked_branches_card.icon }}</span>
+            </div>
+            <div class="dashboard-top-card__body">
+                <p class="dashboard-top-card__label">{{ dashboard.tracked_branches_card.label }}</p>
+                <p class="dashboard-top-card__value">{{ dashboard.tracked_branches_card.value }}件</p>
+                {% if dashboard.tracked_branches_card.meta %}
+                <p class="dashboard-top-card__meta">{{ dashboard.tracked_branches_card.meta }}</p>
+                {% endif %}
+            </div>
+        </article>
+
+        <article class="panel dashboard-top-card {{ dashboard.conflicts_card.tone }}">
+            <div class="dashboard-top-card__icon">
+                <span class="material-symbols-outlined" aria-hidden="true">{{ dashboard.conflicts_card.icon }}</span>
+            </div>
+            <div class="dashboard-top-card__body">
+                <p class="dashboard-top-card__label">{{ dashboard.conflicts_card.label }}</p>
+                <p class="dashboard-top-card__value">{{ dashboard.conflicts_card.value }}件</p>
+                {% if dashboard.conflicts_card.meta %}
+                <p class="dashboard-top-card__meta">{{ dashboard.conflicts_card.meta }}</p>
+                {% endif %}
+            </div>
+        </article>
     </div>
 
-    <div class="directory-activity-filters">
-        <div class="directory-activity-filter-field is-search">
-            <label for="directory-activity-search">検索</label>
-            <input id="directory-activity-search" type="search" placeholder="path またはブランチを検索" data-directory-filter="search" {% if dashboard.directory_activity.is_empty %}disabled{% endif %}>
-        </div>
-        <div class="directory-activity-filter-field">
-            <label for="directory-activity-branch">ブランチ</label>
-            <select id="directory-activity-branch" data-directory-filter="branch" {% if dashboard.directory_activity.is_empty %}disabled{% endif %}>
-                <option value="">すべてのブランチ</option>
-            </select>
-        </div>
-        <div class="directory-activity-filter-field">
-            <label for="directory-activity-status">状態</label>
-            <select id="directory-activity-status" data-directory-filter="status" {% if dashboard.directory_activity.is_empty %}disabled{% endif %}>
-                <option value="">すべての状態</option>
-            </select>
-        </div>
-        <div class="directory-activity-filter-field">
-            <label for="directory-activity-directory">ディレクトリ</label>
-            <select id="directory-activity-directory" data-directory-filter="directory" {% if dashboard.directory_activity.is_empty %}disabled{% endif %}>
-                <option value="">すべてのディレクトリ</option>
-            </select>
-        </div>
-        <button class="button button-ghost button-small" type="button" data-directory-clear {% if dashboard.directory_activity.is_empty %}disabled{% endif %}>クリア</button>
-    </div>
+    <div class="dashboard-top-sections">
+        <section class="panel dashboard-top-panel">
+            <div class="dashboard-top-panel__head">
+                <h2 class="dashboard-top-panel__title">競合エリア</h2>
+                <span class="dashboard-top-panel__count">直近{{ dashboard.conflict_events|length if dashboard.conflict_events else 0 }}件</span>
+            </div>
 
-    {% if not dashboard.directory_activity.is_empty %}
-    <div class="directory-activity-main">
-        <section class="directory-activity-tree">
-            <div class="directory-activity-tree-head">
-                <div>
-                    <strong>観測済みツリー</strong>
-                    <span>競合と最近更新を優先して、上位ディレクトリから絞り込めます</span>
-                </div>
-                <span class="directory-activity-tree-results" data-directory-results></span>
+            {% if dashboard.conflict_events %}
+            <div class="dashboard-top-list">
+                {% for item in dashboard.conflict_events %}
+                <article class="dashboard-top-row">
+                    <div class="dashboard-top-row__main">
+                        <div class="dashboard-top-row__headline">
+                            <span class="dashboard-top-badge {{ item.status_class }}">{{ item.status_label }}</span>
+                            <strong>{{ item.path_label }}</strong>
+                        </div>
+                        <p class="dashboard-top-row__subline">{{ item.repository_label }}</p>
+                        <p class="dashboard-top-row__meta">
+                            <span>関連ブランチ: {{ item.branches_label }}</span>
+                            <span>{{ item.detail_label }}</span>
+                        </p>
+                    </div>
+                    <span class="dashboard-top-row__time">{{ item.time_label }}</span>
+                </article>
+                {% endfor %}
             </div>
-            <div class="directory-activity-viewport" data-directory-viewport>
-                <div data-directory-top-spacer></div>
-                <div class="directory-activity-list" data-directory-list></div>
-                <div data-directory-bottom-spacer></div>
-            </div>
+            {% else %}
+            <div class="dashboard-top-empty">直近の競合イベントはありません。</div>
+            {% endif %}
         </section>
 
-        <aside class="directory-activity-detail" data-directory-detail>
-            <div class="directory-activity-detail-head">
-                <div>
-                    <strong>詳細</strong>
-                    <span>ファイルまたはディレクトリを選択すると、関連ブランチと更新状態を確認できます</span>
-                </div>
+        <section class="panel dashboard-top-panel">
+            <div class="dashboard-top-panel__head">
+                <h2 class="dashboard-top-panel__title">push受信エリア</h2>
+                <span class="dashboard-top-panel__count">直近{{ dashboard.push_events|length if dashboard.push_events else 0 }}件</span>
             </div>
-            <div class="directory-activity-detail-empty">
-                <strong>ファイルまたはディレクトリを選択してください</strong>
-                <p>左側のツリーから対象を選ぶと、フルパス、状態、取り込み元、ブランチ一覧をここに表示します。</p>
+
+            {% if dashboard.push_events %}
+            <div class="dashboard-top-list">
+                {% for item in dashboard.push_events %}
+                <article class="dashboard-top-row">
+                    <div class="dashboard-top-row__main">
+                        <div class="dashboard-top-row__headline">
+                            <strong>{{ item.branch_name }}</strong>
+                            <span class="dashboard-top-badge {{ item.conflict_class }}">{{ item.conflict_label }}</span>
+                        </div>
+                        <p class="dashboard-top-row__subline">{{ item.repository_name }}</p>
+                        <p class="dashboard-top-row__meta">
+                            <span>{{ item.changed_files_label }}</span>
+                            <span>{{ item.actor_label }}</span>
+                        </p>
+                    </div>
+                    <span class="dashboard-top-row__time">{{ item.time_label }}</span>
+                </article>
+                {% endfor %}
             </div>
-        </aside>
+            {% else %}
+            <div class="dashboard-top-empty">直近の push 受信はありません。</div>
+            {% endif %}
+        </section>
     </div>
-    {% endif %}
-
-    <div class="directory-activity-footer">
-        <div class="directory-activity-legend">
-            {% for item in dashboard.directory_activity.legend_items %}
-            <span class="directory-activity-legend-item {{ item.class }}">
-                <span class="directory-activity-legend-dot"></span>
-                {{ item.label }}
-            </span>
-            {% endfor %}
-        </div>
-        <p class="directory-activity-note">{{ dashboard.directory_activity.note }}</p>
-    </div>
-
-    <script id="dashboard-directory-activity-data" type="application/json">{{ dashboard.directory_activity.json | safe }}</script>
-    <script>
-        document.addEventListener("DOMContentLoaded", () => {
-            const root = document.querySelector("[data-directory-activity-root]");
-            const payload = document.getElementById("dashboard-directory-activity-data");
-            if (!root || !payload) {
-                return;
-            }
-
-            let data;
-            try {
-                data = JSON.parse(payload.textContent || "{}");
-            } catch (error) {
-                return;
-            }
-
-            const searchInput = root.querySelector('[data-directory-filter="search"]');
-            const branchSelect = root.querySelector('[data-directory-filter="branch"]');
-            const statusSelect = root.querySelector('[data-directory-filter="status"]');
-            const directorySelect = root.querySelector('[data-directory-filter="directory"]');
-            const clearButton = root.querySelector("[data-directory-clear]");
-            const viewport = root.querySelector("[data-directory-viewport]");
-            const list = root.querySelector("[data-directory-list]");
-            const topSpacer = root.querySelector("[data-directory-top-spacer]");
-            const bottomSpacer = root.querySelector("[data-directory-bottom-spacer]");
-            const results = root.querySelector("[data-directory-results]");
-            const detail = root.querySelector("[data-directory-detail]");
-
-            if (!searchInput || !branchSelect || !statusSelect || !directorySelect || !clearButton || !viewport || !list || !topSpacer || !bottomSpacer || !results || !detail) {
-                return;
-            }
-
-            const escapeHtml = (value) =>
-                String(value ?? "")
-                    .replaceAll("&", "&amp;")
-                    .replaceAll("<", "&lt;")
-                    .replaceAll(">", "&gt;")
-                    .replaceAll('"', "&quot;")
-                    .replaceAll("'", "&#39;");
-
-            const nodeMap = new Map((data.nodes || []).map((node) => [node.id, node]));
-            const state = {
-                expanded: new Set(data.default_expanded || []),
-                search: "",
-                branch: "",
-                status: "",
-                directory: "",
-                selectedId: data.initial_selected_id || null,
-                rowHeight: 56,
-                visibleNodes: [],
-            };
-            const appendOptions = (selectElement, options) => {
-                options.forEach((option) => {
-                    const element = document.createElement("option");
-                    element.value = option.value;
-                    element.textContent = option.label;
-                    selectElement.appendChild(element);
-                });
-            };
-
-            appendOptions(branchSelect, data.filters?.branches || []);
-            appendOptions(statusSelect, data.filters?.statuses || []);
-            appendOptions(directorySelect, data.filters?.directories || []);
-
-            const hasFilters = () =>
-                Boolean(state.search || state.branch || state.status || state.directory);
-
-            const nodeMatches = (node) => {
-                if (node.type !== "file") {
-                    return false;
-                }
-                if (state.branch && !(node.branch_names || []).includes(state.branch)) {
-                    return false;
-                }
-                if (state.status && node.status !== state.status) {
-                    return false;
-                }
-                if (state.directory && node.directory_value !== state.directory) {
-                    return false;
-                }
-                if (state.search) {
-                    const query = state.search.toLowerCase();
-                    if (!(node.search_text || "").includes(query)) {
-                        return false;
-                    }
-                }
-                return true;
-            };
-
-            const buildFilterSet = () => {
-                if (!hasFilters()) {
-                    return null;
-                }
-                const visibleIds = new Set();
-                nodeMap.forEach((node) => {
-                    if (!nodeMatches(node)) {
-                        return;
-                    }
-                    let current = node;
-                    while (current) {
-                        visibleIds.add(current.id);
-                        current = current.parent_id ? nodeMap.get(current.parent_id) : null;
-                    }
-                });
-                return visibleIds;
-            };
-
-            const collectVisibleNodes = () => {
-                const filterSet = buildFilterSet();
-                const visible = [];
-                const walk = (nodeId, depth) => {
-                    const node = nodeMap.get(nodeId);
-                    if (!node) {
-                        return;
-                    }
-                    if (filterSet && !filterSet.has(nodeId)) {
-                        return;
-                    }
-                    visible.push({ ...node, depth });
-                    if (node.type !== "directory") {
-                        return;
-                    }
-                    const shouldExpand = filterSet ? true : !node.parent_id || state.expanded.has(nodeId);
-                    if (!shouldExpand) {
-                        return;
-                    }
-                    (node.child_ids || []).forEach((childId) => walk(childId, depth + 1));
-                };
-                (data.root_ids || []).forEach((rootId) => walk(rootId, 0));
-                return visible;
-            };
-
-            const ensureSelection = () => {
-                if (!state.visibleNodes.length) {
-                    state.selectedId = null;
-                    return;
-                }
-                if (state.selectedId && state.visibleNodes.some((node) => node.id === state.selectedId)) {
-                    return;
-                }
-                const preferred = state.visibleNodes.find((node) => node.type === "file");
-                state.selectedId = (preferred || state.visibleNodes[0]).id;
-            };
-
-            const renderBranchPreview = (node) => {
-                if (node.type !== "file") {
-                    return "";
-                }
-                const items = (node.branch_preview || [])
-                    .map(
-                        (branch) =>
-                            `<a class="directory-activity-branch-link" href="${escapeHtml(branch.href)}">${escapeHtml(branch.name)}</a>`
-                    )
-                    .join("");
-                const overflow = node.branch_overflow
-                    ? `<span class="directory-activity-chip">+${node.branch_overflow}</span>`
-                    : "";
-                return `${items}${overflow}`;
-            };
-
-            const renderRow = (node) => {
-                const selectedClass = state.selectedId === node.id ? "is-selected" : "";
-                const indent = `--depth:${node.depth};`;
-                if (node.type === "directory") {
-                    const isRoot = !node.parent_id;
-                    const expanded = hasFilters() ? true : isRoot || state.expanded.has(node.id);
-                    const conflictChip = node.conflict_count
-                        ? `<button class="directory-activity-chip is-conflict" type="button" data-directory-status-filter="conflict">競合 ${node.conflict_count}</button>`
-                        : `<span class="directory-activity-chip">競合 0</span>`;
-                    if (isRoot) {
-                        return `
-                            <div class="directory-activity-row is-root ${escapeHtml(node.status_class)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
-                                <div class="directory-activity-row-main" style="${indent}">
-                                    <button class="directory-activity-row-button" type="button" data-directory-select="${escapeHtml(node.id)}">
-                                        <span class="directory-activity-indent"></span>
-                                        <span class="directory-activity-node-icon">▣</span>
-                                        <span class="directory-activity-name">${escapeHtml(node.name)}</span>
-                                        <span class="directory-activity-repository-chip">リポジトリ</span>
-                                        <span class="directory-activity-status-dot"></span>
-                                    </button>
-                                </div>
-                                <div class="directory-activity-row-metrics">
-                                    ${conflictChip}
-                                    <span class="directory-activity-chip">最近更新 ${node.recent_count}</span>
-                                    <span class="directory-activity-chip">ファイル ${node.file_count}</span>
-                                </div>
-                                <span class="directory-activity-row-time">${escapeHtml(node.last_active_label)}</span>
-                            </div>
-                        `;
-                    }
-                    return `
-                        <div class="directory-activity-row ${escapeHtml(node.status_class)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
-                            <div class="directory-activity-row-main" style="${indent}">
-                                <button class="directory-activity-row-directory-button" type="button" data-directory-toggle="${escapeHtml(node.id)}" aria-expanded="${expanded}">
-                                    <span class="directory-activity-indent"></span>
-                                    <span class="directory-activity-chevron">${expanded ? "▾" : "▸"}</span>
-                                    <span class="directory-activity-node-icon">📁</span>
-                                    <span class="directory-activity-name">${escapeHtml(node.name)}</span>
-                                    <span class="directory-activity-status-dot"></span>
-                                </button>
-                            </div>
-                            <div class="directory-activity-row-metrics">
-                                ${conflictChip}
-                                <span class="directory-activity-chip">最近更新 ${node.recent_count}</span>
-                                <span class="directory-activity-chip">ファイル ${node.file_count}</span>
-                            </div>
-                            <span class="directory-activity-row-time">${escapeHtml(node.last_active_label)}</span>
-                        </div>
-                    `;
-                }
-
-                return `
-                    <div class="directory-activity-row ${escapeHtml(node.status_class)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
-                        <div class="directory-activity-row-main" style="${indent}">
-                            <button class="directory-activity-row-button" type="button" data-directory-select="${escapeHtml(node.id)}">
-                                <span class="directory-activity-indent"></span>
-                                <span class="directory-activity-node-icon">▦</span>
-                                <span class="directory-activity-name">${escapeHtml(node.name)}</span>
-                            </button>
-                        </div>
-                        <div class="directory-activity-row-branches">
-                            ${renderBranchPreview(node)}
-                            <span class="directory-activity-source-chip">${escapeHtml(node.source_label)}</span>
-                        </div>
-                        <span class="directory-activity-row-time">${escapeHtml(node.last_active_label)}</span>
-                    </div>
-                `;
-            };
-
-            const renderEmptyResults = () => {
-                topSpacer.style.height = "0px";
-                bottomSpacer.style.height = "0px";
-                list.innerHTML = `
-                    <div class="directory-activity-no-results">
-                        <strong>一致するファイルはありません</strong>
-                        <p>検索またはフィルタ条件を見直すと、関連する観測済みファイルが表示されます。</p>
-                    </div>
-                `;
-                detail.innerHTML = `
-                    <div class="directory-activity-detail-head">
-                        <div>
-                            <strong>詳細</strong>
-                            <span>表示条件に一致する観測済みファイルがありません</span>
-                        </div>
-                    </div>
-                    <div class="directory-activity-detail-empty">
-                        <strong>一致する詳細はありません</strong>
-                        <p>クリアで条件を戻すと、最新の観測済みファイルとブランチ情報を確認できます。</p>
-                    </div>
-                `;
-            };
-
-            const renderDetail = () => {
-                const node = state.selectedId ? nodeMap.get(state.selectedId) : null;
-                if (!node) {
-                    return;
-                }
-                if (node.type === "directory" && !node.parent_id) {
-                    detail.innerHTML = `
-                        <div class="directory-activity-detail-head">
-                            <div>
-                                <strong>ディレクトリ詳細</strong>
-                            </div>
-                        </div>
-                        <div class="directory-activity-detail-body"></div>
-                    `;
-                    return;
-                }
-                const branches = (node.branches || [])
-                    .map(
-                        (branch) =>
-                            `<a class="directory-activity-branch-link" href="${escapeHtml(branch.href)}">${escapeHtml(branch.name)} <span>${escapeHtml(branch.last_active_label)}</span></a>`
-                    )
-                    .join("");
-
-                detail.innerHTML = `
-                    <div class="directory-activity-detail-head">
-                        <div>
-                            <strong>${node.type === "directory" ? "ディレクトリ詳細" : "ファイル詳細"}</strong>
-                            ${node.type === "file" ? "<span>選択した観測済みファイルの最新状態です</span>" : ""}
-                        </div>
-                    </div>
-                    <div class="directory-activity-detail-body">
-                        <div>
-                            <h3>${escapeHtml(node.name)}</h3>
-                            <p class="directory-activity-detail-path">${escapeHtml(node.path)}</p>
-                        </div>
-                        <div class="directory-activity-detail-grid">
-                            <div class="directory-activity-detail-stat">
-                                <span>状態</span>
-                                <strong>${escapeHtml(node.status_label)}</strong>
-                            </div>
-                            <div class="directory-activity-detail-stat">
-                                <span>最終更新</span>
-                                <strong>${escapeHtml(node.last_active_label)}</strong>
-                            </div>
-                            <div class="directory-activity-detail-stat">
-                                <span>取り込み元</span>
-                                <strong>${escapeHtml(node.source_label)}</strong>
-                            </div>
-                            <div class="directory-activity-detail-stat">
-                                <span>関連ブランチ</span>
-                                <strong>${escapeHtml(String((node.branch_names || []).length))}</strong>
-                            </div>
-                        </div>
-                        <div class="directory-activity-detail-section">
-                            <span class="directory-activity-detail-section-title">関連ブランチ</span>
-                            <div class="directory-activity-branch-list">
-                                ${branches || `<span class="directory-activity-chip">ブランチはありません</span>`}
-                            </div>
-                        </div>
-                    </div>
-                `;
-            };
-
-            const renderVisibleRows = () => {
-                if (!state.visibleNodes.length) {
-                    renderEmptyResults();
-                    results.textContent = "0 件";
-                    return;
-                }
-                const scrollTop = viewport.scrollTop;
-                const viewportHeight = viewport.clientHeight || 680;
-                const buffer = 8;
-                const startIndex = Math.max(0, Math.floor(scrollTop / state.rowHeight) - buffer);
-                const endIndex = Math.min(
-                    state.visibleNodes.length,
-                    startIndex + Math.ceil(viewportHeight / state.rowHeight) + buffer * 2
-                );
-                const slice = state.visibleNodes.slice(startIndex, endIndex);
-                topSpacer.style.height = `${startIndex * state.rowHeight}px`;
-                bottomSpacer.style.height = `${(state.visibleNodes.length - endIndex) * state.rowHeight}px`;
-                list.innerHTML = slice.map(renderRow).join("");
-                results.textContent = `${state.visibleNodes.length} 件`;
-                renderDetail();
-            };
-
-            const sync = ({ resetScroll = false } = {}) => {
-                state.visibleNodes = collectVisibleNodes();
-                ensureSelection();
-                if (resetScroll) {
-                    viewport.scrollTop = 0;
-                }
-                renderVisibleRows();
-                clearButton.disabled = !hasFilters();
-            };
-
-            searchInput.addEventListener("input", () => {
-                state.search = searchInput.value.trim();
-                sync({ resetScroll: true });
-            });
-
-            branchSelect.addEventListener("change", () => {
-                state.branch = branchSelect.value;
-                sync({ resetScroll: true });
-            });
-
-            statusSelect.addEventListener("change", () => {
-                state.status = statusSelect.value;
-                sync({ resetScroll: true });
-            });
-
-            directorySelect.addEventListener("change", () => {
-                state.directory = directorySelect.value;
-                sync({ resetScroll: true });
-            });
-
-            clearButton.addEventListener("click", () => {
-                state.search = "";
-                state.branch = "";
-                state.status = "";
-                state.directory = "";
-                searchInput.value = "";
-                branchSelect.value = "";
-                statusSelect.value = "";
-                directorySelect.value = "";
-                sync({ resetScroll: true });
-            });
-
-            viewport.addEventListener("scroll", () => {
-                window.requestAnimationFrame(renderVisibleRows);
-            });
-
-            list.addEventListener("click", async (event) => {
-                const target = event.target;
-                if (!(target instanceof HTMLElement)) {
-                    return;
-                }
-
-                const toggleId = target.closest("[data-directory-toggle]")?.getAttribute("data-directory-toggle");
-                if (toggleId) {
-                    if (state.expanded.has(toggleId)) {
-                        state.expanded.delete(toggleId);
-                    } else {
-                        state.expanded.add(toggleId);
-                    }
-                    state.selectedId = toggleId;
-                    sync();
-                    return;
-                }
-
-                const selectId = target.closest("[data-directory-select]")?.getAttribute("data-directory-select");
-                if (selectId) {
-                    state.selectedId = selectId;
-                    renderVisibleRows();
-                    return;
-                }
-
-                const statusFilter = target.closest("[data-directory-status-filter]")?.getAttribute("data-directory-status-filter");
-                if (statusFilter) {
-                    state.status = statusFilter;
-                    statusSelect.value = statusFilter;
-                    sync({ resetScroll: true });
-                }
-            });
-
-            window.addEventListener("resize", () => {
-                window.requestAnimationFrame(renderVisibleRows);
-            });
-
-            sync({ resetScroll: true });
-        });
-    </script>
 </section>
 {% endblock %}

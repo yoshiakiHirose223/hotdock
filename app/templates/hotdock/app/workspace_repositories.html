@@ -138,42 +138,6 @@
         }
     }
 </style>
-{% if not (workspace_integration_callout and repositories_page.catalog_state == "unconnected") %}
-<section class="panel repository-state-banner {{ repositories_page.state_banner.tone }}">
-    <div class="repository-state-copy">
-        <h2>{{ repositories_page.state_banner.title }}</h2>
-        {% if repositories_page.state_banner.body %}
-        <p>{{ repositories_page.state_banner.body }}</p>
-        {% endif %}
-        {% if repositories_page.state_banner.supporting %}
-        <span class="muted-copy">{{ repositories_page.state_banner.supporting }}</span>
-        {% endif %}
-    </div>
-    <div class="repository-state-actions">
-        {% if repositories_page.state_banner.action_href %}
-        <a class="button button-primary" href="{{ repositories_page.state_banner.action_href }}">{{ repositories_page.state_banner.action_label }}</a>
-        {% elif current_membership and current_membership.role in ["owner", "admin"] %}
-        <form class="inline-form" method="post" action="/workspaces/{{ workspace.slug }}/repositories/sync">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="button button-primary" type="submit">{{ repositories_page.state_banner.action_label }}</button>
-        </form>
-        {% endif %}
-    </div>
-</section>
-{% endif %}
-
-{% if repositories_page.catalog_state != "unconnected" %}
-<section class="panel repository-summary-strip">
-    {% for item in repositories_page.summary_items %}
-    <div class="repository-summary-item">
-        <span class="repository-summary-label">{{ item.label }}</span>
-        <strong class="repository-summary-value">{{ item.value }}</strong>
-    </div>
-    {% endfor %}
-</section>
-
-{% endif %}
-
 {% if repositories_page.sync_warning %}
 <section class="panel">
     <div class="inline-alert inline-alert-error">
@@ -185,7 +149,7 @@
 <section class="panel">
     <div class="panel-head">
         <div>
-            <h2>{% if repositories_page.catalog_state == "unconnected" %}Git未連携です{% else %}監視対象の候補{% endif %}</h2>
+            <h2>監視対象の候補</h2>
         </div>
         {% if repositories_page.catalog_state == "ready" %}
         <span class="status-badge">{{ repositories_page.repositories|length }} 件</span>
@@ -193,7 +157,7 @@
     </div>
 
     {% if repositories_page.catalog_state == "unconnected" %}
-    <div class="empty-inline">Git未連携です</div>
+    <div class="empty-inline">リポジトリが見つかりません</div>
     {% elif repositories_page.catalog_state != "ready" %}
     <div class="empty-state repository-empty-state">
         <div class="repository-empty-visual">GH</div>

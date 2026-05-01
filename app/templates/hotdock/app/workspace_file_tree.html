@@ -9,7 +9,7 @@
 
     .file-tree-layout {
         display: grid;
-        grid-template-columns: 320px minmax(0, 1fr);
+        grid-template-columns: minmax(420px, 1.55fr) minmax(260px, 0.85fr);
         gap: 1rem;
         align-items: start;
     }
@@ -123,6 +123,10 @@
         border-bottom: 1px solid rgba(15, 23, 42, 0.06);
         position: relative;
         background: #fff;
+    }
+
+    .file-tree-row.is-metricsless {
+        grid-template-columns: minmax(0, 1fr) auto;
     }
 
     .file-tree-row:last-child {
@@ -937,21 +941,6 @@
                 return `${preview}${overflow}<span class="file-tree-source-chip">${escapeHtml(node.source_label)}</span>`;
             };
 
-            const renderMetrics = (node) => {
-                const parts = [];
-                if (node.conflict_count) {
-                    parts.push(`<span class="file-tree-chip is-conflict">競合 ${node.conflict_count}</span>`);
-                }
-                if (node.overlap_count) {
-                    parts.push(`<span class="file-tree-chip">重複 ${node.overlap_count}</span>`);
-                }
-                if (node.recent_count) {
-                    parts.push(`<span class="file-tree-chip">最近更新 ${node.recent_count}</span>`);
-                }
-                parts.push(`<span class="file-tree-chip">ファイル ${node.file_count}</span>`);
-                return parts.join("");
-            };
-
             const renderRow = (node) => {
                 const selectedClass = state.selectedId === node.id ? "is-selected" : "";
                 const statusClass = node.status_class || "";
@@ -959,7 +948,7 @@
                 if (node.kind === "repository") {
                     const icon = iconForNode(node, true);
                     return `
-                        <div class="file-tree-row is-repository ${escapeHtml(statusClass)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
+                        <div class="file-tree-row is-repository is-metricsless ${escapeHtml(statusClass)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
                             <div class="file-tree-row-main" style="${indent}">
                                 <button class="file-tree-row-button" type="button" data-file-tree-select="${escapeHtml(node.id)}" aria-selected="${state.selectedId === node.id}">
                                     <span class="file-tree-indent"></span>
@@ -967,7 +956,6 @@
                                     <span class="file-tree-name">${escapeHtml(node.name)}</span>
                                 </button>
                             </div>
-                            <div class="file-tree-row-meta">${renderMetrics(node)}</div>
                             <span class="file-tree-row-side">
                                 <span class="file-tree-status-dot ${escapeHtml(statusClass)}" title="${escapeHtml(node.status_label)}" aria-label="${escapeHtml(node.status_label)}"></span>
                                 <span>${escapeHtml(node.last_active_label)}</span>
@@ -980,7 +968,7 @@
                     const expanded = hasSearch() ? true : state.expanded.has(node.id);
                     const icon = iconForNode(node, expanded);
                     return `
-                        <div class="file-tree-row ${escapeHtml(statusClass)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
+                        <div class="file-tree-row is-metricsless ${escapeHtml(statusClass)} ${selectedClass}" data-node-id="${escapeHtml(node.id)}">
                             <div class="file-tree-row-main" style="${indent}">
                                 <button class="file-tree-row-toggle" type="button" data-file-tree-toggle="${escapeHtml(node.id)}" aria-expanded="${expanded}" aria-selected="${state.selectedId === node.id}">
                                     <span class="file-tree-indent"></span>
@@ -989,7 +977,6 @@
                                     <span class="file-tree-name">${escapeHtml(node.name)}</span>
                                 </button>
                             </div>
-                            <div class="file-tree-row-meta">${renderMetrics(node)}</div>
                             <span class="file-tree-row-side">
                                 <span class="file-tree-status-dot ${escapeHtml(statusClass)}" title="${escapeHtml(node.status_label)}" aria-label="${escapeHtml(node.status_label)}"></span>
                                 <span>${escapeHtml(node.last_active_label)}</span>

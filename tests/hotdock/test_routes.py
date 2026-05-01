@@ -16,6 +16,7 @@ from app.models.file_collision import FileCollision
 from app.models.audit_log import AuditLog
 from app.models.github_installation import GithubInstallation
 from app.models.github_installation_repository import GithubInstallationRepository
+from app.models.github_webhook_event import GithubWebhookEvent
 from app.models.repository import Repository
 from app.models.workspace import Workspace
 from app.models.workspace_invitation import WorkspaceInvitation
@@ -279,7 +280,86 @@ def test_workspace_dashboard_prioritizes_actions_and_hides_internal_copy(client)
             normalized_path="app/models/user.rb",
             active_branch_count=2,
             collision_status="open",
+            last_detected_at=now - timedelta(minutes=25),
         )
+    )
+    db.add_all(
+        [
+            GithubWebhookEvent(
+                delivery_id="dashboard-push-1",
+                event_name="push",
+                workspace_id=workspace.id,
+                installation_id=installation.installation_id,
+                signature_valid=True,
+                payload={
+                    "ref": "refs/heads/feature/conflict-ui",
+                    "sender": {"login": "alice"},
+                    "commits": [
+                        {
+                            "added": ["app/models/user.rb"],
+                            "modified": ["app/services/auth.rb"],
+                            "removed": [],
+                        }
+                    ],
+                },
+                payload_sha256="sha-dashboard-push-1",
+                received_at=now - timedelta(minutes=12),
+                processing_status="processed",
+            ),
+            GithubWebhookEvent(
+                delivery_id="dashboard-push-2",
+                event_name="push",
+                workspace_id=workspace.id,
+                installation_id=installation.installation_id,
+                signature_valid=True,
+                payload={
+                    "ref": "refs/heads/fix/theme-token",
+                    "sender": {"login": "marcus"},
+                    "commits": [
+                        {
+                            "added": [],
+                            "modified": ["app/ui/Button.tsx"],
+                            "removed": [],
+                        }
+                    ],
+                },
+                payload_sha256="sha-dashboard-push-2",
+                received_at=now - timedelta(hours=3),
+                processing_status="processed",
+            ),
+            BranchEvent(
+                repository_id=active_repository.id,
+                branch_id=primary_branch.id,
+                webhook_delivery_id="dashboard-push-1",
+                event_type="push",
+                occurred_at=now - timedelta(minutes=12),
+            ),
+            BranchEvent(
+                repository_id=active_repository.id,
+                branch_id=manual_branch.id,
+                webhook_delivery_id="dashboard-push-2",
+                event_type="push",
+                occurred_at=now - timedelta(hours=3),
+            ),
+            AuditLog(
+                actor_type="system",
+                workspace_id=workspace.id,
+                target_type="repository",
+                target_id=active_repository.id,
+                action="file_collision_detected",
+                event_metadata={"path": "app/models/user.rb", "repository": active_repository.full_name},
+                created_at=now - timedelta(minutes=20),
+            ),
+            AuditLog(
+                actor_type="system",
+                workspace_id=workspace.id,
+                target_type="repository",
+                target_id=active_repository.id,
+                action="file_collision_resolved",
+                event_metadata={"path": "app/services/auth.rb", "repository": active_repository.full_name},
+                created_at=now - timedelta(hours=4),
+            ),
+        ]
     )
     db.commit()
     db.close()
@@ -287,43 +367,27 @@ def test_workspace_dashboard_prioritizes_actions_and_hides_internal_copy(client)
     response = client.get("/workspaces/dashboard-team/dashboard")
 
     assert response.status_code == 200
-    assert "競合" in response.text
-    assert "ディレクトリ更新状況" in response.text
-    assert "Webhook または手動登録で観測されたファイルの変更状況を表示します" in response.text
-    assert "競合中のパス" in response.text
-    assert "7日以内更新" in response.text
-    assert "28日以内更新" in response.text
-    assert "長期間更新なし" in response.text
-    assert "手動追跡" in response.text
-    assert "観測済みツリー" in response.text
-    assert "app/models/user.rb" in response.text
-    assert "app/ui/Button.tsx" in response.text
+    assert "今月のpush検知" in response.text
+    assert "監視中ブランチ" in response.text
+    assert "未解消競合" in response.text
+    assert "競合エリア" in response.text
+    assert "push受信エリア" in response.text
+    assert "feature/conflict-ui" in response.text
     assert "fix/theme-token" in response.text
+    assert "app/models/user.rb" in response.text
+    assert "競合発生" in response.text
+    assert "競合解消" in response.text
+    assert "変更ファイル 2" in response.text
+    assert "通知: 未設定" in response.text
     assert "概要" in response.text
     assert "監視" in response.text
     assert "ワークスペース" in response.text
     assert "現在の状態" not in response.text
     assert 'aria-label="Breadcrumb"' not in response.text
-    assert "競合と監視状況の概要" not in response.text
+    assert "ディレクトリ更新状況" not in response.text
+    assert "観測済みツリー" not in response.text
+    assert "Webhook または手動登録で観測されたファイルの変更状況を表示します" not in response.text
     assert "集約された観測済みファイルを表示しています" not in response.text
-    assert "ブランチ一覧へ移動" not in response.text
-    assert "コピー" not in response.text
-    assert "リポジトリを見る" not in response.text
-    assert "ブランチを見る" not in response.text
-    assert "GitHub App 接続" not in response.text
-    assert "利用開始ガイド" not in response.text
-    assert "最近のイベント" not in response.text
-    assert "次に取る行動" not in response.text
-    assert "Current Account" not in response.text
-    assert "Sync status" not in response.text
-    assert "ログイン中のアカウント" not in response.text
-    assert "owner 権限の workspace" not in response.text
-    assert "installation_repositories webhook と手動同期で候補一覧を更新します。" not in response.text
-    assert "監視対象に選んだ repository へ push webhook が入った branch だけを作成・更新します。" not in response.text
-    assert "SSR" not in response.text
-    assert "FastAPI" not in response.text
-    assert "ID: 9101" not in response.text
-    assert "unselected / not_started" not in response.text
 
 
 def test_workspace_dashboard_zero_state_surfaces_next_action(client):
@@ -349,19 +413,17 @@ def test_workspace_dashboard_zero_state_surfaces_next_action(client):
     assert "Git連携がまだ完了していません" in response.text
     assert "GitHub Appを連携" in response.text
     assert "Backlogを連携" in response.text
-    assert "ディレクトリ更新状況" in response.text
-    assert "まだ観測済みファイルはありません" not in response.text
-    assert "Push/Webhook または手動登録で検知されたファイルが表示されます" not in response.text
-    assert "ブランチへ移動" not in response.text
+    assert "今月のpush検知" in response.text
+    assert "監視中ブランチ" in response.text
+    assert "未解消競合" in response.text
+    assert "競合エリア" in response.text
+    assert "push受信エリア" in response.text
+    assert "0 / 500" in response.text
+    assert "直近の競合イベントはありません。" in response.text
+    assert "直近の push 受信はありません。" in response.text
     assert "現在の状態" not in response.text
     assert 'aria-label="Breadcrumb"' not in response.text
-    assert "次に取る行動" not in response.text
-    assert "GitHub App 接続" not in response.text
-    assert "利用開始ガイド" not in response.text
-    assert "監視対象を選ぶ" not in response.text
-    assert "同期状態" not in response.text
-    assert "リポジトリを見る" not in response.text
-    assert "ブランチを見る" not in response.text
+    assert "ディレクトリ更新状況" not in response.text
 
 
 def test_workspace_repositories_unconnected_focuses_on_installation_cta(client):
@@ -391,8 +453,10 @@ def test_workspace_repositories_unconnected_focuses_on_installation_cta(client):
     assert "接続状態" not in response.text
     assert "候補数" not in response.text
     assert "開始までの流れ" not in response.text
-    assert "Git未連携です" in response.text
+    assert "Git未連携です" not in response.text
     assert "GitHub App が未接続です" not in response.text
+    assert "監視対象の候補" in response.text
+    assert "リポジトリが見つかりません" in response.text
     assert "詳細を見る" not in response.text
     assert "No claimed installations" not in response.text
     assert "連携された repository はページ表示時に候補一覧として同期します。" not in response.text
@@ -470,7 +534,7 @@ def test_workspace_repositories_connected_without_candidates_shows_compact_empty
     response = client.get("/workspaces/connected-empty-team/repositories")
 
     assert response.status_code == 200
-    assert "候補 repository はまだ同期されていません" in response.text
+    assert "候補 repository はまだありません" in response.text
     assert "repository を再同期" in response.text
     assert "GitHub App が未接続です" not in response.text
     assert "No claimed installations" not in response.text

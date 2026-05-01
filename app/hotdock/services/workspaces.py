@@ -6,7 +6,7 @@ from datetime import timedelta
 from urllib.parse import quote
 
 from fastapi import HTTPException, Request
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.hotdock.services.audit import record_audit_log
@@ -23,6 +23,7 @@ from app.models.workspace_invitation import WorkspaceInvitation
 from app.models.workspace_member import WorkspaceMember
 from app.models.github_installation import GithubInstallation
 from app.models.github_installation_repository import GithubInstallationRepository
+from app.models.github_webhook_event import GithubWebhookEvent
 from app.models.github_pending_claim import GithubPendingClaim
 from app.models.repository import Repository
 from app.models.branch import Branch
@@ -745,6 +746,76 @@ def _directory_activity_relative_time(value, now) -> str:
     if days < 30:
         return f"{days}日前"
     return f"{days // 30}か月前"
+
+
+def _dashboard_recent_or_timestamp(value, now) -> str:
+    if value is None:
+        return "-"
+    if now - value < timedelta(days=1):
+        return _directory_activity_relative_time(value, now)
+    return value.strftime("%Y-%m-%d %H:%M")
+
+
+def _dashboard_payload_actor(payload: dict | None) -> str | None:
+    if not payload:
+        return None
+    sender = payload.get("sender") or {}
+    pusher = payload.get("pusher") or {}
+    return sender.get("login") or pusher.get("name") or pusher.get("email")
+
+
+def _dashboard_payload_branch_name(payload: dict | None) -> str | None:
+    if not payload:
+        return None
+    ref = str(payload.get("ref") or "")
+    if ref.startswith("refs/heads/"):
+        return ref.removeprefix("refs/heads/")
+    return None
+
+
+def _dashboard_payload_changed_file_count(payload: dict | None) -> int:
+    if not payload:
+        return 0
+    paths: set[str] = set()
+    for commit in payload.get("commits") or []:
+        for key in ("added", "modified", "removed"):
+            for path in commit.get(key) or []:
+                if path:
+                    paths.add(str(path))
+    return len(paths)
+
+
+def _dashboard_related_branch_names(
+    db: Session,
+    *,
+    repository_id: str,
+    normalized_path: str,
+) -> list[str]:
+    rows = db.execute(
+        select(Branch.name)
+        .join(BranchFile, BranchFile.branch_id == Branch.id)
+        .where(
+            Branch.repository_id == repository_id,
+            Branch.is_active.is_(True),
+            Branch.is_deleted.is_(False),
+            BranchFile.normalized_path == normalized_path,
+            BranchFile.is_active.is_(True),
+        )
+        .order_by(Branch.name.asc())
+    ).all()
+    names: list[str] = []
+    for (name,) in rows:
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _dashboard_branch_list_label(names: list[str], *, limit: int = 3) -> str:
+    if not names:
+        return "-"
+    if len(names) <= limit:
+        return ", ".join(names)
+    return f"{', '.join(names[:limit])} ほか{len(names) - limit}件"
 
 
 def _build_directory_activity_data(
@@ -1998,6 +2069,7 @@ def workspace_file_tree_data(db: Session, workspace: Workspace) -> dict[str, obj
 
 
 def workspace_dashboard_data(db: Session, workspace: Workspace) -> dict[str, object]:
+    now = utcnow()
     installations = db.scalars(
         select(GithubInstallation).where(GithubInstallation.claimed_workspace_id == workspace.id)
     ).all()
@@ -2019,6 +2091,8 @@ def workspace_dashboard_data(db: Session, workspace: Workspace) -> dict[str, obj
             Branch.repository_id.in_(active_repository_ids) if active_repository_ids else False,
         )
     ).all()
+    tracked_branches = [branch for branch in branches if branch.is_active and not branch.is_deleted]
+    branch_ids = [branch.id for branch in branches]
     conflicts = db.scalars(
         select(FileCollision)
         .join(Repository, Repository.id == FileCollision.repository_id)
@@ -2030,246 +2104,169 @@ def workspace_dashboard_data(db: Session, workspace: Workspace) -> dict[str, obj
             FileCollision.collision_status == "open",
         )
     ).all()
-    members = db.scalars(
-        select(WorkspaceMember).where(
-            WorkspaceMember.workspace_id == workspace.id,
-            WorkspaceMember.status == "active",
-            WorkspaceMember.revoked_at.is_(None),
+    github_settings_href = f"/settings/integrations/github?workspace={workspace.slug}"
+    conflicts_href = f"/workspaces/{workspace.slug}/conflicts"
+
+    branch_file_counts = (
+        {
+            branch_id: count
+            for branch_id, count in db.execute(
+                select(BranchFile.branch_id, func.count(BranchFile.id))
+                .where(
+                    BranchFile.branch_id.in_(branch_ids) if branch_ids else False,
+                    BranchFile.is_active.is_(True),
+                )
+                .group_by(BranchFile.branch_id)
+            ).all()
+        }
+        if branch_ids
+        else {}
+    )
+    branch_conflict_counts = (
+        {
+            branch_id: count
+            for branch_id, count in db.execute(
+                select(BranchFile.branch_id, func.count(BranchFile.id))
+                .where(
+                    BranchFile.branch_id.in_(branch_ids) if branch_ids else False,
+                    BranchFile.is_active.is_(True),
+                    BranchFile.is_conflict.is_(True),
+                )
+                .group_by(BranchFile.branch_id)
+            ).all()
+        }
+        if branch_ids
+        else {}
+    )
+
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    monthly_push_count = db.scalar(
+        select(func.count(BranchEvent.id)).where(
+            BranchEvent.repository_id.in_(active_repository_ids) if active_repository_ids else False,
+            BranchEvent.event_type == "push",
+            BranchEvent.occurred_at >= month_start,
+        )
+    ) or 0
+
+    recent_push_events = db.scalars(
+        select(BranchEvent)
+        .where(
+            BranchEvent.repository_id.in_(active_repository_ids) if active_repository_ids else False,
+            BranchEvent.event_type == "push",
+        )
+        .order_by(BranchEvent.occurred_at.desc())
+        .limit(5)
+    ).all()
+    push_delivery_ids = [event.webhook_delivery_id for event in recent_push_events if event.webhook_delivery_id]
+    webhook_events = db.scalars(
+        select(GithubWebhookEvent).where(
+            GithubWebhookEvent.delivery_id.in_(push_delivery_ids) if push_delivery_ids else False,
         )
     ).all()
-    recent_audits = db.scalars(
-        select(AuditLog).where(AuditLog.workspace_id == workspace.id).order_by(AuditLog.created_at.desc()).limit(4)
-    ).all()
-    sync_health = _sync_health_summary(
-        installations=installations,
-        repositories=repositories,
-        active_repositories=active_repositories,
-        conflicts=conflicts,
-    )
-    github_settings_href = f"/settings/integrations/github?workspace={workspace.slug}"
-    repositories_href = f"/workspaces/{workspace.slug}/repositories"
-    branches_href = f"/workspaces/{workspace.slug}/branches"
-    conflicts_href = f"/workspaces/{workspace.slug}/conflicts"
-    directory_activity = _build_directory_activity_data(
-        db,
-        workspace=workspace,
-        branches=branches,
-        branches_href=branches_href,
-        conflicts_href=conflicts_href,
-    )
-    is_unconnected = not installations
-    if conflicts:
-        state_banner = {
-            "tone": "is-conflict",
-            "title": f"{len(conflicts)}件の競合候補があります",
-            "subtitle": "確認が必要です",
-            "action": _dashboard_action("競合一覧を見る", conflicts_href, "primary"),
-            "extra_actions": [],
-        }
-    elif is_unconnected:
-        state_banner = {
-            "tone": "is-conflict",
-            "title": "GitHub App が未接続です",
-            "subtitle": "",
-            "action": _dashboard_action("GitHub App を連携", github_settings_href, "primary"),
-            "extra_actions": [
-                _dashboard_action("Backlogから連携", "#", "backlog"),
-                _dashboard_action("Git導入", "#", "git"),
-            ],
-        }
-    elif not active_repositories:
-        state_banner = {
-            "tone": "is-stale",
-            "title": "監視対象リポジトリが未選択です",
-            "subtitle": "候補から 1 件選択してください",
-            "action": _dashboard_action("リポジトリを選ぶ", repositories_href, "primary"),
-            "extra_actions": [],
-        }
-    elif not branches:
-        state_banner = {
-            "tone": "is-stale",
-            "title": "まだブランチが観測されていません",
-            "subtitle": "push を待つか、ブランチを手動登録してください",
-            "action": _dashboard_action("ブランチを手動登録", branches_href, "primary"),
-            "extra_actions": [],
-        }
-    else:
-        state_banner = {
-            "tone": "is-available",
-            "title": "監視は正常です",
-            "subtitle": "現在、異常はありません",
-            "action": _dashboard_action("競合一覧を見る", conflicts_href, "secondary"),
-            "extra_actions": [],
-        }
-
-    primary_action = state_banner["action"]
-    secondary_actions = [
-        _dashboard_action("競合一覧を見る", conflicts_href),
-        _dashboard_action("監視対象リポジトリを変更", repositories_href),
-        _dashboard_action("ブランチを手動登録", branches_href),
-    ]
-    secondary_actions = [action for action in secondary_actions if action["label"] != primary_action["label"]]
-    latest_sync_at = max((repository.last_synced_at for repository in repositories if repository.last_synced_at), default=None)
-    latest_webhook_at = max(
-        (installation.last_webhook_event_at for installation in installations if installation.last_webhook_event_at),
+    webhook_by_delivery = {event.delivery_id: event for event in webhook_events}
+    latest_push_received_at = max(
+        (
+            (webhook_by_delivery.get(event.webhook_delivery_id).received_at if webhook_by_delivery.get(event.webhook_delivery_id) else event.occurred_at)
+            for event in recent_push_events
+        ),
         default=None,
     )
-    candidate_count = len(repositories)
-    summary_cards = (
-        [
+
+    all_branch_map = {branch.id: branch for branch in branches}
+    repository_map = {repository.id: repository for repository in active_repositories}
+    push_events: list[dict[str, str]] = []
+    for event in recent_push_events:
+        webhook_event = webhook_by_delivery.get(event.webhook_delivery_id)
+        payload = webhook_event.payload if webhook_event else {}
+        branch = all_branch_map.get(event.branch_id) if event.branch_id else None
+        repository = repository_map.get(event.repository_id)
+        branch_name = branch.name if branch else (_dashboard_payload_branch_name(payload) or "不明")
+        changed_files = _dashboard_payload_changed_file_count(payload) or branch_file_counts.get(
+            event.branch_id or "",
+            branch.touched_files_count if branch else 0,
+        )
+        conflict_count = branch_conflict_counts.get(event.branch_id or "", branch.conflict_files_count if branch else 0)
+        event_time = webhook_event.received_at if webhook_event else event.occurred_at
+        push_events.append(
             {
-                "label": "リポジトリ",
-                "value": str(candidate_count),
-                "meta": "候補リポジトリ",
-                "tone": "is-stale" if candidate_count == 0 else "is-available",
-                "action_label": "リポジトリを見る",
-                "action_href": repositories_href,
-            },
+                "branch_name": branch_name,
+                "repository_name": repository.display_name if repository else "未設定",
+                "changed_files_label": f"変更ファイル {changed_files}",
+                "time_label": _dashboard_recent_or_timestamp(event_time, now),
+                "conflict_label": "競合あり" if conflict_count > 0 else "競合なし",
+                "conflict_class": "is-conflict" if conflict_count > 0 else "is-safe",
+                "actor_label": _dashboard_payload_actor(payload) or "作業者不明",
+            }
+        )
+
+    repo_by_full_name = {repository.full_name: repository for repository in repositories}
+    recent_conflict_audits = db.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.workspace_id == workspace.id,
+            AuditLog.action.in_(["file_collision_detected", "file_collision_resolved"]),
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(5)
+    ).all()
+    conflict_events: list[dict[str, str]] = []
+    for event in recent_conflict_audits:
+        metadata = event.event_metadata or {}
+        path = str(metadata.get("path") or "-")
+        repository_full_name = str(metadata.get("repository") or "-")
+        repository = repo_by_full_name.get(repository_full_name)
+        branch_names = (
+            _dashboard_related_branch_names(
+                db,
+                repository_id=repository.id,
+                normalized_path=path,
+            )
+            if repository is not None and path != "-"
+            else []
+        )
+        is_detected = event.action == "file_collision_detected"
+        conflict_events.append(
             {
-                "label": "ブランチ",
-                "value": str(len(branches)),
-                "meta": "監視中ブランチ",
-                "tone": "is-stale" if not branches else "is-available",
-                "action_label": "ブランチを見る",
-                "action_href": branches_href,
-            },
-            {
-                "label": "競合",
-                "value": str(len(conflicts)),
-                "meta": "確認が必要です" if conflicts else "競合はありません",
-                "tone": "is-conflict" if conflicts else "",
-                "is_critical": True,
-                "action_label": "競合一覧を見る",
-                "action_href": conflicts_href,
-            },
-        ]
-        if is_unconnected
-        else [
-            {
-                "label": "競合",
-                "value": str(len(conflicts)),
-                "meta": "確認が必要です" if conflicts else "競合はありません",
-                "tone": "is-conflict" if conflicts else "",
-                "is_critical": True,
-                "action_label": "競合一覧を見る",
-                "action_href": conflicts_href,
-            },
-            {
-                "label": "監視中リポジトリ",
-                "value": f"{len(active_repositories)} / {active_repository_limit()}",
-                "meta": "監視対象が未選択です" if not active_repositories else f"監視中 {len(active_repositories)} / {active_repository_limit()}",
-                "tone": "is-stale" if not active_repositories else "is-available",
-                "action_label": "リポジトリを選ぶ" if not active_repositories else "監視対象リポジトリを変更",
-                "action_href": repositories_href,
-            },
-            {
-                "label": "監視中ブランチ",
-                "value": str(len(branches)),
-                "meta": "まだ観測されていません" if not branches else "監視中ブランチ",
-                "tone": "is-stale" if not branches else "is-available",
-                "action_label": "ブランチを手動登録",
-                "action_href": branches_href,
-            },
-            {
-                "label": "同期状態",
-                "value": sync_health["status"],
-                "meta": sync_health["subtitle"],
-                "tone": sync_health["tone"],
-                "details": sync_health["details"],
-                "action_label": "GitHub App を連携" if not installations else "repository を再同期",
-                "action_href": github_settings_href if not installations else repositories_href,
-            },
-        ]
-    )
+                "status_label": "競合発生" if is_detected else "競合解消",
+                "status_class": "is-conflict" if is_detected else "is-resolved",
+                "path_label": path,
+                "repository_label": repository.display_name if repository else repository_full_name,
+                "branches_label": _dashboard_branch_list_label(branch_names),
+                "detail_label": "通知: 未設定" if is_detected else "解消: 最新状態で重複なし",
+                "time_label": _dashboard_recent_or_timestamp(event.created_at, now),
+            }
+        )
+
+    latest_conflict_at = max((collision.last_detected_at for collision in conflicts if collision.last_detected_at), default=None)
+
     return {
-        "is_unconnected": is_unconnected,
-        "state_banner": state_banner,
-        "summary_cards": summary_cards,
-        "directory_activity": directory_activity,
-        "quick_actions": {
-            "title": "次に取る行動",
-            "primary": primary_action,
-            "secondary": secondary_actions,
+        "is_unconnected": not installations,
+        "push_card": {
+            "label": "今月のpush検知",
+            "value": monthly_push_count,
+            "limit": 500,
+            "meta": f"最終受信: {_dashboard_recent_or_timestamp(latest_push_received_at, now)}",
+            "icon": "stat_3",
+            "tone": "",
         },
-        "repositories": [
-            {
-                "id": repository.id,
-                "display_name": repository.display_name,
-                "full_name": repository.full_name,
-                "status_label": _repository_row_state(repository)[0],
-                "status_class": _repository_row_state(repository)[1],
-                "helper_text": _repository_row_state(repository)[2],
-                "can_activate": repository.is_available
-                and repository.selection_status in {REPOSITORY_SELECTION_INACTIVE, "unselected"},
-                "is_active_selection": repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
-                "detail_href": repositories_href,
-            }
-            for repository in repositories
-        ],
-        "repository_summary": {
-            "count": candidate_count,
-            "is_empty": candidate_count == 0,
-            "title": "候補 repository がありません" if candidate_count == 0 else "候補 repository から監視対象を選べます",
-            "body": "GitHub App の連携後に再同期してください"
-            if candidate_count == 0
-            else f"候補 repository {candidate_count} 件",
+        "tracked_branches_card": {
+            "label": "監視中ブランチ",
+            "value": len(tracked_branches),
+            "meta": "",
+            "icon": "account_tree",
+            "tone": "",
         },
-        "active_repositories": active_repositories,
-        "member_count": len(members),
-        "installations": [
-            {
-                "github_account_login": installation.github_account_login or f"installation-{installation.installation_id}",
-                "status_label": _installation_status_badge(installation)[0],
-                "status_class": _installation_status_badge(installation)[1],
-                "helper_text": _installation_status_badge(installation)[2],
-                "repository_count": len(
-                    [repository for repository in repositories if repository.github_installation_id == installation.id]
-                ),
-                "last_webhook_event_at": _format_timestamp(installation.last_webhook_event_at),
-                "settings_href": github_settings_href,
-            }
-            for installation in installations
-        ],
-        "installation_summary": {
-            "is_empty": len(installations) == 0,
-            "title": "GitHub App が未接続です" if not installations else "GitHub App 接続",
-            "body": "連携すると repository を取り込めます" if not installations else "接続状態と webhook 受信状況を確認できます",
-            "action": _dashboard_action("GitHub App を連携", github_settings_href),
+        "conflicts_card": {
+            "label": "未解消競合",
+            "value": len(conflicts),
+            "meta": f"最終発生: {_dashboard_recent_or_timestamp(latest_conflict_at, now)}",
+            "icon": "warning",
+            "tone": "is-conflict",
         },
-        "getting_started_steps": [
-            {
-                "title": "GitHub App を連携",
-                "description": "repository を取り込むための最初の設定です",
-                "status_label": "完了" if installations else "次",
-                "status_class": "is-available" if installations else "is-stale",
-                "action": None if installations else _dashboard_action("GitHub App を連携", github_settings_href),
-            },
-            {
-                "title": "監視対象 repository を選択",
-                "description": "候補から 1 件選ぶと branch の監視を開始できます",
-                "status_label": "完了" if active_repositories else "次" if installations else "未着手",
-                "status_class": "is-available" if active_repositories else "is-stale" if installations else "",
-                "action": None if active_repositories or not installations else _dashboard_action("repository を選ぶ", repositories_href),
-            },
-            {
-                "title": "branch を観測または手動登録",
-                "description": "push を待つか、既存 branch を手動登録してください",
-                "status_label": "完了" if branches else "次" if active_repositories else "未着手",
-                "status_class": "is-available" if branches else "is-stale" if active_repositories else "",
-                "action": None if branches or not active_repositories else _dashboard_action("ブランチを手動登録", branches_href),
-            },
-        ],
-        "recent_events": [
-            {
-                "title": _recent_event_label(event)[0],
-                "body": _recent_event_label(event)[1],
-                "time": _format_timestamp(event.created_at),
-            }
-            for event in recent_audits
-        ],
-        "latest_sync_at": _format_timestamp(latest_sync_at),
-        "latest_webhook_at": _format_timestamp(latest_webhook_at),
-        "candidate_count": candidate_count,
+        "conflict_events": conflict_events,
+        "push_events": push_events,
+        "conflicts_href": conflicts_href,
+        "github_settings_href": github_settings_href,
     }
 
 
