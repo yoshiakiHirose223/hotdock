@@ -20,3 +20,7 @@ storage/temp/*
 !storage/temp/.gitkeep
 storage/blog/images/*
 !storage/blog/images/.gitkeep
+
+# Runtime audit logs
+storage/audit/*.jsonl
+storage/audit/*.log
