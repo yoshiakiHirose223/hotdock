@@ -2032,26 +2032,13 @@ def workspace_file_tree_data(db: Session, workspace: Workspace) -> dict[str, obj
             }
         )
 
-    prioritized_files = [node for node in serialized_nodes if node["kind"] == "file"]
-    prioritized_files.sort(
-        key=lambda node: (
-            _FILE_TREE_STATUS_PRIORITY.get(str(node["status"]), 99),
-            -(len(node.get("branch_cards", []))),
-            str(node["path"]).lower(),
-        )
-    )
-    initial_selected_id = prioritized_files[0]["id"] if prioritized_files else (root_ids[0] if root_ids else None)
     default_expanded = set(root_ids)
-    current = nodes.get(initial_selected_id) if initial_selected_id else None
-    while current and current.get("parent_id"):
-        default_expanded.add(str(current["parent_id"]))
-        current = nodes.get(current["parent_id"])
 
     payload = {
         "root_ids": root_ids,
         "nodes": serialized_nodes,
         "default_expanded": sorted(default_expanded),
-        "initial_selected_id": initial_selected_id,
+        "initial_selected_id": None,
         "branch_filter_options": [
             {"value": "all", "label": "すべてのアクティブブランチ"},
             {"value": "conflict", "label": "競合中のみ"},

@@ -784,6 +784,7 @@ def test_workspace_file_tree_renders_observed_files_and_branch_links(client):
     response = client.get("/workspaces/tree-data-team/file-tree")
 
     assert response.status_code == 200
+    assert '"initial_selected_id": null' in response.text
     assert "src/app/main.ts" in response.text
     assert "package.json" in response.text
     assert "feature/auth-refactor" in response.text

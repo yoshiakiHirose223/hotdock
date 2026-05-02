@@ -20,6 +20,7 @@
         border-radius: 18px;
         background: #ffffff;
         overflow: hidden;
+        min-width: 0;
     }
 
     .file-tree-explorer {
@@ -88,9 +89,15 @@
     }
 
     .file-tree-results {
+        min-height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex: 0 0 auto;
         color: #636c76;
         font-size: 0.82rem;
         padding: 0.15rem 1rem 0;
+        white-space: nowrap;
     }
 
     .file-tree-viewport {
@@ -921,8 +928,7 @@
                 if (state.selectedId && state.visibleNodes.some((node) => node.id === state.selectedId)) {
                     return;
                 }
-                const preferred = state.visibleNodes.find((node) => node.kind === "file");
-                state.selectedId = (preferred || state.visibleNodes[0]).id;
+                state.selectedId = null;
             };
 
             const renderBranchPreview = (node) => {
@@ -1252,7 +1258,6 @@
                     } else {
                         state.expanded.add(toggleId);
                     }
-                    state.selectedId = toggleId;
                     sync();
                     return;
                 }
