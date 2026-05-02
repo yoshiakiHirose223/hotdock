@@ -98,6 +98,9 @@ def apply_runtime_schema_upgrades() -> None:
         ("touch_seed_error_message", "touch_seed_error_message VARCHAR(2048)"),
         ("has_authoritative_compare_history", "has_authoritative_compare_history BOOLEAN NOT NULL DEFAULT FALSE"),
         ("has_webhook_history", "has_webhook_history BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("is_ignored_from_conflicts", "is_ignored_from_conflicts BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("ignored_from_conflicts_at", "ignored_from_conflicts_at TIMESTAMP"),
+        ("ignored_from_conflicts_by_user_id", "ignored_from_conflicts_by_user_id VARCHAR(36)"),
         ("last_delivery_id", "last_delivery_id VARCHAR(128)"),
         ("last_processed_compare_base", "last_processed_compare_base VARCHAR(64)"),
         ("last_processed_compare_head", "last_processed_compare_head VARCHAR(64)"),
@@ -116,6 +119,9 @@ def apply_runtime_schema_upgrades() -> None:
         ("last_seen_at", "last_seen_at TIMESTAMP"),
         ("source_kind", "source_kind VARCHAR(32)"),
         ("is_active", "is_active BOOLEAN NOT NULL DEFAULT TRUE"),
+        ("is_ignored_from_conflicts", "is_ignored_from_conflicts BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("ignored_from_conflicts_at", "ignored_from_conflicts_at TIMESTAMP"),
+        ("ignored_from_conflicts_by_user_id", "ignored_from_conflicts_by_user_id VARCHAR(36)"),
     ]
     pending_claim_columns = [
         ("last_resume_at", "last_resume_at TIMESTAMP"),
@@ -174,6 +180,7 @@ def apply_runtime_schema_upgrades() -> None:
         "was_force_pushed_observed = COALESCE(was_force_pushed_observed, FALSE), "
         "has_authoritative_compare_history = COALESCE(has_authoritative_compare_history, FALSE), "
         "has_webhook_history = COALESCE(has_webhook_history, FALSE), "
+        "is_ignored_from_conflicts = COALESCE(is_ignored_from_conflicts, FALSE), "
         "observed_via = COALESCE(observed_via, CASE WHEN COALESCE(has_webhook_history, FALSE) THEN 'webhook' ELSE NULL END)"
     )
     _execute_upgrade_sql(
@@ -183,6 +190,7 @@ def apply_runtime_schema_upgrades() -> None:
         "first_seen_at = COALESCE(first_seen_at, observed_at, last_seen_at, created_at), "
         "last_seen_at = COALESCE(last_seen_at, observed_at), "
         "is_active = COALESCE(is_active, TRUE), "
+        "is_ignored_from_conflicts = COALESCE(is_ignored_from_conflicts, FALSE), "
         "repository_id = COALESCE(repository_id, (SELECT repository_id FROM branches WHERE branches.id = branch_files.branch_id))"
     )
 
@@ -196,12 +204,16 @@ def apply_runtime_schema_upgrades() -> None:
         "CREATE INDEX IF NOT EXISTS ix_branches_touch_seed_status ON branches (touch_seed_status)",
         "CREATE INDEX IF NOT EXISTS ix_branches_has_authoritative_compare_history ON branches (has_authoritative_compare_history)",
         "CREATE INDEX IF NOT EXISTS ix_branches_has_webhook_history ON branches (has_webhook_history)",
+        "CREATE INDEX IF NOT EXISTS ix_branches_is_ignored_from_conflicts ON branches (is_ignored_from_conflicts)",
+        "CREATE INDEX IF NOT EXISTS ix_branches_ignored_from_conflicts_by_user_id ON branches (ignored_from_conflicts_by_user_id)",
         "CREATE INDEX IF NOT EXISTS ix_branch_events_reason ON branch_events (reason)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_repository_id ON branch_files (repository_id)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_normalized_path ON branch_files (normalized_path)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_source_kind ON branch_files (source_kind)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_last_seen_at ON branch_files (last_seen_at)",
         "CREATE INDEX IF NOT EXISTS ix_branch_files_is_active ON branch_files (is_active)",
+        "CREATE INDEX IF NOT EXISTS ix_branch_files_is_ignored_from_conflicts ON branch_files (is_ignored_from_conflicts)",
+        "CREATE INDEX IF NOT EXISTS ix_branch_files_ignored_from_conflicts_by_user_id ON branch_files (ignored_from_conflicts_by_user_id)",
         "CREATE INDEX IF NOT EXISTS ix_github_pending_claims_last_resume_at ON github_pending_claims (last_resume_at)",
         "CREATE INDEX IF NOT EXISTS ix_github_pending_claims_state_verified_at ON github_pending_claims (state_verified_at)",
         "CREATE INDEX IF NOT EXISTS ix_github_pending_claims_callback_source ON github_pending_claims (callback_source)",

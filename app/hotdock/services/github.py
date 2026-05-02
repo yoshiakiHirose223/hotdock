@@ -1826,7 +1826,9 @@ class UpsertBranchStateService:
         if not deleted:
             branch.current_head_sha = after_sha
             branch.last_commit_sha = after_sha
-            if branch.conflict_files_count == 0:
+            if branch.is_ignored_from_conflicts:
+                branch.branch_status = "ignored"
+            elif branch.conflict_files_count == 0:
                 branch.branch_status = "normal"
         else:
             branch.branch_status = "deleted"
@@ -2183,8 +2185,10 @@ class RecalculateFileCollisionsService:
                     BranchFile.repository_id == repository.id,
                     BranchFile.normalized_path == normalized_path,
                     BranchFile.is_active.is_(True),
+                    BranchFile.is_ignored_from_conflicts.is_(False),
                     Branch.is_deleted.is_(False),
                     Branch.is_active.is_(True),
+                    Branch.is_ignored_from_conflicts.is_(False),
                 )
             ).all()
             active_files = [file_item for file_item in active_files if file_item.branch_id]
@@ -2302,8 +2306,18 @@ class RecalculateFileCollisionsService:
                 BranchFile.normalized_path.in_(list(impacted_paths)),
             )
         ).all()
+        affected_branches = {
+            branch.id: branch
+            for branch in db.scalars(select(Branch).where(Branch.id.in_({file_item.branch_id for file_item in active_impacted_files if file_item.branch_id}))).all()
+        } if active_impacted_files else {}
         for file_item in active_impacted_files:
-            file_item.is_conflict = file_item.is_active and file_item.normalized_path in open_collision_paths
+            branch = affected_branches.get(file_item.branch_id)
+            file_item.is_conflict = (
+                file_item.is_active
+                and not file_item.is_ignored_from_conflicts
+                and (not bool(branch.is_ignored_from_conflicts) if branch is not None else True)
+                and file_item.normalized_path in open_collision_paths
+            )
 
         # This project runs sessions with autoflush=False, so collision row
         # inserts/deletes above must be flushed before the per-branch count
@@ -2331,6 +2345,8 @@ class RecalculateFileCollisionsService:
             ) or 0
             if branch.is_deleted:
                 branch.branch_status = "deleted"
+            elif branch.is_ignored_from_conflicts:
+                branch.branch_status = "ignored"
             elif branch.conflict_files_count > 0:
                 branch.branch_status = "has_conflict"
             elif branch.touch_seed_status == BRANCH_TOUCH_SEED_STATUS_API_ERROR:

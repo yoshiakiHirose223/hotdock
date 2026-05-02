@@ -5,8 +5,9 @@ from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
-from app.hotdock.services.github import sync_claimed_installation_repositories
+from app.hotdock.services.github import RecalculateFileCollisionsService, sync_claimed_installation_repositories
 from app.main import app
 from app.core.database import SessionLocal
 from app.models.branch import Branch
@@ -3132,6 +3133,204 @@ def test_workspace_branches_table_uses_japanese_labels_and_hides_old_seed_copy(c
     assert focused.status_code == 200
     assert 'data-branch-highlight-id="' + branch_id + '"' in focused.text
     assert 'value="feature/table-refresh"' in focused.text
+
+
+def test_workspace_branch_and_file_ignore_recalculate_conflicts(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Ignore Owner",
+            "email": "ignore-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Ignore Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+    owner_csrf = client.cookies.get("hotdock_csrf")
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="ignore-team").one()
+    installation = GithubInstallation(
+        installation_id=8461,
+        github_account_id=99771,
+        github_account_login="ignore-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=97611,
+        full_name="ignore-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.flush()
+    now = datetime.utcnow()
+    branch_a = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/login",
+        branch_status="normal",
+        current_head_sha="a" * 40,
+        last_push_at=now - timedelta(minutes=12),
+        is_active=True,
+        is_deleted=False,
+        observed_via="webhook",
+    )
+    branch_b = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/header",
+        branch_status="normal",
+        current_head_sha="b" * 40,
+        last_push_at=now - timedelta(minutes=6),
+        is_active=True,
+        is_deleted=False,
+        observed_via="webhook",
+    )
+    db.add_all([branch_a, branch_b])
+    db.flush()
+    branch_file_a = BranchFile(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        branch_id=branch_a.id,
+        path="app/main.py",
+        normalized_path="app/main.py",
+        change_type="modified",
+        first_seen_change_type="modified",
+        last_change_type="modified",
+        source_kind="compare",
+        observed_at=now - timedelta(minutes=12),
+        last_seen_at=now - timedelta(minutes=12),
+        is_active=True,
+    )
+    branch_file_b = BranchFile(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        branch_id=branch_b.id,
+        path="app/main.py",
+        normalized_path="app/main.py",
+        change_type="modified",
+        first_seen_change_type="modified",
+        last_change_type="modified",
+        source_kind="compare",
+        observed_at=now - timedelta(minutes=6),
+        last_seen_at=now - timedelta(minutes=6),
+        is_active=True,
+    )
+    db.add_all([branch_file_a, branch_file_b])
+    db.flush()
+    RecalculateFileCollisionsService()(
+        db,
+        repository=repository,
+        impacted_paths={"app/main.py"},
+        occurred_at=now,
+    )
+    db.commit()
+    branch_a_id = branch_a.id
+    branch_b_id = branch_b.id
+    branch_file_b_id = branch_file_b.id
+    repository_id = repository.id
+    db.close()
+
+    response = client.post(
+        f"/workspaces/ignore-team/branches/{branch_b_id}/files/{branch_file_b_id}/ignore",
+        data={
+            "csrf_token": owner_csrf,
+            "return_to": "/workspaces/ignore-team/branches",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/workspaces/ignore-team/branches"
+
+    db = SessionLocal()
+    ignored_file = db.get(BranchFile, branch_file_b_id)
+    resolved_collision = db.scalar(
+        select(FileCollision).where(
+            FileCollision.repository_id == repository_id,
+            FileCollision.normalized_path == "app/main.py",
+        )
+    )
+    assert ignored_file is not None
+    assert ignored_file.is_ignored_from_conflicts is True
+    assert resolved_collision is not None
+    assert resolved_collision.collision_status == "resolved"
+    db.close()
+
+    response = client.post(
+        f"/workspaces/ignore-team/branches/{branch_b_id}/files/{branch_file_b_id}/unignore",
+        data={
+            "csrf_token": owner_csrf,
+            "return_to": "/workspaces/ignore-team/branches",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    db = SessionLocal()
+    restored_file = db.get(BranchFile, branch_file_b_id)
+    reopened_collision = db.scalar(
+        select(FileCollision).where(
+            FileCollision.repository_id == repository_id,
+            FileCollision.normalized_path == "app/main.py",
+        )
+    )
+    assert restored_file is not None
+    assert restored_file.is_ignored_from_conflicts is False
+    assert reopened_collision is not None
+    assert reopened_collision.collision_status == "open"
+    db.close()
+
+    response = client.post(
+        f"/workspaces/ignore-team/branches/{branch_b_id}/ignore",
+        data={
+            "csrf_token": owner_csrf,
+            "return_to": "/workspaces/ignore-team/branches",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    db = SessionLocal()
+    ignored_branch = db.get(Branch, branch_b_id)
+    resolved_after_branch_ignore = db.scalar(
+        select(FileCollision).where(
+            FileCollision.repository_id == repository_id,
+            FileCollision.normalized_path == "app/main.py",
+        )
+    )
+    assert ignored_branch is not None
+    assert ignored_branch.is_ignored_from_conflicts is True
+    assert ignored_branch.branch_status == "ignored"
+    assert resolved_after_branch_ignore is not None
+    assert resolved_after_branch_ignore.collision_status == "resolved"
+    db.close()
+
+    page = client.get(f"/workspaces/ignore-team/branches?branch=feature/header&highlight_branch_id={branch_b_id}")
+    assert page.status_code == 200
+    assert "Ignore解除" in page.text
+    assert "競合検知から除外中" in page.text
+    assert 'data-branch-highlight-id="' + branch_b_id + '"' in page.text
+    assert "feature/header" in page.text
 
 
 def test_manual_branch_registration_rescues_webhook_seeded_branch(client, monkeypatch):

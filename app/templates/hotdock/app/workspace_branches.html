@@ -300,6 +300,10 @@
         color: #b91c1c;
     }
 
+    .branch-name-icon.is-muted {
+        color: #94a3b8;
+    }
+
     .branch-name-copy {
         display: grid;
         gap: 0.25rem;
@@ -523,6 +527,19 @@
         color: #94a3b8;
         font-size: 0.78rem;
         overflow-wrap: anywhere;
+    }
+
+    .branch-detail-file__subcopy.is-ignored {
+        color: #64748b;
+        font-weight: 700;
+    }
+
+    .branch-detail-file__controls {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.55rem;
+        flex-wrap: wrap;
     }
 
     .branch-detail-file__status {
@@ -782,6 +799,10 @@
             grid-template-columns: 1fr;
         }
 
+        .branch-detail-file__controls {
+            justify-content: flex-start;
+        }
+
         .branch-actions-cell {
             text-align: left;
         }
@@ -918,7 +939,11 @@
                                     {% if branch.is_conflict %}
                                     <a class="button button-secondary button-small" href="{{ branch.conflict_detail_href }}">詳細</a>
                                     {% endif %}
-                                    <button class="button button-ghost button-small" type="button" data-branch-ignore="{{ branch.id }}">Ignore</button>
+                                    <form method="post" action="/workspaces/{{ workspace.slug }}/branches/{{ branch.id }}/{% if branch.is_ignored %}unignore{% else %}ignore{% endif %}">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <input type="hidden" name="return_to" value="{{ branches_current_path }}">
+                                        <button class="button button-ghost button-small" type="submit">{% if branch.is_ignored %}Ignore解除{% else %}Ignore{% endif %}</button>
+                                    </form>
                                     <button class="branch-delete-button" type="button" data-branch-delete="{{ branch.id }}" aria-label="削除">
                                         <span class="material-symbols-outlined" aria-hidden="true">delete</span>
                                     </button>
@@ -940,9 +965,19 @@
                                                     {% if file.previous_path %}
                                                     <div class="branch-detail-file__subcopy">変更前: {{ file.previous_path }}</div>
                                                     {% endif %}
+                                                    {% if file.is_ignored %}
+                                                    <div class="branch-detail-file__subcopy is-ignored">競合検知から除外中</div>
+                                                    {% endif %}
                                                 </div>
                                             </div>
-                                            <span class="branch-detail-file__status {{ file.status_class }}">{{ file.status_label }}</span>
+                                            <div class="branch-detail-file__controls">
+                                                <span class="branch-detail-file__status {{ file.status_class }}{% if file.is_ignored %} is-muted{% endif %}">{{ file.status_label }}</span>
+                                                <form method="post" action="/workspaces/{{ workspace.slug }}/branches/{{ branch.id }}/files/{{ file.id }}/{% if file.is_ignored %}unignore{% else %}ignore{% endif %}">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                                    <input type="hidden" name="return_to" value="{{ branches_current_path }}">
+                                                    <button class="button button-ghost button-small" type="submit">{% if file.is_ignored %}Ignore解除{% else %}Ignore{% endif %}</button>
+                                                </form>
+                                            </div>
                                         </div>
                                         {% endfor %}
                                     </div>
@@ -1047,7 +1082,7 @@
             const pageSize = 15;
             const state = {
                 page: 1,
-                ignored: new Set(),
+                deleted: new Set(),
                 highlightId: browser.dataset.branchHighlightId || "",
                 highlightPending: Boolean(browser.dataset.branchHighlightId),
                 expanded: new Set(browser.dataset.branchHighlightId ? [browser.dataset.branchHighlightId] : []),
@@ -1109,7 +1144,7 @@
                     const query = searchInput.value.trim().toLowerCase();
                     const statusValue = statusSelect.value;
                     const filtered = rows.filter((row) => {
-                        if (state.ignored.has(row.dataset.branchId || "")) {
+                        if (state.deleted.has(row.dataset.branchId || "")) {
                             return false;
                         }
                         if (query && !(row.dataset.branchSearchText || "").includes(query)) {
@@ -1213,12 +1248,10 @@
                     if (target.closest("[data-branch-detail-row]")) {
                         return;
                     }
-                    const ignoreId = target.closest("[data-branch-ignore]")?.getAttribute("data-branch-ignore");
                     const deleteId = target.closest("[data-branch-delete]")?.getAttribute("data-branch-delete");
-                    const branchId = ignoreId || deleteId;
-                    if (branchId) {
-                        state.ignored.add(branchId);
-                        state.expanded.delete(branchId);
+                    if (deleteId) {
+                        state.deleted.add(deleteId);
+                        state.expanded.delete(deleteId);
                         updateTable();
                         return;
                     }

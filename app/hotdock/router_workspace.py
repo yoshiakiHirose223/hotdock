@@ -30,6 +30,7 @@ from app.hotdock.services.github import (
     DETAIL_SYNC_ERROR,
     DETAIL_SYNC_NOT_STARTED,
     DETAIL_SYNC_SYNCING,
+    RecalculateFileCollisionsService,
     REPOSITORY_SELECTION_ACTIVE,
     REPOSITORY_SELECTION_INACCESSIBLE,
     REPOSITORY_SELECTION_INACTIVE,
@@ -158,6 +159,8 @@ def _format_branch_relative_timestamp(value, *, now: datetime | None = None) -> 
 def _workspace_branch_status_badge(branch: Branch) -> tuple[str, str]:
     if branch.is_deleted or branch.branch_status == "deleted":
         return "削除済み", "badge badge-muted"
+    if branch.is_ignored_from_conflicts or branch.branch_status == "ignored":
+        return "無視中", "badge badge-muted"
     if branch.conflict_files_count > 0 or branch.branch_status == "has_conflict":
         return "競合", "badge badge-danger"
     if branch.touch_seed_status == "api_error" or branch.branch_status == "api_error":
@@ -176,6 +179,8 @@ def _workspace_branch_status_badge(branch: Branch) -> tuple[str, str]:
 def _workspace_branch_list_status(branch: Branch) -> tuple[str, str, str]:
     if branch.is_deleted or branch.branch_status == "deleted":
         return "deleted", "削除済み", "is-muted"
+    if branch.is_ignored_from_conflicts or branch.branch_status == "ignored":
+        return "ignored", "無視中", "is-muted"
     if branch.conflict_files_count > 0 or branch.branch_status == "has_conflict":
         return "conflict", "競合中", "is-conflict"
     if branch.touch_seed_status == "api_error" or branch.branch_status == "api_error":
@@ -807,6 +812,248 @@ async def workspace_branch_manual_register(
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
+@router.post("/workspaces/{workspace_slug}/branches/{branch_id}/ignore", name="hotdock-workspace-branch-ignore")
+async def workspace_branch_ignore(
+    workspace_slug: str,
+    branch_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    csrf_token: str = Form(...),
+    return_to: str = Form(default=""),
+):
+    auth = attach_auth_context(request, db)
+    redirect_path = sanitize_next_path(return_to) or f"/workspaces/{workspace_slug}/branches"
+    if auth.user is None:
+        return RedirectResponse(url=build_login_redirect(redirect_path), status_code=status.HTTP_303_SEE_OTHER)
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="viewer")
+    branch = db.scalar(
+        select(Branch)
+        .join(Repository, Repository.id == Branch.repository_id)
+        .where(
+            Branch.id == branch_id,
+            Repository.workspace_id == access.workspace.id,
+            Repository.deleted_at.is_(None),
+        )
+    )
+    if branch is None:
+        set_flash(request, "error", "対象のブランチが見つかりません。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+    repository = db.get(Repository, branch.repository_id)
+    occurred_at = datetime.utcnow()
+    impacted_paths = {
+        value
+        for value in db.scalars(
+            select(BranchFile.normalized_path).where(
+                BranchFile.branch_id == branch.id,
+                BranchFile.is_active.is_(True),
+            )
+        ).all()
+        if value
+    }
+    branch.is_ignored_from_conflicts = True
+    branch.ignored_from_conflicts_at = occurred_at
+    branch.ignored_from_conflicts_by_user_id = auth.user.id
+    db.flush()
+    if repository is not None and impacted_paths:
+        RecalculateFileCollisionsService()(db, repository=repository, impacted_paths=impacted_paths, occurred_at=occurred_at)
+    record_audit_log(
+        db,
+        request,
+        actor_type="user",
+        actor_id=auth.user.id,
+        workspace_id=access.workspace.id,
+        target_type="branch",
+        target_id=branch.id,
+        action="workspace_branch_ignored_from_conflicts",
+        metadata={"branch_name": branch.name, "repository": repository.full_name if repository else None},
+    )
+    db.commit()
+    set_flash(request, "success", f"{branch.name} を競合検知対象から外しました。")
+    return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/workspaces/{workspace_slug}/branches/{branch_id}/unignore", name="hotdock-workspace-branch-unignore")
+async def workspace_branch_unignore(
+    workspace_slug: str,
+    branch_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    csrf_token: str = Form(...),
+    return_to: str = Form(default=""),
+):
+    auth = attach_auth_context(request, db)
+    redirect_path = sanitize_next_path(return_to) or f"/workspaces/{workspace_slug}/branches"
+    if auth.user is None:
+        return RedirectResponse(url=build_login_redirect(redirect_path), status_code=status.HTTP_303_SEE_OTHER)
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="viewer")
+    branch = db.scalar(
+        select(Branch)
+        .join(Repository, Repository.id == Branch.repository_id)
+        .where(
+            Branch.id == branch_id,
+            Repository.workspace_id == access.workspace.id,
+            Repository.deleted_at.is_(None),
+        )
+    )
+    if branch is None:
+        set_flash(request, "error", "対象のブランチが見つかりません。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+    repository = db.get(Repository, branch.repository_id)
+    occurred_at = datetime.utcnow()
+    impacted_paths = {
+        value
+        for value in db.scalars(
+            select(BranchFile.normalized_path).where(
+                BranchFile.branch_id == branch.id,
+                BranchFile.is_active.is_(True),
+            )
+        ).all()
+        if value
+    }
+    branch.is_ignored_from_conflicts = False
+    branch.ignored_from_conflicts_at = None
+    branch.ignored_from_conflicts_by_user_id = None
+    db.flush()
+    if repository is not None and impacted_paths:
+        RecalculateFileCollisionsService()(db, repository=repository, impacted_paths=impacted_paths, occurred_at=occurred_at)
+    record_audit_log(
+        db,
+        request,
+        actor_type="user",
+        actor_id=auth.user.id,
+        workspace_id=access.workspace.id,
+        target_type="branch",
+        target_id=branch.id,
+        action="workspace_branch_unignored_from_conflicts",
+        metadata={"branch_name": branch.name, "repository": repository.full_name if repository else None},
+    )
+    db.commit()
+    set_flash(request, "success", f"{branch.name} を競合検知対象に戻しました。")
+    return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/workspaces/{workspace_slug}/branches/{branch_id}/files/{branch_file_id}/ignore", name="hotdock-workspace-branch-file-ignore")
+async def workspace_branch_file_ignore(
+    workspace_slug: str,
+    branch_id: str,
+    branch_file_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    csrf_token: str = Form(...),
+    return_to: str = Form(default=""),
+):
+    auth = attach_auth_context(request, db)
+    redirect_path = sanitize_next_path(return_to) or f"/workspaces/{workspace_slug}/branches"
+    if auth.user is None:
+        return RedirectResponse(url=build_login_redirect(redirect_path), status_code=status.HTTP_303_SEE_OTHER)
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="viewer")
+    branch_file = db.scalar(
+        select(BranchFile)
+        .join(Branch, Branch.id == BranchFile.branch_id)
+        .join(Repository, Repository.id == Branch.repository_id)
+        .where(
+            BranchFile.id == branch_file_id,
+            BranchFile.branch_id == branch_id,
+            Repository.workspace_id == access.workspace.id,
+            Repository.deleted_at.is_(None),
+        )
+    )
+    if branch_file is None:
+        set_flash(request, "error", "対象のファイルが見つかりません。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+    branch = db.get(Branch, branch_file.branch_id)
+    repository = db.get(Repository, branch_file.repository_id or (branch.repository_id if branch else None))
+    occurred_at = datetime.utcnow()
+    impacted_path = branch_file.normalized_path or branch_file.path
+    branch_file.is_ignored_from_conflicts = True
+    branch_file.ignored_from_conflicts_at = occurred_at
+    branch_file.ignored_from_conflicts_by_user_id = auth.user.id
+    db.flush()
+    if repository is not None and impacted_path:
+        RecalculateFileCollisionsService()(db, repository=repository, impacted_paths={impacted_path}, occurred_at=occurred_at)
+    record_audit_log(
+        db,
+        request,
+        actor_type="user",
+        actor_id=auth.user.id,
+        workspace_id=access.workspace.id,
+        target_type="branch_file",
+        target_id=branch_file.id,
+        action="workspace_branch_file_ignored_from_conflicts",
+        metadata={"branch_name": branch.name if branch else None, "path": branch_file.path, "repository": repository.full_name if repository else None},
+    )
+    db.commit()
+    set_flash(request, "success", f"{branch_file.path} を競合検知対象から外しました。")
+    return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/workspaces/{workspace_slug}/branches/{branch_id}/files/{branch_file_id}/unignore", name="hotdock-workspace-branch-file-unignore")
+async def workspace_branch_file_unignore(
+    workspace_slug: str,
+    branch_id: str,
+    branch_file_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    csrf_token: str = Form(...),
+    return_to: str = Form(default=""),
+):
+    auth = attach_auth_context(request, db)
+    redirect_path = sanitize_next_path(return_to) or f"/workspaces/{workspace_slug}/branches"
+    if auth.user is None:
+        return RedirectResponse(url=build_login_redirect(redirect_path), status_code=status.HTTP_303_SEE_OTHER)
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="viewer")
+    branch_file = db.scalar(
+        select(BranchFile)
+        .join(Branch, Branch.id == BranchFile.branch_id)
+        .join(Repository, Repository.id == Branch.repository_id)
+        .where(
+            BranchFile.id == branch_file_id,
+            BranchFile.branch_id == branch_id,
+            Repository.workspace_id == access.workspace.id,
+            Repository.deleted_at.is_(None),
+        )
+    )
+    if branch_file is None:
+        set_flash(request, "error", "対象のファイルが見つかりません。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+    branch = db.get(Branch, branch_file.branch_id)
+    repository = db.get(Repository, branch_file.repository_id or (branch.repository_id if branch else None))
+    occurred_at = datetime.utcnow()
+    impacted_path = branch_file.normalized_path or branch_file.path
+    branch_file.is_ignored_from_conflicts = False
+    branch_file.ignored_from_conflicts_at = None
+    branch_file.ignored_from_conflicts_by_user_id = None
+    db.flush()
+    if repository is not None and impacted_path:
+        RecalculateFileCollisionsService()(db, repository=repository, impacted_paths={impacted_path}, occurred_at=occurred_at)
+    record_audit_log(
+        db,
+        request,
+        actor_type="user",
+        actor_id=auth.user.id,
+        workspace_id=access.workspace.id,
+        target_type="branch_file",
+        target_id=branch_file.id,
+        action="workspace_branch_file_unignored_from_conflicts",
+        metadata={"branch_name": branch.name if branch else None, "path": branch_file.path, "repository": repository.full_name if repository else None},
+    )
+    db.commit()
+    set_flash(request, "success", f"{branch_file.path} を競合検知対象に戻しました。")
+    return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+
+
 @router.get("/workspaces/{workspace_slug}/branches", name="hotdock-workspace-branches")
 async def workspace_branches(workspace_slug: str, request: Request, db: Session = Depends(get_db)):
     auth = attach_auth_context(request, db)
@@ -883,11 +1130,13 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
             label, badge_class = _branch_file_change_label(branch_file)
             branch_files_by_branch_id.setdefault(branch_file.branch_id, []).append(
                 {
+                    "id": branch_file.id,
                     "path": branch_file.path,
                     "previous_path": branch_file.previous_path or "",
                     "status_label": label,
                     "status_class": badge_class,
                     "is_conflict": bool(branch_file.is_conflict),
+                    "is_ignored": bool(branch_file.is_ignored_from_conflicts),
                 }
             )
     context["branches"] = [
@@ -917,6 +1166,7 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
             "observed_via_label": "手動登録" if branch.observed_via == "manual" else None,
             "touch_seed_source": branch.touch_seed_source,
             "is_deleted": branch.is_deleted,
+            "is_ignored": branch.is_ignored_from_conflicts,
             "repository_name": repositories.get(branch.repository_id).display_name if repositories.get(branch.repository_id) else "-",
             "repository_selection_status": repositories.get(branch.repository_id).selection_status if repositories.get(branch.repository_id) else None,
             "repository_is_available": repositories.get(branch.repository_id).is_available if repositories.get(branch.repository_id) else False,
@@ -927,9 +1177,9 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
             "is_recent": bool(branch.last_push_at and branch.last_push_at >= active_cutoff),
             "activity_segments": _workspace_branch_meter_segments(branch.touched_files_count),
             "activity_class": "is-conflict" if status_key == "conflict" else "is-warning" if status_key in {"warning", "pending"} else "is-active",
-            "row_icon": "warning" if status_key == "conflict" else "fork_right",
-            "row_icon_class": "is-conflict" if status_key == "conflict" else "is-active",
-            "subline": "手動登録" if branch.observed_via == "manual" else f"監視中: {repositories.get(branch.repository_id).display_name if repositories.get(branch.repository_id) else '-'}",
+            "row_icon": "warning" if status_key == "conflict" else "visibility_off" if status_key == "ignored" else "fork_right",
+            "row_icon_class": "is-conflict" if status_key == "conflict" else "is-muted" if status_key == "ignored" else "is-active",
+            "subline": "競合検知から除外中" if branch.is_ignored_from_conflicts else ("手動登録" if branch.observed_via == "manual" else f"監視中: {repositories.get(branch.repository_id).display_name if repositories.get(branch.repository_id) else '-'}"),
             "files": branch_files_by_branch_id.get(branch.id, []),
             "detail_heading": f"{'競合ファイル' if status_key == 'conflict' else '編集ファイル'} ({branch.touched_files_count})",
             }
@@ -966,6 +1216,7 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
     context["manual_branch_result"] = manual_branch_result if isinstance(manual_branch_result, dict) else None
     context["branch_search_query"] = (request.query_params.get("branch") or "").strip()
     context["branch_highlight_id"] = (request.query_params.get("highlight_branch_id") or "").strip()
+    context["branches_current_path"] = sanitize_next_path(str(request.url.path) + (f"?{request.url.query}" if request.url.query else "")) or f"/workspaces/{workspace_slug}/branches"
     return render_app("hotdock/app/workspace_branches.html", context)
 
 
