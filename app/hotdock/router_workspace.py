@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import quote_plus
 
 import hmac
 
@@ -925,6 +926,7 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
     manual_branch_result = request.session.pop(MANUAL_BRANCH_RESULT_SESSION_KEY, None)
     context["manual_branch_result"] = manual_branch_result if isinstance(manual_branch_result, dict) else None
     context["branch_search_query"] = (request.query_params.get("branch") or "").strip()
+    context["branch_highlight_id"] = (request.query_params.get("highlight_branch_id") or "").strip()
     return render_app("hotdock/app/workspace_branches.html", context)
 
 
@@ -1275,6 +1277,18 @@ async def workspace_conflicts(
         branch_items = snapshot.get("branches") or []
         branch_ids_for_row = [item.get("branch_id") for item in branch_items if item.get("branch_id")]
         branch_names = [item.get("branch_name") or "-" for item in branch_items]
+        branch_links = []
+        for item in branch_items:
+            branch_name = item.get("branch_name") or "-"
+            if item.get("branch_id"):
+                branch_links.append(
+                    {
+                        "name": branch_name,
+                        "href": f"/workspaces/{workspace_slug}/branches?branch={quote_plus(branch_name)}&highlight_branch_id={item['branch_id']}",
+                    }
+                )
+            else:
+                branch_links.append({"name": branch_name, "href": None})
 
         if path and collision.normalized_path != path:
             continue
@@ -1340,7 +1354,6 @@ async def workspace_conflicts(
                 {
                     "branch_id": item.get("branch_id"),
                     "branch_name": item.get("branch_name") or "-",
-                    "change_type": item.get("change_type") or "-",
                     "last_push_actor": item.get("last_push_actor") or "作業者不明",
                     "last_updated_label": _conflict_relative_timestamp(
                         datetime.fromisoformat(item["last_updated_at"]) if item.get("last_updated_at") else None,
@@ -1349,9 +1362,7 @@ async def workspace_conflicts(
                     "last_updated_at": _conflict_absolute_timestamp(
                         datetime.fromisoformat(item["last_updated_at"]) if item.get("last_updated_at") else None,
                     ),
-                    "commit_message": item.get("commit_message") or "-",
-                    "observed_via_label": item.get("observed_via_label") or "-",
-                    "branch_href": f"/workspaces/{workspace_slug}/branches/{item['branch_id']}" if item.get("branch_id") else None,
+                    "branch_href": f"/workspaces/{workspace_slug}/branches?branch={quote_plus(item['branch_name'])}&highlight_branch_id={item['branch_id']}" if item.get("branch_id") and item.get("branch_name") else None,
                 }
             )
 
@@ -1364,6 +1375,7 @@ async def workspace_conflicts(
             "status_label": status_label,
             "status_class": status_class,
             "branch_names": branch_names,
+            "branch_links": branch_links,
             "branch_cards": branch_cards,
             "branch_count": len(branch_names),
             "last_updated_label": _conflict_relative_timestamp(latest_updated_at, now=now),

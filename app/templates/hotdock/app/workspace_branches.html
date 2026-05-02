@@ -232,6 +232,11 @@
         background: rgba(254, 242, 242, 0.3);
     }
 
+    .branch-workbench-table tbody tr.is-targeted {
+        background: rgba(219, 234, 254, 0.88);
+        box-shadow: inset 3px 0 0 #0f4fa8;
+    }
+
     .branch-workbench-table td {
         padding: 1rem;
         vertical-align: middle;
@@ -630,7 +635,7 @@
         {% endfor %}
     </div>
 
-    <section class="panel branch-list-surface" data-branch-browser>
+    <section class="panel branch-list-surface" data-branch-browser data-branch-highlight-id="{{ branch_highlight_id or '' }}">
         <div class="branches-filter-panel">
             <div class="branches-filter-row">
                 <div class="branches-filter-search">
@@ -823,6 +828,8 @@
             const state = {
                 page: 1,
                 ignored: new Set(),
+                highlightId: browser.dataset.branchHighlightId || "",
+                highlightPending: Boolean(browser.dataset.branchHighlightId),
             };
 
             if (searchInput && statusSelect && sortSelect && clearButton && tbody && empty && summary && prevButton && nextButton && rows.length) {
@@ -864,12 +871,19 @@
                     const sorted = sortRows(filtered, sortSelect.value);
                     const total = sorted.length;
                     const totalPages = Math.max(1, Math.ceil(total / pageSize));
+                    const highlightedRow = state.highlightId
+                        ? sorted.find((row) => (row.dataset.branchId || "") === state.highlightId) || null
+                        : null;
+                    if (state.highlightPending && highlightedRow) {
+                        state.page = Math.floor(sorted.indexOf(highlightedRow) / pageSize) + 1;
+                    }
                     state.page = Math.min(state.page, totalPages);
                     const start = total === 0 ? 0 : (state.page - 1) * pageSize;
                     const end = total === 0 ? 0 : Math.min(total, start + pageSize);
 
                     rows.forEach((row) => {
                         row.hidden = true;
+                        row.classList.remove("is-targeted");
                     });
 
                     sorted.slice(start, end).forEach((row) => {
@@ -881,6 +895,16 @@
                     summary.textContent = total === 0 ? "0 件" : `全 ${total} 件中 ${start + 1}-${end} 件を表示`;
                     prevButton.disabled = state.page <= 1 || total === 0;
                     nextButton.disabled = state.page >= totalPages || total === 0;
+
+                    if (highlightedRow && !highlightedRow.hidden) {
+                        highlightedRow.classList.add("is-targeted");
+                        if (state.highlightPending) {
+                            requestAnimationFrame(() => {
+                                highlightedRow.scrollIntoView({ block: "center", behavior: "smooth" });
+                            });
+                            state.highlightPending = false;
+                        }
+                    }
                 };
 
                 searchInput.addEventListener("input", () => {

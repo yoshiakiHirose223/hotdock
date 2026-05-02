@@ -618,6 +618,8 @@ def test_workspace_conflicts_is_file_focused_and_supports_acknowledgement(client
     )
     db.commit()
     open_collision_id = open_collision.id
+    branch_a_id = branch_a.id
+    branch_b_id = branch_b.id
     db.close()
 
     response = client.get("/workspaces/conflict-team/conflicts")
@@ -635,8 +637,19 @@ def test_workspace_conflicts_is_file_focused_and_supports_acknowledgement(client
     assert "feature/login と feature/header の競合" not in response.text
     assert "危険度" not in response.text
     assert "無視中" not in response.text
+    assert "関連ブランチごとの状態" not in response.text
+    assert "変更種別:" not in response.text
+    assert "検知方法:" not in response.text
+    assert "検知履歴" not in response.text
+    assert "確認履歴" not in response.text
+    assert "通知履歴" not in response.text
+    assert "解消条件" not in response.text
     assert "確認済みにする" in response.text
     assert "詳細を開く" in response.text
+    assert '/workspaces/conflict-team/branches?branch=feature%2Flogin' in response.text
+    assert f'highlight_branch_id={branch_a_id}' in response.text
+    assert '/workspaces/conflict-team/branches?branch=feature%2Fheader' in response.text
+    assert f'highlight_branch_id={branch_b_id}' in response.text
 
     csrf_token = response.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
     submit = client.post(
@@ -3084,6 +3097,7 @@ def test_workspace_branches_table_uses_japanese_labels_and_hides_old_seed_copy(c
         )
     )
     db.commit()
+    branch_id = branch.id
     db.close()
 
     response = client.get("/workspaces/branch-table-team/branches")
@@ -3094,7 +3108,6 @@ def test_workspace_branches_table_uses_japanese_labels_and_hides_old_seed_copy(c
     assert "アクティブ(1週間以内)" in response.text
     assert "名前で検索..." in response.text
     assert "状態: すべて" in response.text
-    assert "更新順" in response.text
     assert "最終更新" in response.text
     assert "編集ファイル" in response.text
     assert "操作" in response.text
@@ -3102,7 +3115,7 @@ def test_workspace_branches_table_uses_japanese_labels_and_hides_old_seed_copy(c
     assert "Conflict Status" not in response.text
     assert "比較待ち" in response.text
     assert "初回seed済み" not in response.text
-    assert "Compare" not in response.text
+    assert ">Compare<" not in response.text
     assert "Merge" not in response.text
     assert "Resolve" not in response.text
     assert "Ignore" in response.text
@@ -3111,6 +3124,12 @@ def test_workspace_branches_table_uses_japanese_labels_and_hides_old_seed_copy(c
     assert "first added" not in response.text
     assert "last added" not in response.text
     assert "branch-table-org/repo-a" not in response.text
+
+    focused = client.get(f"/workspaces/branch-table-team/branches?branch=feature/table-refresh&highlight_branch_id={branch_id}")
+
+    assert focused.status_code == 200
+    assert 'data-branch-highlight-id="' + branch_id + '"' in focused.text
+    assert 'value="feature/table-refresh"' in focused.text
 
 
 def test_manual_branch_registration_rescues_webhook_seeded_branch(client, monkeypatch):

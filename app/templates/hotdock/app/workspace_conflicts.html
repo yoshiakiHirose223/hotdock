@@ -294,6 +294,13 @@
         color: #2563eb;
         font-size: 0.8rem;
         font-weight: 700;
+        text-decoration: none;
+        transition: background-color 0.15s ease, color 0.15s ease;
+    }
+
+    a.conflicts-branch-pill:hover {
+        background: #dbeafe;
+        color: #1d4ed8;
     }
 
     .conflicts-file-item__meta {
@@ -366,15 +373,6 @@
         gap: 0.7rem;
     }
 
-    .conflicts-detail-section h4 {
-        margin: 0;
-        color: #334155;
-        font-size: 0.82rem;
-        font-weight: 800;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-    }
-
     .conflicts-branch-detail-list {
         display: grid;
         gap: 0.65rem;
@@ -382,7 +380,6 @@
 
     .conflicts-branch-detail-card {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
         gap: 1rem;
         align-items: start;
         padding: 0.9rem 1rem;
@@ -413,40 +410,6 @@
         color: #64748b;
         font-size: 0.82rem;
         line-height: 1.55;
-    }
-
-    .conflicts-branch-detail-card__commit {
-        color: #475569;
-        font-size: 0.84rem;
-        font-style: italic;
-        text-align: right;
-        max-width: 22rem;
-        overflow-wrap: anywhere;
-    }
-
-    .conflicts-history-list {
-        display: grid;
-        gap: 0.45rem;
-    }
-
-    .conflicts-history-item {
-        display: flex;
-        align-items: baseline;
-        gap: 0.7rem;
-        flex-wrap: wrap;
-        color: #475569;
-        font-size: 0.84rem;
-    }
-
-    .conflicts-history-item__time {
-        color: #94a3b8;
-        font-variant-numeric: tabular-nums;
-        min-width: 9.5rem;
-    }
-
-    .conflicts-history-item__label {
-        color: #0f172a;
-        font-weight: 700;
     }
 
     .conflicts-inline-note {
@@ -563,8 +526,12 @@
                     </div>
                     <div class="conflicts-file-item__repository">{{ row.repository_name }}</div>
                     <div class="conflicts-file-item__branches" aria-label="関連ブランチ">
-                        {% for branch_name in row.branch_names %}
-                        <span class="conflicts-branch-pill">{{ branch_name }}</span>
+                        {% for branch in row.branch_links %}
+                        {% if branch.href %}
+                        <a class="conflicts-branch-pill" href="{{ branch.href }}">{{ branch.name }}</a>
+                        {% else %}
+                        <span class="conflicts-branch-pill">{{ branch.name }}</span>
+                        {% endif %}
                         {% endfor %}
                     </div>
                     <div class="conflicts-file-item__meta">
@@ -606,7 +573,6 @@
             </div>
             <div class="conflicts-file-item__detail" {% if row.id != view.initial_open_id %}hidden{% endif %}>
                 <section class="conflicts-detail-section">
-                    <h4>関連ブランチごとの状態</h4>
                     <div class="conflicts-branch-detail-list">
                         {% for branch in row.branch_cards %}
                         <article class="conflicts-branch-detail-card">
@@ -619,49 +585,12 @@
                                     {% endif %}
                                 </div>
                                 <div class="conflicts-branch-detail-card__meta">
-                                    変更種別: {{ branch.change_type }}<br>
                                     最終push: {{ branch.last_push_actor }}<br>
-                                    最終更新: {{ branch.last_updated_label }} ({{ branch.last_updated_at }})<br>
-                                    検知方法: {{ branch.observed_via_label }}
+                                    最終更新: {{ branch.last_updated_label }} ({{ branch.last_updated_at }})
                                 </div>
                             </div>
-                            <div class="conflicts-branch-detail-card__commit">{{ branch.commit_message }}</div>
                         </article>
                         {% endfor %}
-                    </div>
-                </section>
-
-                <section class="conflicts-detail-section">
-                    <h4>検知履歴</h4>
-                    <div class="conflicts-history-list">
-                        {% if row.detection_history_entries %}
-                            {% for item in row.detection_history_entries %}
-                            <div class="conflicts-history-item">
-                                <span class="conflicts-history-item__time">{{ item.timestamp }}</span>
-                                <span class="conflicts-history-item__label">{{ item.label }}</span>
-                                <span>{{ item.actor }}</span>
-                            </div>
-                            {% endfor %}
-                        {% else %}
-                        <div class="conflicts-inline-note">このファイルの検知履歴はまだありません。</div>
-                        {% endif %}
-                    </div>
-                </section>
-
-                <section class="conflicts-detail-section">
-                    <h4>確認履歴</h4>
-                    <div class="conflicts-history-list">
-                        {% if row.confirmation_history_entries %}
-                            {% for item in row.confirmation_history_entries %}
-                            <div class="conflicts-history-item">
-                                <span class="conflicts-history-item__time">{{ item.timestamp }}</span>
-                                <span class="conflicts-history-item__label">{{ item.label }}</span>
-                                <span>{{ item.actor }}</span>
-                            </div>
-                            {% endfor %}
-                        {% else %}
-                        <div class="conflicts-inline-note">確認履歴はまだありません。</div>
-                        {% endif %}
                     </div>
                 </section>
 
@@ -674,16 +603,6 @@
                     </div>
                 </section>
                 {% endif %}
-
-                <section class="conflicts-detail-section">
-                    <h4>通知履歴</h4>
-                    <div class="conflicts-inline-note">{{ row.notification_label }}</div>
-                </section>
-
-                <section class="conflicts-detail-section">
-                    <h4>解消条件</h4>
-                    <div class="conflicts-inline-note">{{ row.resolution_condition }}</div>
-                </section>
             </div>
         </article>
         {% endfor %}
