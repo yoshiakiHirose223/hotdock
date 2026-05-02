@@ -6,7 +6,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.core.config import get_settings
-from app.core.database import init_db
+from app.core.database import init_db, sync_runtime_schema
 from app.core.templating import create_templates
 from app.hotdock.router_app import router as app_router
 from app.hotdock.router_auth import router as auth_router
@@ -22,6 +22,8 @@ async def lifespan(_: FastAPI):
     settings.validate_runtime_security()
     if settings.init_db_on_startup:
         init_db()
+    else:
+        sync_runtime_schema()
     yield
 
 

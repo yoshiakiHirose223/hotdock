@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -47,10 +49,13 @@ from app.hotdock.services.workspaces import (
 )
 from app.models.branch import Branch
 from app.models.branch_file import BranchFile
+from app.models.audit_log import AuditLog
 from app.models.file_collision import FileCollision
 from app.models.file_collision_branch import FileCollisionBranch
 from app.models.github_installation import GithubInstallation
+from app.models.github_webhook_event import GithubWebhookEvent
 from app.models.repository import Repository
+from app.models.user import User
 from app.models.workspace import Workspace
 
 router = APIRouter()
@@ -195,6 +200,130 @@ def _workspace_branch_meter_segments(file_count: int) -> int:
     if file_count <= 40:
         return 3
     return 4
+
+
+def _conflict_relative_timestamp(value, *, now: datetime | None = None) -> str:
+    if value is None:
+        return "-"
+    current = now or datetime.utcnow()
+    delta = current - value
+    total_seconds = max(int(delta.total_seconds()), 0)
+    if total_seconds < 60:
+        return "たった今"
+    minutes = total_seconds // 60
+    if minutes < 60:
+        return f"{minutes}分前"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}時間前"
+    days = hours // 24
+    if days < 30:
+        return f"{days}日前"
+    return value.strftime("%Y/%m/%d %H:%M")
+
+
+def _conflict_absolute_timestamp(value) -> str:
+    if value is None:
+        return "-"
+    return value.strftime("%Y/%m/%d %H:%M")
+
+
+def _conflict_payload_actor(payload: dict[str, Any] | None) -> str | None:
+    if not payload:
+        return None
+    sender = payload.get("sender") or {}
+    pusher = payload.get("pusher") or {}
+    return sender.get("login") or pusher.get("name") or pusher.get("email")
+
+
+def _conflict_payload_commit_message(payload: dict[str, Any] | None) -> str | None:
+    if not payload:
+        return None
+    head_commit = payload.get("head_commit") or {}
+    if head_commit.get("message"):
+        return str(head_commit["message"])
+    commits = payload.get("commits") or []
+    if commits:
+        message = commits[-1].get("message")
+        if message:
+            return str(message)
+    return None
+
+
+def _deserialize_collision_snapshot(raw_value: str | None) -> dict[str, Any]:
+    if not raw_value:
+        return {}
+    try:
+        parsed = json.loads(raw_value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _build_live_collision_snapshot(
+    *,
+    collision: FileCollision,
+    collision_branches: list[FileCollisionBranch],
+    branches_by_id: dict[str, Branch],
+    branch_files_by_key: dict[tuple[str, str], BranchFile],
+    webhook_by_delivery: dict[str, GithubWebhookEvent],
+) -> dict[str, Any]:
+    snapshot_branches: list[dict[str, Any]] = []
+    for collision_branch in collision_branches:
+        branch = branches_by_id.get(collision_branch.branch_id)
+        branch_file = branch_files_by_key.get((collision_branch.branch_id, collision.normalized_path))
+        webhook_event = webhook_by_delivery.get(branch.last_delivery_id) if branch and branch.last_delivery_id else None
+        payload = webhook_event.payload if webhook_event else {}
+        last_updated_at = (
+            branch_file.last_seen_at
+            if branch_file is not None
+            else (branch.last_push_at if branch is not None else collision.last_detected_at)
+        )
+        snapshot_branches.append(
+            {
+                "branch_id": collision_branch.branch_id,
+                "branch_name": branch.name if branch else "-",
+                "path": collision_branch.path,
+                "change_type": collision_branch.last_change_type or (branch_file.last_change_type if branch_file else None) or (branch_file.change_type if branch_file else None) or "modified",
+                "last_push_actor": _conflict_payload_actor(payload) or ("手動登録" if branch and branch.observed_via == "manual" else None) or "作業者不明",
+                "last_updated_at": last_updated_at.isoformat() if last_updated_at is not None else None,
+                "observed_via_label": "手動追跡" if branch and branch.observed_via == "manual" else "Webhookで検出",
+                "commit_message": _conflict_payload_commit_message(payload) or ("手動登録" if branch and branch.observed_via == "manual" else None),
+            }
+        )
+    latest_entry = max(snapshot_branches, key=lambda item: item.get("last_updated_at") or "", default=None)
+    return {
+        "branch_ids": [item["branch_id"] for item in snapshot_branches if item.get("branch_id")],
+        "branches": snapshot_branches,
+        "latest_actor": latest_entry.get("last_push_actor") if latest_entry else None,
+        "latest_updated_at": latest_entry.get("last_updated_at") if latest_entry else None,
+        "latest_commit_message": latest_entry.get("commit_message") if latest_entry else None,
+    }
+
+
+def _conflict_history_entry_label(action: str) -> str:
+    return {
+        "file_collision_detected": "新規検知",
+        "file_collision_resolved": "解消",
+        "file_collision_acknowledged": "確認済み",
+        "file_collision_unacknowledged": "確認済み解除",
+    }.get(action, action)
+
+
+def _conflict_snapshot_signature(snapshot: dict[str, Any]) -> str:
+    signature_rows = [
+        {
+            "branch_id": item.get("branch_id"),
+            "path": item.get("path"),
+            "change_type": item.get("change_type"),
+            "last_updated_at": item.get("last_updated_at"),
+            "commit_message": item.get("commit_message"),
+        }
+        for item in snapshot.get("branches") or []
+    ]
+    return hashlib.sha1(
+        json.dumps(signature_rows, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
 
 
 @router.get("/dashboard", name="hotdock-dashboard")
@@ -864,6 +993,159 @@ async def workspace_branch_detail(workspace_slug: str, branch_id: str, request: 
     return render_app("hotdock/app/workspace_branch_detail.html", context)
 
 
+@router.post("/workspaces/{workspace_slug}/conflicts/{collision_id}/acknowledge", name="hotdock-workspace-conflict-acknowledge")
+async def workspace_conflict_acknowledge(
+    workspace_slug: str,
+    collision_id: str,
+    request: Request,
+    csrf_token: str = Form(...),
+    return_to: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    auth = attach_auth_context(request, db)
+    redirect_path = sanitize_next_path(return_to) or f"/workspaces/{workspace_slug}/conflicts"
+    if auth.user is None:
+        return RedirectResponse(url=build_login_redirect(redirect_path), status_code=status.HTTP_303_SEE_OTHER)
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="viewer")
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+
+    collision = db.scalar(
+        select(FileCollision)
+        .join(Repository, Repository.id == FileCollision.repository_id)
+        .where(
+            FileCollision.id == collision_id,
+            Repository.workspace_id == access.workspace.id,
+            Repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
+            Repository.is_active.is_(True),
+            Repository.is_available.is_(True),
+        )
+    )
+    if collision is None or collision.collision_status != "open":
+        set_flash(request, "error", "確認対象の競合が見つかりません。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+
+    repository = db.get(Repository, collision.repository_id)
+    current_signature = collision.state_signature
+    if not current_signature:
+        live_rows = db.scalars(
+            select(FileCollisionBranch).where(FileCollisionBranch.collision_id == collision.id)
+        ).all()
+        branch_ids = sorted({row.branch_id for row in live_rows if row.branch_id})
+        paths = [collision.normalized_path]
+        branches_by_id = {
+            branch.id: branch
+            for branch in db.scalars(select(Branch).where(Branch.id.in_(branch_ids))).all()
+        } if branch_ids else {}
+        branch_files_by_key = {
+            (file_item.branch_id, file_item.normalized_path or file_item.path): file_item
+            for file_item in db.scalars(
+                select(BranchFile).where(
+                    BranchFile.branch_id.in_(branch_ids),
+                    BranchFile.normalized_path.in_(paths),
+                    BranchFile.is_active.is_(True),
+                )
+            ).all()
+        } if branch_ids else {}
+        delivery_ids = [branch.last_delivery_id for branch in branches_by_id.values() if branch.last_delivery_id]
+        webhook_by_delivery = {
+            event.delivery_id: event
+            for event in db.scalars(
+                select(GithubWebhookEvent).where(GithubWebhookEvent.delivery_id.in_(delivery_ids))
+            ).all()
+        } if delivery_ids else {}
+        snapshot = _build_live_collision_snapshot(
+            collision=collision,
+            collision_branches=live_rows,
+            branches_by_id=branches_by_id,
+            branch_files_by_key=branch_files_by_key,
+            webhook_by_delivery=webhook_by_delivery,
+        )
+        current_signature = _conflict_snapshot_signature(snapshot)
+        collision.state_signature = current_signature
+        collision.branch_snapshot_json = json.dumps(snapshot, ensure_ascii=False)
+
+    collision.acknowledged_at = datetime.utcnow()
+    collision.acknowledged_by_user_id = auth.user.id
+    collision.acknowledged_signature = current_signature
+    record_audit_log(
+        db,
+        request,
+        actor_type="user",
+        actor_id=auth.user.id,
+        workspace_id=access.workspace.id,
+        target_type="file_collision",
+        target_id=collision.id,
+        action="file_collision_acknowledged",
+        metadata={
+            "path": collision.normalized_path,
+            "repository": repository.full_name if repository else "-",
+            "repository_id": repository.id if repository else None,
+        },
+    )
+    db.commit()
+    set_flash(request, "success", "競合を確認済みにしました。")
+    return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/workspaces/{workspace_slug}/conflicts/{collision_id}/unacknowledge", name="hotdock-workspace-conflict-unacknowledge")
+async def workspace_conflict_unacknowledge(
+    workspace_slug: str,
+    collision_id: str,
+    request: Request,
+    csrf_token: str = Form(...),
+    return_to: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    auth = attach_auth_context(request, db)
+    redirect_path = sanitize_next_path(return_to) or f"/workspaces/{workspace_slug}/conflicts"
+    if auth.user is None:
+        return RedirectResponse(url=build_login_redirect(redirect_path), status_code=status.HTTP_303_SEE_OTHER)
+    access = resolve_workspace_access(db, request, user=auth.user, workspace_slug=workspace_slug, required_role="viewer")
+    if not hmac.compare_digest(csrf_token, auth.csrf_token):
+        set_flash(request, "error", "セッションが確認できませんでした。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+
+    collision = db.scalar(
+        select(FileCollision)
+        .join(Repository, Repository.id == FileCollision.repository_id)
+        .where(
+            FileCollision.id == collision_id,
+            Repository.workspace_id == access.workspace.id,
+            Repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
+            Repository.is_active.is_(True),
+            Repository.is_available.is_(True),
+        )
+    )
+    if collision is None:
+        set_flash(request, "error", "確認対象の競合が見つかりません。")
+        return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+
+    repository = db.get(Repository, collision.repository_id)
+    collision.acknowledged_at = None
+    collision.acknowledged_by_user_id = None
+    collision.acknowledged_signature = None
+    record_audit_log(
+        db,
+        request,
+        actor_type="user",
+        actor_id=auth.user.id,
+        workspace_id=access.workspace.id,
+        target_type="file_collision",
+        target_id=collision.id,
+        action="file_collision_unacknowledged",
+        metadata={
+            "path": collision.normalized_path,
+            "repository": repository.full_name if repository else "-",
+            "repository_id": repository.id if repository else None,
+        },
+    )
+    db.commit()
+    set_flash(request, "success", "確認済みを解除しました。")
+    return RedirectResponse(url=redirect_path, status_code=status.HTTP_303_SEE_OTHER)
+
+
 @router.get("/workspaces/{workspace_slug}/conflicts", name="hotdock-workspace-conflicts")
 async def workspace_conflicts(
     workspace_slug: str,
@@ -885,65 +1167,271 @@ async def workspace_conflicts(
         db,
         workspace=access.workspace,
         active_nav="workspace-conflicts",
-        page_title=f"{access.workspace.name} | Conflicts | Hotdock",
-        page_heading="Conflicts",
-        page_description="workspace conflict 一覧。",
+        page_title=f"{access.workspace.name} | 競合一覧 | Hotdock",
+        page_heading="競合一覧",
+        page_description="現在発生しているファイル単位の競合を表示します。",
         breadcrumbs=[
             {"label": "Dashboard", "href": f"/workspaces/{workspace_slug}/dashboard"},
             {"label": "Conflicts", "href": f"/workspaces/{workspace_slug}/conflicts"},
         ],
         current_membership=access.membership,
     )
-    repositories = {repository.id: repository for repository in db.scalars(select(Repository).where(Repository.workspace_id == access.workspace.id)).all()}
-    branches = {branch.id: branch for branch in db.scalars(select(Branch).where(Branch.workspace_id == access.workspace.id)).all()}
-    collision_rows = db.scalars(
-        select(FileCollision)
-        .join(Repository, Repository.id == FileCollision.repository_id)
-        .where(
+
+    now = datetime.utcnow()
+    repositories = db.scalars(
+        select(Repository).where(
             Repository.workspace_id == access.workspace.id,
             Repository.selection_status == REPOSITORY_SELECTION_ACTIVE,
             Repository.is_active.is_(True),
             Repository.is_available.is_(True),
-            FileCollision.collision_status == "open",
         )
-        .order_by(FileCollision.last_detected_at.desc())
     ).all()
-    if path:
-        collision_rows = [collision for collision in collision_rows if collision.normalized_path == path]
-    if repository_id:
-        collision_rows = [collision for collision in collision_rows if collision.repository_id == repository_id]
-    if branch_id:
-        filtered_collision_ids = {
-            collision_branch.collision_id
-            for collision_branch in db.scalars(
-                select(FileCollisionBranch).where(FileCollisionBranch.branch_id == branch_id)
-            ).all()
-        }
-        collision_rows = [collision for collision in collision_rows if collision.id in filtered_collision_ids]
-    context["conflicts"] = [
-        {
-            "repository_name": repositories.get(collision.repository_id).display_name if repositories.get(collision.repository_id) else "-",
-            "repository_id": collision.repository_id,
-            "file_path": collision.normalized_path,
-            "conflict_status": collision.collision_status,
-            "active_branch_count": collision.active_branch_count,
-            "first_detected_at": collision.first_detected_at,
-            "last_detected_at": collision.last_detected_at,
-            "branches": [
-                {
-                    "name": branches.get(collision_branch.branch_id).name if branches.get(collision_branch.branch_id) else "-",
-                    "last_change_type": collision_branch.last_change_type,
-                }
-                for collision_branch in db.scalars(
-                    select(FileCollisionBranch).where(FileCollisionBranch.collision_id == collision.id).order_by(FileCollisionBranch.updated_at.desc())
-                ).all()
-            ],
-        }
-        for collision in collision_rows
+    repository_by_id = {repository.id: repository for repository in repositories}
+    repository_ids = list(repository_by_id.keys())
+    collisions = db.scalars(
+        select(FileCollision)
+        .where(FileCollision.repository_id.in_(repository_ids))
+        .order_by(FileCollision.last_detected_at.desc())
+    ).all() if repository_ids else []
+
+    open_collision_ids = [collision.id for collision in collisions if collision.collision_status == "open"]
+    collision_branch_rows = db.scalars(
+        select(FileCollisionBranch).where(FileCollisionBranch.collision_id.in_(open_collision_ids))
+    ).all() if open_collision_ids else []
+    collision_branches_by_collision: dict[str, list[FileCollisionBranch]] = {}
+    open_branch_ids: set[str] = set()
+    open_paths: set[str] = set()
+    for row in collision_branch_rows:
+        collision_branches_by_collision.setdefault(row.collision_id, []).append(row)
+        if row.branch_id:
+            open_branch_ids.add(row.branch_id)
+        if row.path:
+            open_paths.add(row.path)
+    branches_by_id = {
+        branch.id: branch
+        for branch in db.scalars(select(Branch).where(Branch.id.in_(list(open_branch_ids)))).all()
+    } if open_branch_ids else {}
+    branch_files_by_key = {
+        (file_item.branch_id, file_item.normalized_path or file_item.path): file_item
+        for file_item in db.scalars(
+            select(BranchFile).where(
+                BranchFile.branch_id.in_(list(open_branch_ids)),
+                BranchFile.normalized_path.in_(list({collision.normalized_path for collision in collisions})),
+                BranchFile.is_active.is_(True),
+            )
+        ).all()
+    } if open_branch_ids else {}
+    delivery_ids = [branch.last_delivery_id for branch in branches_by_id.values() if branch.last_delivery_id]
+    webhook_by_delivery = {
+        event.delivery_id: event
+        for event in db.scalars(
+            select(GithubWebhookEvent).where(GithubWebhookEvent.delivery_id.in_(delivery_ids))
+        ).all()
+    } if delivery_ids else {}
+
+    user_ids = {collision.acknowledged_by_user_id for collision in collisions if collision.acknowledged_by_user_id}
+    users_by_id = {
+        user.id: user
+        for user in db.scalars(select(User).where(User.id.in_(list(user_ids)))).all()
+    } if user_ids else {}
+
+    history_actions = [
+        "file_collision_detected",
+        "file_collision_resolved",
+        "file_collision_acknowledged",
+        "file_collision_unacknowledged",
     ]
+    history_logs = db.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.workspace_id == access.workspace.id,
+            AuditLog.action.in_(history_actions),
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(400)
+    ).all()
+    history_by_key: dict[tuple[str, str], list[AuditLog]] = {}
+    for log in history_logs:
+        metadata = log.event_metadata or {}
+        key = (str(metadata.get("repository") or ""), str(metadata.get("path") or ""))
+        history_by_key.setdefault(key, []).append(log)
+
+    rows: list[dict[str, Any]] = []
+    for collision in collisions:
+        repository = repository_by_id.get(collision.repository_id)
+        if repository is None:
+            continue
+
+        snapshot = _deserialize_collision_snapshot(collision.branch_snapshot_json)
+        if not snapshot and collision.collision_status == "open":
+            snapshot = _build_live_collision_snapshot(
+                collision=collision,
+                collision_branches=collision_branches_by_collision.get(collision.id, []),
+                branches_by_id=branches_by_id,
+                branch_files_by_key=branch_files_by_key,
+                webhook_by_delivery=webhook_by_delivery,
+            )
+
+        branch_items = snapshot.get("branches") or []
+        branch_ids_for_row = [item.get("branch_id") for item in branch_items if item.get("branch_id")]
+        branch_names = [item.get("branch_name") or "-" for item in branch_items]
+
+        if path and collision.normalized_path != path:
+            continue
+        if repository_id and collision.repository_id != repository_id:
+            continue
+        if branch_id and branch_id not in branch_ids_for_row:
+            continue
+
+        current_signature = collision.state_signature or _conflict_snapshot_signature(snapshot)
+        is_acknowledged = (
+            collision.collision_status == "open"
+            and bool(collision.acknowledged_at)
+            and bool(collision.acknowledged_signature)
+            and collision.acknowledged_signature == current_signature
+        )
+        if collision.collision_status == "resolved":
+            status_key = "resolved"
+            status_label = "解消済み"
+            status_class = "is-resolved"
+        elif is_acknowledged:
+            status_key = "acknowledged"
+            status_label = "確認済み"
+            status_class = "is-acknowledged"
+        else:
+            status_key = "open"
+            status_label = "競合中"
+            status_class = "is-open"
+
+        latest_updated_at = collision.last_detected_at
+        latest_updated_iso = snapshot.get("latest_updated_at")
+        if isinstance(latest_updated_iso, str):
+            try:
+                latest_updated_at = datetime.fromisoformat(latest_updated_iso)
+            except ValueError:
+                latest_updated_at = collision.last_detected_at
+
+        confirmed_user = users_by_id.get(collision.acknowledged_by_user_id) if collision.acknowledged_by_user_id else None
+        history_key = (repository.full_name, collision.normalized_path)
+        history_entries = []
+        for log in history_by_key.get(history_key, [])[:8]:
+            actor_name = None
+            if log.actor_id and log.actor_id in users_by_id:
+                actor_name = users_by_id[log.actor_id].display_name
+            history_entries.append(
+                {
+                    "label": _conflict_history_entry_label(log.action),
+                    "timestamp": _conflict_absolute_timestamp(log.created_at),
+                    "relative": _conflict_relative_timestamp(log.created_at, now=now),
+                    "actor": actor_name or ("system" if log.actor_type == "system" else "-"),
+                    "action": log.action,
+                }
+            )
+        detection_history_entries = [
+            item for item in history_entries if item["action"] in {"file_collision_detected", "file_collision_resolved"}
+        ]
+        confirmation_history_entries = [
+            item for item in history_entries if item["action"] in {"file_collision_acknowledged", "file_collision_unacknowledged"}
+        ]
+
+        branch_cards = []
+        for item in branch_items:
+            branch_cards.append(
+                {
+                    "branch_id": item.get("branch_id"),
+                    "branch_name": item.get("branch_name") or "-",
+                    "change_type": item.get("change_type") or "-",
+                    "last_push_actor": item.get("last_push_actor") or "作業者不明",
+                    "last_updated_label": _conflict_relative_timestamp(
+                        datetime.fromisoformat(item["last_updated_at"]) if item.get("last_updated_at") else None,
+                        now=now,
+                    ),
+                    "last_updated_at": _conflict_absolute_timestamp(
+                        datetime.fromisoformat(item["last_updated_at"]) if item.get("last_updated_at") else None,
+                    ),
+                    "commit_message": item.get("commit_message") or "-",
+                    "observed_via_label": item.get("observed_via_label") or "-",
+                    "branch_href": f"/workspaces/{workspace_slug}/branches/{item['branch_id']}" if item.get("branch_id") else None,
+                }
+            )
+
+        row = {
+            "id": collision.id,
+            "file_path": collision.normalized_path,
+            "repository_name": repository.display_name,
+            "repository_full_name": repository.full_name,
+            "status_key": status_key,
+            "status_label": status_label,
+            "status_class": status_class,
+            "branch_names": branch_names,
+            "branch_cards": branch_cards,
+            "branch_count": len(branch_names),
+            "last_updated_label": _conflict_relative_timestamp(latest_updated_at, now=now),
+            "last_updated_at": _conflict_absolute_timestamp(latest_updated_at),
+            "last_push_actor": snapshot.get("latest_actor") or "作業者不明",
+            "confirmed_by": confirmed_user.display_name if confirmed_user else None,
+            "confirmed_at": _conflict_absolute_timestamp(collision.acknowledged_at) if collision.acknowledged_at else None,
+            "confirmed_at_relative": _conflict_relative_timestamp(collision.acknowledged_at, now=now) if collision.acknowledged_at else None,
+            "resolved_at": _conflict_absolute_timestamp(collision.resolved_at) if collision.resolved_at else None,
+            "resolved_at_relative": _conflict_relative_timestamp(collision.resolved_at, now=now) if collision.resolved_at else None,
+            "resolved_reason": "このファイルを触っているアクティブブランチが1本以下になりました。",
+            "resolution_condition": "このファイルを触っているアクティブブランチが1本以下になると解消されます。",
+            "notification_label": "通知結果は保存されていません。",
+            "history_entries": history_entries,
+            "detection_history_entries": detection_history_entries,
+            "confirmation_history_entries": confirmation_history_entries,
+            "search_text": " ".join(
+                filter(
+                    None,
+                    [
+                        collision.normalized_path,
+                        repository.display_name,
+                        repository.full_name,
+                        " ".join(branch_names),
+                        snapshot.get("latest_actor") or "",
+                        confirmed_user.display_name if confirmed_user else "",
+                    ],
+                )
+            ).lower(),
+            "sort_timestamp": int((latest_updated_at or collision.updated_at).timestamp()) if (latest_updated_at or collision.updated_at) else 0,
+            "is_initially_expanded": bool(path or branch_id) and bool(branch_id in branch_ids_for_row or collision.normalized_path == path),
+        }
+        rows.append(row)
+
+    status_priority = {"open": 0, "acknowledged": 1, "resolved": 2}
+    rows.sort(key=lambda item: (status_priority.get(item["status_key"], 3), -item["sort_timestamp"], item["file_path"]))
+
+    summary_open_count = sum(1 for item in rows if item["status_key"] == "open")
+    summary_acknowledged_count = sum(1 for item in rows if item["status_key"] == "acknowledged")
+    summary_resolved_count = sum(1 for item in rows if item["status_key"] == "resolved")
+    latest_detected_at = max((collision.last_detected_at for collision in collisions if collision.last_detected_at), default=None)
+    context["conflicts_view"] = {
+        "title": "競合一覧",
+        "description": "複数ブランチで同じファイルが変更されている状態を表示しています。",
+        "summary_cards": [
+            {"label": "競合中ファイル", "value": summary_open_count, "meta": "", "tone": "is-open"},
+            {"label": "確認済み", "value": summary_acknowledged_count, "meta": "", "tone": "is-acknowledged"},
+            {"label": "解消済み", "value": summary_resolved_count, "meta": "", "tone": "is-resolved"},
+            {"label": "最終検知", "value": _conflict_relative_timestamp(latest_detected_at, now=now), "meta": _conflict_absolute_timestamp(latest_detected_at), "tone": "is-muted"},
+        ],
+        "rows": rows,
+        "status_filters": [
+            {"value": "all", "label": "すべて"},
+            {"value": "open", "label": "競合中"},
+            {"value": "acknowledged", "label": "確認済み"},
+            {"value": "resolved", "label": "解消済み"},
+        ],
+        "search_placeholder": "ファイル名 / ブランチ名 / リポジトリ名 / 作業者名で検索…",
+        "default_sort": "updated_desc",
+        "current_path": sanitize_next_path(str(request.url.path) + (f"?{request.url.query}" if request.url.query else "")) or f"/workspaces/{workspace_slug}/conflicts",
+        "initial_open_id": next((item["id"] for item in rows if item["is_initially_expanded"]), None),
+    }
     context["conflicts_filter_path"] = path
     context["conflicts_filter_repository_id"] = repository_id
-    context["conflicts_filter_branch_name"] = branches.get(branch_id).name if branch_id and branches.get(branch_id) else None
+    context["conflicts_filter_branch_name"] = next(
+        (item["branch_name"] for row in rows for item in row["branch_cards"] if item["branch_id"] == branch_id),
+        None,
+    )
     return render_app("hotdock/app/workspace_conflicts.html", context)
 
 

@@ -25,14 +25,21 @@
 
     .file-tree-explorer {
         display: grid;
-        grid-template-rows: auto auto minmax(0, 1fr);
+        grid-template-rows: auto auto auto minmax(0, 1fr);
+        align-content: start;
         min-height: 740px;
     }
 
     .file-tree-detail {
-        min-height: 740px;
+        height: min(740px, calc(100vh - 2rem));
+        min-height: min(740px, calc(100vh - 2rem));
         display: grid;
         align-content: start;
+        align-self: start;
+        position: sticky;
+        top: clamp(1rem, calc(50vh - 370px), 5.5rem);
+        max-height: calc(100vh - 2rem);
+        overflow: auto;
     }
 
     .file-tree-detail.is-empty {
@@ -89,6 +96,7 @@
     }
 
     .file-tree-results {
+        grid-row: 3;
         min-height: 24px;
         display: flex;
         align-items: center;
@@ -101,6 +109,7 @@
     }
 
     .file-tree-viewport {
+        grid-row: 4;
         overflow: auto;
         max-height: 100%;
         background: linear-gradient(180deg, rgba(247, 249, 255, 0.72), rgba(255, 255, 255, 0));
@@ -720,6 +729,10 @@
         .file-tree-explorer,
         .file-tree-detail {
             min-height: 0;
+            height: auto;
+            position: static;
+            top: auto;
+            max-height: none;
         }
     }
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -111,6 +112,112 @@ def delete_all_non_article_data(
 
 def future_install_intent_expiry() -> datetime:
     return utcnow() + timedelta(seconds=settings.github_install_intent_ttl_seconds)
+
+
+def _collision_payload_actor(payload: dict[str, Any] | None) -> str | None:
+    if not payload:
+        return None
+    sender = payload.get("sender") or {}
+    pusher = payload.get("pusher") or {}
+    return sender.get("login") or pusher.get("name") or pusher.get("email")
+
+
+def _collision_payload_commit_message(payload: dict[str, Any] | None) -> str | None:
+    if not payload:
+        return None
+    head_commit = payload.get("head_commit") or {}
+    if head_commit.get("message"):
+        return str(head_commit["message"])
+    commits = payload.get("commits") or []
+    if commits:
+        message = commits[-1].get("message")
+        if message:
+            return str(message)
+    return None
+
+
+def _serialize_datetime(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _build_file_collision_snapshot(
+    db: Session,
+    *,
+    active_files: list[BranchFile],
+    occurred_at: datetime,
+) -> tuple[dict[str, Any], str]:
+    branch_ids = sorted({file_item.branch_id for file_item in active_files if file_item.branch_id})
+    branches = {
+        branch.id: branch
+        for branch in db.scalars(select(Branch).where(Branch.id.in_(branch_ids))).all()
+    } if branch_ids else {}
+    delivery_ids = [
+        branch.last_delivery_id
+        for branch in branches.values()
+        if branch.last_delivery_id
+    ]
+    webhook_by_delivery = {
+        event.delivery_id: event
+        for event in db.scalars(
+            select(GithubWebhookEvent).where(GithubWebhookEvent.delivery_id.in_(delivery_ids))
+        ).all()
+    } if delivery_ids else {}
+
+    snapshot_branches: list[dict[str, Any]] = []
+    signature_rows: list[dict[str, Any]] = []
+    for file_item in sorted(
+        active_files,
+        key=lambda item: (
+            branches.get(item.branch_id).name if branches.get(item.branch_id) else "",
+            item.path or "",
+        ),
+    ):
+        branch = branches.get(file_item.branch_id)
+        webhook_event = webhook_by_delivery.get(branch.last_delivery_id) if branch and branch.last_delivery_id else None
+        payload = webhook_event.payload if webhook_event else {}
+        last_updated_at = file_item.last_seen_at or (branch.last_push_at if branch else None) or occurred_at
+        actor_label = _collision_payload_actor(payload) or ("手動登録" if branch and branch.observed_via == "manual" else None) or "作業者不明"
+        commit_message = _collision_payload_commit_message(payload) or ("手動登録" if branch and branch.observed_via == "manual" else None)
+        change_type = file_item.last_change_type or file_item.change_type or "modified"
+        snapshot_branches.append(
+            {
+                "branch_id": file_item.branch_id,
+                "branch_name": branch.name if branch else "-",
+                "path": file_item.path,
+                "change_type": change_type,
+                "last_push_actor": actor_label,
+                "last_updated_at": _serialize_datetime(last_updated_at),
+                "observed_via_label": "手動追跡" if branch and branch.observed_via == "manual" else "Webhookで検出",
+                "commit_message": commit_message,
+            }
+        )
+        signature_rows.append(
+            {
+                "branch_id": file_item.branch_id,
+                "path": file_item.path,
+                "change_type": change_type,
+                "last_updated_at": _serialize_datetime(last_updated_at),
+                "head_sha": branch.current_head_sha if branch else None,
+                "last_commit_sha": branch.last_commit_sha if branch else None,
+            }
+        )
+
+    latest_entry = max(
+        snapshot_branches,
+        key=lambda item: item.get("last_updated_at") or "",
+        default=None,
+    )
+    snapshot = {
+        "branch_ids": [item["branch_id"] for item in snapshot_branches if item.get("branch_id")],
+        "branches": snapshot_branches,
+        "latest_actor": latest_entry.get("last_push_actor") if latest_entry else None,
+        "latest_updated_at": latest_entry.get("last_updated_at") if latest_entry else None,
+        "latest_commit_message": latest_entry.get("commit_message") if latest_entry else None,
+    }
+    signature = hashlib.sha1(
+        json.dumps(signature_rows, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return snapshot, signature
 
 
 def _claim_metadata(pending_claim: GithubPendingClaim) -> dict[str, Any]:
@@ -2101,12 +2208,19 @@ class RecalculateFileCollisionsService:
                 affected_branch_ids.update(previous_branch_ids)
 
             if len(active_branch_ids) >= 2:
+                snapshot_payload, state_signature = _build_file_collision_snapshot(
+                    db,
+                    active_files=active_files,
+                    occurred_at=occurred_at,
+                )
                 if collision is None:
                     collision = FileCollision(
                         repository_id=repository.id,
                         normalized_path=normalized_path,
                         active_branch_count=len(active_branch_ids),
                         collision_status="open",
+                        state_signature=state_signature,
+                        branch_snapshot_json=json.dumps(snapshot_payload, ensure_ascii=False),
                         first_detected_at=occurred_at,
                         last_detected_at=occurred_at,
                     )
@@ -2118,12 +2232,20 @@ class RecalculateFileCollisionsService:
                         collision.collision_status = "open"
                         collision.first_detected_at = collision.first_detected_at or occurred_at
                         collision.resolved_at = None
+                        collision.acknowledged_at = None
+                        collision.acknowledged_by_user_id = None
+                        collision.acknowledged_signature = None
                         new_collisions.append(normalized_path)
                     elif collision.active_branch_count != len(active_branch_ids):
                         new_collisions.append(normalized_path)
                     collision.active_branch_count = len(active_branch_ids)
+                    collision.state_signature = state_signature
+                    collision.branch_snapshot_json = json.dumps(snapshot_payload, ensure_ascii=False)
                     collision.last_detected_at = occurred_at
                     collision.resolved_at = None
+
+                collision.state_signature = state_signature
+                collision.branch_snapshot_json = json.dumps(snapshot_payload, ensure_ascii=False)
 
                 existing_rows = {
                     row.branch_id: row

@@ -426,6 +426,243 @@ def test_workspace_dashboard_zero_state_surfaces_next_action(client):
     assert "ディレクトリ更新状況" not in response.text
 
 
+def test_workspace_conflicts_is_file_focused_and_supports_acknowledgement(client):
+    register_page = client.get("/register")
+    anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    client.post(
+        "/register",
+        data={
+            "display_name": "Conflict Owner",
+            "email": "conflict-owner@example.com",
+            "password": "super-secret-password",
+            "workspace_name": "Conflict Team",
+            "workspace_scale": "1-5 人",
+            "next": "/dashboard",
+            "csrf_token": anon_csrf,
+        },
+        follow_redirects=True,
+    )
+
+    db = SessionLocal()
+    workspace = db.query(Workspace).filter_by(slug="conflict-team").one()
+    installation = GithubInstallation(
+        installation_id=9401,
+        github_account_id=88401,
+        github_account_login="conflict-org",
+        github_account_type="Organization",
+        target_type="Organization",
+        installation_status="active",
+        claimed_workspace_id=workspace.id,
+    )
+    db.add(installation)
+    db.flush()
+    repository = Repository(
+        workspace_id=workspace.id,
+        github_installation_id=installation.id,
+        github_repository_id=99401,
+        full_name="conflict-org/repo-a",
+        display_name="repo-a",
+        default_branch="main",
+        provider="github",
+        visibility="private",
+        is_available=True,
+        is_active=True,
+        selection_status="active",
+        detail_sync_status="completed",
+        sync_status="active",
+    )
+    db.add(repository)
+    db.flush()
+    branch_a = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/login",
+        current_head_sha="sha-open-a",
+        last_push_at=datetime.utcnow() - timedelta(minutes=12),
+        branch_status="has_conflict",
+        is_active=True,
+        observed_via="webhook",
+    )
+    branch_b = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/header",
+        current_head_sha="sha-open-b",
+        last_push_at=datetime.utcnow() - timedelta(minutes=25),
+        branch_status="has_conflict",
+        is_active=True,
+        observed_via="manual",
+    )
+    resolved_branch_a = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/footer",
+        current_head_sha="sha-resolved-a",
+        last_push_at=datetime.utcnow() - timedelta(hours=4),
+        branch_status="normal",
+        is_active=True,
+        observed_via="webhook",
+    )
+    resolved_branch_b = Branch(
+        workspace_id=workspace.id,
+        repository_id=repository.id,
+        name="feature/nav",
+        current_head_sha="sha-resolved-b",
+        last_push_at=datetime.utcnow() - timedelta(hours=6),
+        branch_status="normal",
+        is_active=True,
+        observed_via="webhook",
+    )
+    db.add_all([branch_a, branch_b, resolved_branch_a, resolved_branch_b])
+    db.flush()
+    now = datetime.utcnow()
+    open_snapshot = {
+        "branch_ids": [branch_a.id, branch_b.id],
+        "branches": [
+            {
+                "branch_id": branch_a.id,
+                "branch_name": branch_a.name,
+                "path": "app/main.py",
+                "change_type": "modified",
+                "last_push_actor": "廣瀬 由明",
+                "last_updated_at": (now - timedelta(minutes=12)).isoformat(),
+                "observed_via_label": "Webhookで検出",
+                "commit_message": "ログイン画面のレイアウト調整",
+            },
+            {
+                "branch_id": branch_b.id,
+                "branch_name": branch_b.name,
+                "path": "app/main.py",
+                "change_type": "modified",
+                "last_push_actor": "Codex",
+                "last_updated_at": (now - timedelta(minutes=25)).isoformat(),
+                "observed_via_label": "手動追跡",
+                "commit_message": "ヘッダー構造を整理",
+            },
+        ],
+        "latest_actor": "廣瀬 由明",
+        "latest_updated_at": (now - timedelta(minutes=12)).isoformat(),
+        "latest_commit_message": "ログイン画面のレイアウト調整",
+    }
+    resolved_snapshot = {
+        "branch_ids": [resolved_branch_a.id, resolved_branch_b.id],
+        "branches": [
+            {
+                "branch_id": resolved_branch_a.id,
+                "branch_name": resolved_branch_a.name,
+                "path": "app/templates/base.html",
+                "change_type": "modified",
+                "last_push_actor": "Marcus",
+                "last_updated_at": (now - timedelta(hours=4)).isoformat(),
+                "observed_via_label": "Webhookで検出",
+                "commit_message": "フッターを更新",
+            },
+            {
+                "branch_id": resolved_branch_b.id,
+                "branch_name": resolved_branch_b.name,
+                "path": "app/templates/base.html",
+                "change_type": "modified",
+                "last_push_actor": "Elena",
+                "last_updated_at": (now - timedelta(hours=6)).isoformat(),
+                "observed_via_label": "Webhookで検出",
+                "commit_message": "ナビゲーションを調整",
+            },
+        ],
+        "latest_actor": "Marcus",
+        "latest_updated_at": (now - timedelta(hours=4)).isoformat(),
+        "latest_commit_message": "フッターを更新",
+    }
+    open_collision = FileCollision(
+        repository_id=repository.id,
+        normalized_path="app/main.py",
+        active_branch_count=2,
+        collision_status="open",
+        state_signature="sig-open",
+        branch_snapshot_json=json.dumps(open_snapshot, ensure_ascii=False),
+        first_detected_at=now - timedelta(minutes=30),
+        last_detected_at=now - timedelta(minutes=12),
+    )
+    resolved_collision = FileCollision(
+        repository_id=repository.id,
+        normalized_path="app/templates/base.html",
+        active_branch_count=1,
+        collision_status="resolved",
+        state_signature="sig-resolved",
+        branch_snapshot_json=json.dumps(resolved_snapshot, ensure_ascii=False),
+        first_detected_at=now - timedelta(hours=7),
+        last_detected_at=now - timedelta(hours=2),
+        resolved_at=now - timedelta(hours=2),
+    )
+    db.add_all([open_collision, resolved_collision])
+    db.add_all(
+        [
+            AuditLog(
+                actor_type="system",
+                workspace_id=workspace.id,
+                target_type="file_collision",
+                target_id="open",
+                action="file_collision_detected",
+                event_metadata={"path": "app/main.py", "repository": repository.full_name},
+                created_at=now - timedelta(minutes=30),
+            ),
+            AuditLog(
+                actor_type="system",
+                workspace_id=workspace.id,
+                target_type="file_collision",
+                target_id="resolved",
+                action="file_collision_resolved",
+                event_metadata={"path": "app/templates/base.html", "repository": repository.full_name},
+                created_at=now - timedelta(hours=2),
+            ),
+        ]
+    )
+    db.commit()
+    open_collision_id = open_collision.id
+    db.close()
+
+    response = client.get("/workspaces/conflict-team/conflicts")
+
+    assert response.status_code == 200
+    assert "競合一覧" in response.text
+    assert "競合中ファイル" in response.text
+    assert "確認済み" in response.text
+    assert "解消済み" in response.text
+    assert "最終検知" in response.text
+    assert "app/main.py" in response.text
+    assert "app/templates/base.html" in response.text
+    assert "feature/login" in response.text
+    assert "feature/header" in response.text
+    assert "feature/login と feature/header の競合" not in response.text
+    assert "危険度" not in response.text
+    assert "無視中" not in response.text
+    assert "確認済みにする" in response.text
+    assert "詳細を開く" in response.text
+
+    csrf_token = response.text.split('name="csrf_token" value="')[1].split('"', 1)[0]
+    submit = client.post(
+        f"/workspaces/conflict-team/conflicts/{open_collision_id}/acknowledge",
+        data={
+            "csrf_token": csrf_token,
+            "return_to": "/workspaces/conflict-team/conflicts",
+        },
+        follow_redirects=False,
+    )
+
+    assert submit.status_code == 303
+    assert submit.headers["location"] == "/workspaces/conflict-team/conflicts"
+
+    db = SessionLocal()
+    refreshed_collision = db.query(FileCollision).filter_by(id=open_collision_id).one()
+    assert refreshed_collision.acknowledged_by_user_id is not None
+    assert refreshed_collision.acknowledged_signature == "sig-open"
+    db.close()
+
+    response = client.get("/workspaces/conflict-team/conflicts")
+    assert response.status_code == 200
+    assert "確認済みを解除" in response.text
+    assert "Conflict Owner" in response.text
+
+
 def test_workspace_repositories_unconnected_focuses_on_installation_cta(client):
     register_page = client.get("/register")
     anon_csrf = register_page.text.split('name="csrf_token" value="')[1].split('"', 1)[0]

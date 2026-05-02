@@ -49,6 +49,12 @@ def init_db() -> None:
     apply_runtime_schema_upgrades()
 
 
+def sync_runtime_schema() -> None:
+    if not settings.resolved_database_url.startswith("sqlite"):
+        wait_for_database()
+    apply_runtime_schema_upgrades()
+
+
 def _ensure_column(table_name: str, column_name: str, ddl: str) -> None:
     with engine.begin() as connection:
         inspector = inspect(connection)
@@ -121,6 +127,13 @@ def apply_runtime_schema_upgrades() -> None:
         ("unlinked_at", "unlinked_at TIMESTAMP"),
         ("unlinked_by_user_id", "unlinked_by_user_id VARCHAR(36)"),
     ]
+    file_collision_columns = [
+        ("state_signature", "state_signature VARCHAR(128)"),
+        ("branch_snapshot_json", "branch_snapshot_json TEXT"),
+        ("acknowledged_at", "acknowledged_at TIMESTAMP"),
+        ("acknowledged_by_user_id", "acknowledged_by_user_id VARCHAR(36)"),
+        ("acknowledged_signature", "acknowledged_signature VARCHAR(128)"),
+    ]
 
     for column_name, ddl in repository_columns:
         _ensure_column("repositories", column_name, ddl)
@@ -134,6 +147,8 @@ def apply_runtime_schema_upgrades() -> None:
         _ensure_column("github_pending_claims", column_name, ddl)
     for column_name, ddl in installation_columns:
         _ensure_column("github_installations", column_name, ddl)
+    for column_name, ddl in file_collision_columns:
+        _ensure_column("file_collisions", column_name, ddl)
 
     _execute_upgrade_sql(
         "UPDATE repositories SET "
@@ -191,6 +206,8 @@ def apply_runtime_schema_upgrades() -> None:
         "CREATE INDEX IF NOT EXISTS ix_github_pending_claims_state_verified_at ON github_pending_claims (state_verified_at)",
         "CREATE INDEX IF NOT EXISTS ix_github_pending_claims_callback_source ON github_pending_claims (callback_source)",
         "CREATE INDEX IF NOT EXISTS ix_github_installations_unlinked_at ON github_installations (unlinked_at)",
+        "CREATE INDEX IF NOT EXISTS ix_file_collisions_acknowledged_by_user_id ON file_collisions (acknowledged_by_user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_file_collisions_state_signature ON file_collisions (state_signature)",
     ]
     for statement in index_statements:
         _execute_upgrade_sql(statement)
