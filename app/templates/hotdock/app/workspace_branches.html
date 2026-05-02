@@ -237,6 +237,10 @@
         box-shadow: inset 3px 0 0 #0f4fa8;
     }
 
+    .branch-workbench-table tbody tr.is-expanded {
+        background: rgba(248, 250, 252, 0.82);
+    }
+
     .branch-workbench-table td {
         padding: 1rem;
         vertical-align: middle;
@@ -247,6 +251,35 @@
         align-items: center;
         gap: 0.75rem;
         min-width: 0;
+    }
+
+    .branch-expand-toggle {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: #94a3b8;
+        cursor: pointer;
+        transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+    }
+
+    .branch-expand-toggle:hover {
+        background: #eff6ff;
+        color: #0f4fa8;
+    }
+
+    .branch-expand-toggle .material-symbols-outlined {
+        font-size: 1rem;
+        transition: transform 0.15s ease;
+    }
+
+    .branch-workbench-table tbody tr.is-expanded .branch-expand-toggle .material-symbols-outlined {
+        transform: rotate(90deg);
     }
 
     .branch-name-icon {
@@ -276,6 +309,11 @@
         font-weight: 700;
         text-decoration: none;
         overflow-wrap: anywhere;
+        border: 0;
+        background: transparent;
+        padding: 0;
+        text-align: left;
+        cursor: pointer;
     }
 
     .branch-name-link:hover {
@@ -397,6 +435,141 @@
         justify-content: flex-end;
         gap: 0.5rem;
         flex-wrap: wrap;
+    }
+
+    .branch-detail-row {
+        background: #fbfdff;
+    }
+
+    .branch-detail-row > td {
+        padding: 0;
+        border-top: 1px solid rgba(226, 232, 240, 0.9);
+    }
+
+    .branch-detail-panel {
+        display: grid;
+        gap: 0.85rem;
+        padding: 1rem 1.1rem 1.15rem 4rem;
+    }
+
+    .branch-detail-heading {
+        color: #475569;
+        font-size: 0.8rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .branch-detail-files {
+        display: grid;
+        gap: 0.35rem;
+    }
+
+    .branch-detail-file {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.85rem;
+        align-items: center;
+        padding: 0.8rem 0;
+        border-top: 1px solid rgba(226, 232, 240, 0.8);
+    }
+
+    .branch-detail-file:first-child {
+        border-top: 0;
+        padding-top: 0;
+    }
+
+    .branch-detail-file:last-child {
+        padding-bottom: 0;
+    }
+
+    .branch-detail-file__main {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.75rem;
+        min-width: 0;
+    }
+
+    .branch-detail-file__icon {
+        color: #94a3b8;
+        font-size: 1rem;
+        flex: 0 0 auto;
+        margin-top: 0.1rem;
+    }
+
+    .branch-detail-file__icon.is-conflict {
+        color: #dc2626;
+    }
+
+    .branch-detail-file__copy {
+        display: grid;
+        gap: 0.18rem;
+        min-width: 0;
+    }
+
+    .branch-detail-file__path {
+        color: #334155;
+        font-family: ui-monospace, SFMono-Regular, Roboto Mono, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.92rem;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+    }
+
+    .branch-detail-file__subcopy {
+        color: #94a3b8;
+        font-size: 0.78rem;
+        overflow-wrap: anywhere;
+    }
+
+    .branch-detail-file__status {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 72px;
+        padding: 0.35rem 0.6rem;
+        border-radius: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        background: #f8fafc;
+        color: #475569;
+        font-size: 0.74rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+    }
+
+    .branch-detail-file__status.is-added {
+        background: #ecfdf5;
+        border-color: rgba(34, 197, 94, 0.22);
+        color: #15803d;
+    }
+
+    .branch-detail-file__status.is-modified {
+        background: #eff6ff;
+        border-color: rgba(37, 99, 235, 0.22);
+        color: #1d4ed8;
+    }
+
+    .branch-detail-file__status.is-removed {
+        background: #fef2f2;
+        border-color: rgba(220, 38, 38, 0.22);
+        color: #b91c1c;
+    }
+
+    .branch-detail-file__status.is-renamed {
+        background: #fff7ed;
+        border-color: rgba(249, 115, 22, 0.22);
+        color: #c2410c;
+    }
+
+    .branch-detail-file__status.is-conflict {
+        background: #fee2e2;
+        border-color: rgba(220, 38, 38, 0.22);
+        color: #b91c1c;
+    }
+
+    .branch-detail-empty {
+        color: #64748b;
+        font-size: 0.84rem;
     }
 
     .branch-delete-button {
@@ -592,6 +765,19 @@
             padding-bottom: 0.55rem;
         }
 
+        .branch-detail-row > td {
+            padding-top: 0;
+            padding-bottom: 0;
+        }
+
+        .branch-detail-panel {
+            padding: 0.9rem 0.85rem 1rem;
+        }
+
+        .branch-detail-file {
+            grid-template-columns: 1fr;
+        }
+
         .branch-actions-cell {
             text-align: left;
         }
@@ -692,9 +878,12 @@
                         >
                             <td>
                                 <div class="branch-name-cell">
+                                    <button class="branch-expand-toggle" type="button" data-branch-toggle="{{ branch.id }}" aria-expanded="false" aria-controls="branch-detail-{{ branch.id }}">
+                                        <span class="material-symbols-outlined" aria-hidden="true">chevron_right</span>
+                                    </button>
                                     <span class="material-symbols-outlined branch-name-icon {{ branch.row_icon_class }}" aria-hidden="true">{{ branch.row_icon }}</span>
                                     <div class="branch-name-copy">
-                                        <a class="branch-name-link {% if branch.is_conflict %}is-conflict{% endif %}" href="{{ branch.detail_href }}">{{ branch.name }}</a>
+                                        <button class="branch-name-link {% if branch.is_conflict %}is-conflict{% endif %}" type="button" data-branch-toggle="{{ branch.id }}" aria-expanded="false" aria-controls="branch-detail-{{ branch.id }}">{{ branch.name }}</button>
                                         <div class="branch-subcopy">
                                             <span>{{ branch.subline }}</span>
                                             {% if branch.list_status_key != "active" %}
@@ -729,6 +918,33 @@
                                     <button class="branch-delete-button" type="button" data-branch-delete="{{ branch.id }}" aria-label="削除">
                                         <span class="material-symbols-outlined" aria-hidden="true">delete</span>
                                     </button>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr class="branch-detail-row branch-hidden" data-branch-detail-row="{{ branch.id }}" id="branch-detail-{{ branch.id }}" hidden>
+                            <td colspan="4">
+                                <div class="branch-detail-panel">
+                                    <div class="branch-detail-heading">{{ branch.detail_heading }}</div>
+                                    {% if branch.files %}
+                                    <div class="branch-detail-files">
+                                        {% for file in branch.files %}
+                                        <div class="branch-detail-file">
+                                            <div class="branch-detail-file__main">
+                                                <span class="material-symbols-outlined branch-detail-file__icon {% if file.is_conflict %}is-conflict{% endif %}" aria-hidden="true">{% if file.is_conflict %}warning{% elif file.status_class == "is-added" %}add_box{% elif file.status_class == "is-removed" %}delete{% elif file.status_class == "is-renamed" %}drive_file_rename_outline{% else %}description{% endif %}</span>
+                                                <div class="branch-detail-file__copy">
+                                                    <div class="branch-detail-file__path">{{ file.path }}</div>
+                                                    {% if file.previous_path %}
+                                                    <div class="branch-detail-file__subcopy">変更前: {{ file.previous_path }}</div>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                            <span class="branch-detail-file__status {{ file.status_class }}">{{ file.status_label }}</span>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                    {% else %}
+                                    <div class="branch-detail-empty">表示できるファイルはありません。</div>
+                                    {% endif %}
                                 </div>
                             </td>
                         </tr>
@@ -830,9 +1046,17 @@
                 ignored: new Set(),
                 highlightId: browser.dataset.branchHighlightId || "",
                 highlightPending: Boolean(browser.dataset.branchHighlightId),
+                expanded: new Set(browser.dataset.branchHighlightId ? [browser.dataset.branchHighlightId] : []),
             };
 
             if (searchInput && statusSelect && sortSelect && clearButton && tbody && empty && summary && prevButton && nextButton && rows.length) {
+                const detailRows = new Map(
+                    rows.map((row) => [
+                        row.dataset.branchId || "",
+                        browser.querySelector(`[data-branch-detail-row="${row.dataset.branchId || ""}"]`),
+                    ])
+                );
+
                 const sortRows = (items, sortKey) => {
                     const sorted = [...items];
                     if (sortKey === "name") {
@@ -884,11 +1108,32 @@
                     rows.forEach((row) => {
                         row.hidden = true;
                         row.classList.remove("is-targeted");
+                        row.classList.remove("is-expanded");
+                        const detailRow = detailRows.get(row.dataset.branchId || "");
+                        if (detailRow instanceof HTMLElement) {
+                            detailRow.hidden = true;
+                            detailRow.classList.add("branch-hidden");
+                        }
+                        row.querySelectorAll(`[data-branch-toggle="${row.dataset.branchId || ""}"]`).forEach((toggle) => {
+                            toggle.setAttribute("aria-expanded", "false");
+                        });
                     });
 
                     sorted.slice(start, end).forEach((row) => {
                         row.hidden = false;
                         tbody.appendChild(row);
+                        const branchId = row.dataset.branchId || "";
+                        const detailRow = detailRows.get(branchId);
+                        const isExpanded = state.expanded.has(branchId);
+                        row.classList.toggle("is-expanded", isExpanded);
+                        row.querySelectorAll(`[data-branch-toggle="${branchId}"]`).forEach((toggle) => {
+                            toggle.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+                        });
+                        if (detailRow instanceof HTMLElement && isExpanded) {
+                            detailRow.hidden = false;
+                            detailRow.classList.remove("branch-hidden");
+                            tbody.appendChild(detailRow);
+                        }
                     });
 
                     empty.classList.toggle("branch-hidden", total !== 0);
@@ -949,11 +1194,22 @@
                     }
                     const ignoreId = target.closest("[data-branch-ignore]")?.getAttribute("data-branch-ignore");
                     const deleteId = target.closest("[data-branch-delete]")?.getAttribute("data-branch-delete");
+                    const toggleId = target.closest("[data-branch-toggle]")?.getAttribute("data-branch-toggle");
+                    if (toggleId) {
+                        if (state.expanded.has(toggleId)) {
+                            state.expanded.delete(toggleId);
+                        } else {
+                            state.expanded.add(toggleId);
+                        }
+                        updateTable();
+                        return;
+                    }
                     const branchId = ignoreId || deleteId;
                     if (!branchId) {
                         return;
                     }
                     state.ignored.add(branchId);
+                    state.expanded.delete(branchId);
                     updateTable();
                 });
 

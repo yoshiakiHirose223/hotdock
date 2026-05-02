@@ -3124,6 +3124,8 @@ def test_workspace_branches_table_uses_japanese_labels_and_hides_old_seed_copy(c
     assert "first added" not in response.text
     assert "last added" not in response.text
     assert "branch-table-org/repo-a" not in response.text
+    assert "app/models/user.rb" in response.text
+    assert f'data-branch-detail-row="{branch_id}"' in response.text
 
     focused = client.get(f"/workspaces/branch-table-team/branches?branch=feature/table-refresh&highlight_branch_id={branch_id}")
 

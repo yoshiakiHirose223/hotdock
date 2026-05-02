@@ -853,6 +853,43 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
             .where(Branch.workspace_id == access.workspace.id, Branch.repository_id.in_(active_repository_ids))
             .order_by(Branch.last_push_at.desc().nullslast())
         ).all()
+    branch_files_by_branch_id: dict[str, list[dict[str, str | bool]]] = {}
+    if branches:
+        branch_files = db.scalars(
+            select(BranchFile)
+            .where(
+                BranchFile.workspace_id == access.workspace.id,
+                BranchFile.branch_id.in_([branch.id for branch in branches]),
+                BranchFile.is_active.is_(True),
+            )
+            .order_by(BranchFile.is_conflict.desc(), BranchFile.last_seen_at.desc().nullslast(), BranchFile.path.asc())
+        ).all()
+
+        def _branch_file_change_label(branch_file: BranchFile) -> tuple[str, str]:
+            change_type = (branch_file.last_change_type or branch_file.change_type or "").lower()
+            if branch_file.is_conflict:
+                return "競合", "is-conflict"
+            if change_type == "added":
+                return "追加", "is-added"
+            if change_type in {"modified", "changed"}:
+                return "変更", "is-modified"
+            if change_type in {"removed", "deleted"}:
+                return "削除", "is-removed"
+            if change_type.startswith("renamed") or change_type == "renamed":
+                return "リネーム", "is-renamed"
+            return "変更", "is-modified"
+
+        for branch_file in branch_files:
+            label, badge_class = _branch_file_change_label(branch_file)
+            branch_files_by_branch_id.setdefault(branch_file.branch_id, []).append(
+                {
+                    "path": branch_file.path,
+                    "previous_path": branch_file.previous_path or "",
+                    "status_label": label,
+                    "status_class": badge_class,
+                    "is_conflict": bool(branch_file.is_conflict),
+                }
+            )
     context["branches"] = [
         (
             lambda status_key, status_label, status_class: {
@@ -893,6 +930,8 @@ async def workspace_branches(workspace_slug: str, request: Request, db: Session 
             "row_icon": "warning" if status_key == "conflict" else "fork_right",
             "row_icon_class": "is-conflict" if status_key == "conflict" else "is-active",
             "subline": "手動登録" if branch.observed_via == "manual" else f"監視中: {repositories.get(branch.repository_id).display_name if repositories.get(branch.repository_id) else '-'}",
+            "files": branch_files_by_branch_id.get(branch.id, []),
+            "detail_heading": f"{'競合ファイル' if status_key == 'conflict' else '編集ファイル'} ({branch.touched_files_count})",
             }
         )(*_workspace_branch_list_status(branch))
         for branch in branches
