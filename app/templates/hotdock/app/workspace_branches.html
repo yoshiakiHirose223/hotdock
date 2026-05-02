@@ -224,6 +224,10 @@
         border-bottom: 1px solid rgba(226, 232, 240, 0.9);
     }
 
+    .branch-workbench-table tbody tr[data-branch-row] {
+        cursor: pointer;
+    }
+
     .branch-workbench-table tbody tr:hover {
         background: rgba(248, 250, 252, 0.72);
     }
@@ -1057,6 +1061,30 @@
                     ])
                 );
 
+                const applyExpandedState = (branchId) => {
+                    const row = rows.find((item) => (item.dataset.branchId || "") === branchId);
+                    if (!(row instanceof HTMLElement) || row.hidden) {
+                        return;
+                    }
+                    const detailRow = detailRows.get(branchId);
+                    const isExpanded = state.expanded.has(branchId);
+                    row.classList.toggle("is-expanded", isExpanded);
+                    row.querySelectorAll(`[data-branch-toggle="${branchId}"]`).forEach((toggle) => {
+                        toggle.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+                    });
+                    if (!(detailRow instanceof HTMLElement)) {
+                        return;
+                    }
+                    if (isExpanded) {
+                        detailRow.hidden = false;
+                        detailRow.classList.remove("branch-hidden");
+                        tbody.insertBefore(detailRow, row.nextSibling);
+                    } else {
+                        detailRow.hidden = true;
+                        detailRow.classList.add("branch-hidden");
+                    }
+                };
+
                 const sortRows = (items, sortKey) => {
                     const sorted = [...items];
                     if (sortKey === "name") {
@@ -1123,17 +1151,7 @@
                         row.hidden = false;
                         tbody.appendChild(row);
                         const branchId = row.dataset.branchId || "";
-                        const detailRow = detailRows.get(branchId);
-                        const isExpanded = state.expanded.has(branchId);
-                        row.classList.toggle("is-expanded", isExpanded);
-                        row.querySelectorAll(`[data-branch-toggle="${branchId}"]`).forEach((toggle) => {
-                            toggle.setAttribute("aria-expanded", isExpanded ? "true" : "false");
-                        });
-                        if (detailRow instanceof HTMLElement && isExpanded) {
-                            detailRow.hidden = false;
-                            detailRow.classList.remove("branch-hidden");
-                            tbody.appendChild(detailRow);
-                        }
+                        applyExpandedState(branchId);
                     });
 
                     empty.classList.toggle("branch-hidden", total !== 0);
@@ -1192,25 +1210,33 @@
                     if (!(target instanceof HTMLElement)) {
                         return;
                     }
+                    if (target.closest("[data-branch-detail-row]")) {
+                        return;
+                    }
                     const ignoreId = target.closest("[data-branch-ignore]")?.getAttribute("data-branch-ignore");
                     const deleteId = target.closest("[data-branch-delete]")?.getAttribute("data-branch-delete");
-                    const toggleId = target.closest("[data-branch-toggle]")?.getAttribute("data-branch-toggle");
-                    if (toggleId) {
-                        if (state.expanded.has(toggleId)) {
-                            state.expanded.delete(toggleId);
-                        } else {
-                            state.expanded.add(toggleId);
-                        }
+                    const branchId = ignoreId || deleteId;
+                    if (branchId) {
+                        state.ignored.add(branchId);
+                        state.expanded.delete(branchId);
                         updateTable();
                         return;
                     }
-                    const branchId = ignoreId || deleteId;
-                    if (!branchId) {
+                    if (target.closest(".branch-actions")) {
                         return;
                     }
-                    state.ignored.add(branchId);
-                    state.expanded.delete(branchId);
-                    updateTable();
+                    const toggleId =
+                        target.closest("[data-branch-toggle]")?.getAttribute("data-branch-toggle")
+                        || target.closest("[data-branch-row]")?.getAttribute("data-branch-id");
+                    if (!toggleId) {
+                        return;
+                    }
+                    if (state.expanded.has(toggleId)) {
+                        state.expanded.delete(toggleId);
+                    } else {
+                        state.expanded.add(toggleId);
+                    }
+                    applyExpandedState(toggleId);
                 });
 
                 updateTable();
